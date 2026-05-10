@@ -1,0 +1,54 @@
+# ansi.cyr — vt100-compatible ANSI escape helpers.
+#
+# Donor port from cyim/src/tty.cyr — the alt-screen / clear / cursor-
+# visibility helpers. These work on any modern terminal (xterm, kitty,
+# wezterm, the Linux console) regardless of the host OS, so they're
+# NOT inside the CYRIUS_TARGET_LINUX gate that termios.cyr uses.
+#
+# Each helper writes a fixed escape sequence to fd 1 (stdout) directly
+# via `syscall(1, ...)`. No buffering — consumers that want frame-
+# coalesced writes should compose into their own buf and call write(2)
+# once at frame end. (Phase 3 may add buf-targeting variants if a
+# pattern emerges.)
+
+# Switch to the alt-screen buffer. CSI ?1049h. Saves the primary
+# screen state; the consumer's UI lives on the alt-screen and the
+# user's previous shell content is restored on tty_alt_leave().
+fn tty_alt_enter() {
+    syscall(1, 1, "\x1b[?1049h", 8);
+    return 0;
+}
+
+# Leave the alt-screen buffer, restoring the primary. CSI ?1049l.
+# Pair with tty_alt_enter() on every exit path including SIGINT/SIGTERM.
+fn tty_alt_leave() {
+    syscall(1, 1, "\x1b[?1049l", 8);
+    return 0;
+}
+
+# Clear the entire visible screen. CSI 2J. Doesn't move the cursor —
+# pair with tty_cursor_home() if you want top-left.
+fn tty_clear() {
+    syscall(1, 1, "\x1b[2J", 4);
+    return 0;
+}
+
+# Hide the text cursor. CSI ?25l. Pair with tty_cursor_show() on exit
+# or the user's shell prompt comes back without a visible cursor.
+fn tty_cursor_hide() {
+    syscall(1, 1, "\x1b[?25l", 6);
+    return 0;
+}
+
+# Show the text cursor. CSI ?25h.
+fn tty_cursor_show() {
+    syscall(1, 1, "\x1b[?25h", 6);
+    return 0;
+}
+
+# Move cursor to row 1, col 1. CSI H. Cheaper than tty_move(1, 1)
+# because no decimal formatting / parameter encoding.
+fn tty_cursor_home() {
+    syscall(1, 1, "\x1b[H", 3);
+    return 0;
+}

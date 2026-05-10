@@ -1,0 +1,52 @@
+# cursor.cyr — cursor positioning via CSI row;colH.
+#
+# Donor port from cyim/src/tty.cyr. Split out from ansi.cyr because
+# cursor positioning needs decimal formatting (the row/col integers
+# encode into the escape) — different shape from the fixed-bytes
+# escape helpers in ansi.cyr.
+#
+# tty_itoa is private-by-convention (no underscore prefix to keep the
+# cyim API surface intact) but only used by tty_move. Lifted into the
+# darshana surface in case a future caller wants to compose a custom
+# escape with embedded integers.
+
+# Write decimal `val` (>= 0) into `buf` at `pos`. Returns digits written.
+# Single-digit zero is the only zero case; otherwise we collect digits
+# in reverse and copy them back in order.
+fn tty_itoa(buf, pos, val) {
+    if (val <= 0) {
+        store8(buf + pos, 0x30);
+        return 1;
+    }
+    var tmp[20];
+    var d = 0;
+    while (val > 0) {
+        store8(&tmp + d, 0x30 + (val % 10));
+        val = val / 10;
+        d = d + 1;
+    }
+    var i = 0;
+    while (i < d) {
+        store8(buf + pos + i, load8(&tmp + d - 1 - i));
+        i = i + 1;
+    }
+    return d;
+}
+
+# Move cursor to (row, col), 1-indexed, via CSI row;colH.
+# Composes the escape into a 32-byte stack buf and writes it in one
+# syscall — no intermediate allocations, no flush concerns.
+fn tty_move(row, col) {
+    var buf[32];
+    store8(&buf, 0x1b);          # ESC
+    store8(&buf + 1, 0x5b);      # '['
+    var pos = 2;
+    pos = pos + tty_itoa(&buf, pos, row);
+    store8(&buf + pos, 0x3b);    # ';'
+    pos = pos + 1;
+    pos = pos + tty_itoa(&buf, pos, col);
+    store8(&buf + pos, 0x48);    # 'H'
+    pos = pos + 1;
+    syscall(1, 1, &buf, pos);
+    return 0;
+}

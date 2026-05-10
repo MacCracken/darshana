@@ -1,3 +1,16 @@
-# darshana — library module. Re-exported via dist/darshana.cyr (cyrius distlib).
-# Add domain modules below or in sibling files; programs/smoke.cyr proves
-# the include chain compiles end-to-end.
+# darshana — library entry. Re-exports the three domain modules so
+# consumers (smoke.cyr, tests/darshana.tcyr) can pull the whole API
+# surface via a single include. `cyrius distlib` reads [lib].modules
+# from cyrius.cyml directly and bundles termios/ansi/cursor into
+# dist/darshana.cyr — this file is not part of the dist bundle.
+#
+# Public symbols (preserved from cyim/src/tty.cyr donor):
+#   termios.cyr  — TIO_*, tio_load32/store32, tty_apply_raw_flags,
+#                  tty_raw, tty_cooked
+#   ansi.cyr     — tty_alt_enter/leave, tty_clear,
+#                  tty_cursor_hide/show/home
+#   cursor.cyr   — tty_itoa, tty_move
+
+include "src/termios.cyr"
+include "src/ansi.cyr"
+include "src/cursor.cyr"

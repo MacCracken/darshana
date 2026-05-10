@@ -1,11 +1,130 @@
-# darshana test suite
-# Stdlib auto-included via cyrius.cyml
+# darshana test suite — exercises the pure-function pieces of the M1
+# donor port. The TTY-bound functions (tty_raw / tty_cooked / tty_*)
+# need a real TTY fd to ioctl against and a way to capture stdout
+# bytes — neither is available cleanly in unit-test scope. The
+# pre-existing cyim PTY integration smoke covers them end-to-end;
+# darshana's CI re-runs cyim's smoke at Phase 4 of the migration plan.
+#
+# Stdlib auto-included via cyrius.cyml; src/main.cyr pulls in the
+# three domain modules.
+
+include "src/main.cyr"
 
 fn main() {
     alloc_init();
+
     test_group("smoke");
     assert(1, "true is true");
     assert_eq(1 + 1, 2, "math works");
+
+    # ----- termios.cyr — 32-bit LE field accessors -----------------
+    # Pure functions over a stack buffer; no TTY involvement.
+
+    test_group("termios.cyr — tio_load32 / tio_store32 round-trip");
+    var fbuf[16];
+    var i = 0;
+    while (i < 16) { store8(&fbuf + i, 0); i = i + 1; }
+    tio_store32(&fbuf, 0, 0x12345678);
+    assert_eq(load8(&fbuf + 0), 0x78, "byte 0 little-endian");
+    assert_eq(load8(&fbuf + 1), 0x56, "byte 1 little-endian");
+    assert_eq(load8(&fbuf + 2), 0x34, "byte 2 little-endian");
+    assert_eq(load8(&fbuf + 3), 0x12, "byte 3 little-endian");
+    assert_eq(tio_load32(&fbuf, 0), 0x12345678, "load32 round-trip");
+    # Offset != 0
+    tio_store32(&fbuf, 4, 0xDEADBEEF);
+    assert_eq(tio_load32(&fbuf, 4), 0xDEADBEEF, "load32 at offset 4");
+    # Adjacent fields don't bleed
+    assert_eq(tio_load32(&fbuf, 0), 0x12345678, "field at 0 untouched by write at 4");
+
+    # ----- termios.cyr — tty_apply_raw_flags ----------------------
+    # Set up a faked cooked-mode termios with all flags ON, then apply
+    # the raw mask and verify the right bits cleared / set. Mirrors
+    # cyim's vim-convention raw mode: ISIG cleared (Ctrl-C as byte),
+    # OPOST cleared, etc. Same bit checks as the donor's intent.
+
+    test_group("termios.cyr — tty_apply_raw_flags");
+    var tbuf[60];
+    var j = 0;
+    while (j < 60) { store8(&tbuf + j, 0); j = j + 1; }
+    # Pre-load all c_iflag/oflag/lflag bits we expect to clear.
+    tio_store32(&tbuf, 0,
+        TIO_BRKINT | TIO_ICRNL | TIO_INPCK | TIO_ISTRIP | TIO_IXON);
+    tio_store32(&tbuf, 4, TIO_OPOST);
+    # c_cflag — pre-load with junk in CSIZE bits to verify they get cleared+CS8 set.
+    tio_store32(&tbuf, 8, 0xFF);
+    tio_store32(&tbuf, 12,
+        TIO_ECHO | TIO_ICANON | TIO_IEXTEN | TIO_ISIG);
+    # Junk in c_cc[VMIN] / c_cc[VTIME] to verify they get overwritten.
+    store8(&tbuf + TIO_CC_BASE + TIO_VMIN, 99);
+    store8(&tbuf + TIO_CC_BASE + TIO_VTIME, 99);
+
+    tty_apply_raw_flags(&tbuf);
+
+    # iflag — every set bit cleared.
+    assert_eq(tio_load32(&tbuf, 0) & TIO_BRKINT, 0, "BRKINT cleared");
+    assert_eq(tio_load32(&tbuf, 0) & TIO_ICRNL,  0, "ICRNL cleared");
+    assert_eq(tio_load32(&tbuf, 0) & TIO_INPCK,  0, "INPCK cleared");
+    assert_eq(tio_load32(&tbuf, 0) & TIO_ISTRIP, 0, "ISTRIP cleared");
+    assert_eq(tio_load32(&tbuf, 0) & TIO_IXON,   0, "IXON cleared");
+    # oflag — OPOST cleared.
+    assert_eq(tio_load32(&tbuf, 4) & TIO_OPOST, 0, "OPOST cleared");
+    # cflag — CSIZE cleared, CS8 set.
+    assert_eq(tio_load32(&tbuf, 8) & TIO_CS8, TIO_CS8, "CS8 set");
+    # lflag — every set bit cleared.
+    assert_eq(tio_load32(&tbuf, 12) & TIO_ECHO,   0, "ECHO cleared");
+    assert_eq(tio_load32(&tbuf, 12) & TIO_ICANON, 0, "ICANON cleared");
+    assert_eq(tio_load32(&tbuf, 12) & TIO_IEXTEN, 0, "IEXTEN cleared");
+    assert_eq(tio_load32(&tbuf, 12) & TIO_ISIG,   0, "ISIG cleared (Ctrl-C as byte)");
+    # c_cc.
+    assert_eq(load8(&tbuf + TIO_CC_BASE + TIO_VMIN),  1, "VMIN = 1 (read returns on 1 byte)");
+    assert_eq(load8(&tbuf + TIO_CC_BASE + TIO_VTIME), 0, "VTIME = 0 (no read timeout)");
+
+    # Idempotence — re-applying the mask shouldn't change anything.
+    var snap[60];
+    var k = 0;
+    while (k < 60) { store8(&snap + k, load8(&tbuf + k)); k = k + 1; }
+    tty_apply_raw_flags(&tbuf);
+    var match_n = 0;
+    var p = 0;
+    while (p < 60) {
+        if (load8(&tbuf + p) == load8(&snap + p)) { match_n = match_n + 1; }
+        p = p + 1;
+    }
+    assert_eq(match_n, 60, "tty_apply_raw_flags is idempotent");
+
+    # ----- cursor.cyr — tty_itoa decimal formatter ----------------
+    # Test the full range cyim uses (1..200 covers any terminal of
+    # reasonable size; the tested values straddle the digit boundaries).
+
+    test_group("cursor.cyr — tty_itoa");
+    var ibuf[24];
+    # Zero
+    var z = 0;
+    while (z < 24) { store8(&ibuf + z, 0); z = z + 1; }
+    assert_eq(tty_itoa(&ibuf, 0, 0), 1, "0 → 1 digit");
+    assert_eq(load8(&ibuf), 0x30, "0 written as ASCII '0'");
+    # Negative — donor treats <= 0 as 0
+    assert_eq(tty_itoa(&ibuf, 0, 0 - 5), 1, "negative → 1 digit (treated as 0)");
+    assert_eq(load8(&ibuf), 0x30, "negative written as ASCII '0'");
+    # Single digit
+    assert_eq(tty_itoa(&ibuf, 0, 7), 1, "7 → 1 digit");
+    assert_eq(load8(&ibuf), 0x37, "7 written as ASCII '7'");
+    # Two digits
+    assert_eq(tty_itoa(&ibuf, 0, 42), 2, "42 → 2 digits");
+    assert_eq(load8(&ibuf + 0), 0x34, "42 first digit '4'");
+    assert_eq(load8(&ibuf + 1), 0x32, "42 second digit '2'");
+    # Three digits
+    assert_eq(tty_itoa(&ibuf, 0, 123), 3, "123 → 3 digits");
+    assert_eq(load8(&ibuf + 0), 0x31, "123 first '1'");
+    assert_eq(load8(&ibuf + 1), 0x32, "123 second '2'");
+    assert_eq(load8(&ibuf + 2), 0x33, "123 third '3'");
+    # Position offset — write at non-zero pos doesn't clobber prior bytes.
+    store8(&ibuf + 0, 0x58);   # 'X'
+    assert_eq(tty_itoa(&ibuf, 1, 99), 2, "99 at pos 1 → 2 digits");
+    assert_eq(load8(&ibuf + 0), 0x58, "byte at pos 0 untouched");
+    assert_eq(load8(&ibuf + 1), 0x39, "99 first '9' at pos 1");
+    assert_eq(load8(&ibuf + 2), 0x39, "99 second '9' at pos 2");
+
     return assert_summary();
 }
 

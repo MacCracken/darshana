@@ -11,8 +11,18 @@ entry = "programs/smoke.cyr"
 output = "build/darshana-smoke"
 
 [lib]
-modules = ["src/main.cyr"]
+# Three domain modules per ADR/M1 design — termios / ansi / cursor.
+# `cyrius distlib` concatenates these (in order) into dist/darshana.cyr;
+# consumers `include "lib/darshana.cyr"` after `cyrius deps` resolves
+# the dep. src/main.cyr is the in-tree convenience entry that includes
+# all three for smoke.cyr + tests, but is intentionally NOT in this
+# list — it would duplicate the module bodies in the dist bundle.
+modules = ["src/termios.cyr", "src/ansi.cyr", "src/cursor.cyr"]
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert"]
+# Footprint: tighter than the init default. termios + ANSI helpers
+# only need syscalls (ioctl + write) and the standard alloc/io path.
+# assert is for tests/darshana.tcyr. No vec/str/fmt/string yet — none
+# of the donor surface uses dynamic allocation or string formatting.
+stdlib = ["syscalls", "alloc", "io", "assert"]
 ---

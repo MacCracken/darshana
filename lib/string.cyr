@@ -73,7 +73,7 @@ fn memset(dst, val, n): i64 {
 }
 
 # Find first occurrence of byte c in first n bytes. Returns offset or -1.
-fn memchr(s, c, n): i64 {
+fn memchr(s: cstring, c, n): i64 {
     for (var i = 0; i < n; i = i + 1) {
         if (load8(s + i) == c) { return i; }
     }

@@ -13,27 +13,32 @@
 
 ## Source
 
-Initial scaffold only:
-- `src/main.cyr` — header-only library entry; M1 splits into `src/{termios,ansi,cursor}.cyr`.
-- `programs/smoke.cyr` — proves the include chain compiles.
+M1 donor port from cyim/src/tty.cyr landed (in [Unreleased]; v0.2.0 cuts when user tags):
 
-No working API surface yet. **Don't depend on this version.**
+| File | Lines | Surface |
+|------|-------|---------|
+| `src/termios.cyr` | ~160 | `TIO_*` flags, `tio_load32/store32`, `tty_apply_raw_flags`, `tty_raw`, `tty_cooked`. Linux-only via `#ifdef CYRIUS_TARGET_LINUX`. |
+| `src/ansi.cyr` | ~50 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`. Any vt100-compatible terminal. |
+| `src/cursor.cyr` | ~50 | `tty_itoa`, `tty_move`. Composes the CSI row;colH escape inline. |
+| `src/main.cyr` | 14 | Convenience entry — `include`s the three sub-modules so smoke + tests get the whole surface in one shot. |
+| `programs/smoke.cyr` | ~17 | Compile-link smoke. |
+| `dist/darshana.cyr` | 271 | Bundled distribution (regenerate via `cyrius distlib`). What consumers `include "lib/darshana.cyr"`. |
+
+Total source ≈ 270 lines. All public symbol names match cyim's donor — Phase 4 cyim migration is a manifest swap, not a rename.
 
 ## Tests
 
 | File | Status |
 |------|--------|
-| `tests/darshana.tcyr` | 2 assertions — placeholder smoke (true is true; 1+1==2) |
+| `tests/darshana.tcyr` | **40 assertions across 4 groups** — pure-function coverage of `tio_load32/store32`, `tty_apply_raw_flags` (every flag bit + idempotence), `tty_itoa` (zero / negative / 1–3 digits / position offset). TTY-bound functions exercised end-to-end via cyim's PTY smoke at Phase 4. |
 | `tests/darshana.bcyr` | bench stub — not exercised |
 | `tests/darshana.fcyr` | fuzz stub — not exercised |
-
-Real tests land alongside the M1 donor port.
 
 ## Dependencies
 
 Direct (declared in `cyrius.cyml`):
 
-- stdlib — `string`, `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `assert`. Footprint will tighten in M1 — termios + ANSI doesn't need `vec`/`fmt`/`str`.
+- stdlib — `syscalls`, `alloc`, `io`, `assert`. Tightened from the init default (`string / fmt / alloc / io / vec / str / syscalls / assert`) — the donor surface uses none of `vec / str / fmt / string`.
 
 ## Consumers
 
