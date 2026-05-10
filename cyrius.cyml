@@ -1,0 +1,18 @@
+[package]
+name = "darshana"
+version = "0.1.0"
+description = "दर्शन — viewing/showing. Linux TTY/raw-mode primitives (termios, ANSI, cursor) for AGNOS first-party tools (cyim, chakshu, ...)."
+license = "GPL-3.0-only"
+language = "cyrius"
+cyrius = "5.10.20"
+
+[build]
+entry = "programs/smoke.cyr"
+output = "build/darshana-smoke"
+
+[lib]
+modules = ["src/main.cyr"]
+
+[deps]
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert"]
+---
