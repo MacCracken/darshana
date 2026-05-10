@@ -4,6 +4,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.2.0] — 2026-05-09 — M1 close
+
+The donor port. cyim's private `src/tty.cyr` now lives here as a
+shared library, split into three domain modules and ready to be
+consumed by both cyim (Phase 4) and chakshu (Phase 5 of the M2 TUI
+extraction plan). All public symbol names preserved verbatim — the
+upcoming cyim migration is a manifest swap, not a rename.
+
 ### Added
 
 - **M1 — donor port from cyim/src/tty.cyr.** Verbatim functional behavior,
@@ -52,6 +62,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `_tty_saved` / `_tty_in_raw` are module-globals (not caller-owned)
   so signal handlers and panic paths can reach them for cleanup
   without threading state. Same shape as the donor.
+
+### Tooling
+
+- **CI/release workflows.** `.github/workflows/ci.yml` (three jobs:
+  build-and-test → lint → tests → smoke → distlib drift → DCE parity;
+  security scan; docs + version-consistency) and `.github/workflows/release.yml`
+  (semver-tag-triggered, gates on CI via `workflow_call`, version-verify
+  against tag, package step that regenerates dist + ships
+  `darshana-X.Y.Z.cyr` + `darshana-X.Y.Z.tar.gz` + source tarball + SHA256SUMS,
+  GH release with body extracted from the matching CHANGELOG section).
+  Patterned on chakshu/owl; library-shape adaptations (no binary
+  matrix; dist/darshana.cyr is the consumable artifact).
+- `scripts/smoke.sh` — runs the smoke binary, verifies dist drift,
+  asserts the cyim-API contract surface (13 `tty_*` / `tio_*`
+  function names + 16 `TIO_*` constants present in dist), and checks
+  the `CYRIUS_TARGET_LINUX` gate is intact in `src/termios.cyr`.
+- `cyrius.cyml` `[package].version` switched to `${file:VERSION}`
+  indirection (was a literal `"0.1.0"` from the `cyrius init`
+  template); CI version-consistency check now closed-loop.
 
 ## [0.1.0] — 2026-05-09
 

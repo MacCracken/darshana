@@ -5,15 +5,15 @@
 
 ## Version
 
-**0.1.0** — scaffolded 2026-05-09 via `cyrius init --lib darshana`. No releases tagged yet; M1 (donor port) is the next checkpoint.
+**0.2.0** — M1 close (donor port from cyim/src/tty.cyr). v0.1.0 was the `cyrius init` scaffold (2026-05-09). The next milestone (M2 — chakshu-driven extensions: SIGWINCH, TIOCGWINSZ, partial-clear ANSI helpers) opens when chakshu enters its M2 TUI work.
 
 ## Toolchain
 
-- **Cyrius pin**: `5.10.20` (in `cyrius.cyml [package].cyrius`). Matches the chakshu pin so the two repos move together until a hard reason forces them apart.
+- **Cyrius pin**: `5.10.20` (in `cyrius.cyml [package].cyrius`, via `${file:VERSION}` indirection on the package version). Matches the chakshu pin so the two repos move together until a hard reason forces them apart.
 
 ## Source
 
-M1 donor port from cyim/src/tty.cyr landed (in [Unreleased]; v0.2.0 cuts when user tags):
+M1 donor port from cyim/src/tty.cyr landed at v0.2.0:
 
 | File | Lines | Surface |
 |------|-------|---------|
@@ -54,6 +54,22 @@ _None integrated yet._ Planned:
 - ADR 0001 records the `darshana` name choice (`drishya` and other observation-family alternatives considered). Closed; no re-litigation needed.
 - macOS support is deferred — see CLAUDE.md domain rules.
 
-## Next
+## Release Process
 
-See [`roadmap.md`](roadmap.md). M1 — donor port from `cyim/src/tty.cyr` — is the first real work.
+| Surface | Where |
+|---------|-------|
+| CI on push/PR | `.github/workflows/ci.yml` — three jobs: build-and-test (lint, smoke binary, `cyrius test`, `scripts/smoke.sh`, distlib drift, DCE parity); security scan (no FFI imports, no >=64K stack buffers, Linux gate intact); docs + version consistency |
+| Release on semver tag | `.github/workflows/release.yml` — gates on ci.yml via `workflow_call`, version-verify against tag, regenerates dist + ships `darshana-X.Y.Z.cyr` standalone + `darshana-X.Y.Z.tar.gz` package + source tarball + SHA256SUMS, GH release with body extracted from CHANGELOG section |
+| Smoke test | `scripts/smoke.sh` — runs smoke binary, verifies dist drift, asserts cyim-API contract surface (13 `tty_*` / `tio_*` symbols + 16 `TIO_*` constants present in dist), checks `CYRIUS_TARGET_LINUX` gate intact |
+| Cutting a release | Bump VERSION + CHANGELOG section, push tag `vX.Y.Z` (or `X.Y.Z`); release.yml takes over. Pre-1.0 tags publish as GH prerelease automatically. |
+
+## Roadmap status
+
+- M0 (v0.1.0) — scaffold ✓
+- M1 (v0.2.0) — donor port ✓ **(this release)**
+- M2 (v0.3.0) — chakshu-driven extensions (SIGWINCH, TIOCGWINSZ, partial-clear ANSI) — not started; opens when chakshu enters M2
+- M3 (v0.4.0) — cyim integration (drops its private tty.cyr) — not started
+- M4 (v0.5.0) — chakshu integration (picks up darshana) — not started
+- M5 (v1.0.0) — both consumers green for ≥30 days — not started
+
+See [`roadmap.md`](roadmap.md) for the full milestone definitions.

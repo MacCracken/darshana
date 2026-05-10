@@ -1,6 +1,6 @@
 [package]
 name = "darshana"
-version = "0.1.0"
+version = "${file:VERSION}"
 description = "दर्शन — viewing/showing. Linux TTY/raw-mode primitives (termios, ANSI, cursor) for AGNOS first-party tools (cyim, chakshu, ...)."
 license = "GPL-3.0-only"
 language = "cyrius"
