@@ -109,6 +109,19 @@ var SYS_IOCTL = 16;
 var TCGETS = 0x5401;
 var TCSETS = 0x5402;
 
+# Window-size query — `struct winsize { u16 row, u16 col, u16 xpix, u16 ypix } = 8 bytes`.
+# v0.3.0 — added for chakshu's M2 Slice D dynamic resize.
+var TIOCGWINSZ = 0x5413;
+
+# Common signal masks for `tty_open_signalfd` — Linux sigset_t is one
+# u64 with bit (signum - 1) set per signal in the mask.
+#   TTY_SIGMASK_EXIT  = SIGHUP(1) | SIGINT(2) | SIGTERM(15) → bits 0,1,14 → 0x4003
+#   TTY_SIGMASK_WINCH = SIGWINCH(28)                         → bit  27     → 0x08000000
+# Callers can OR these or build custom masks; the primitive itself is
+# mask-agnostic. v0.3.0 — promoted from chakshu's _tui_open_exit_signalfd.
+var TTY_SIGMASK_EXIT  = 0x4003;
+var TTY_SIGMASK_WINCH = 0x08000000;
+
 # Saved cooked-mode termios. Populated on `tty_raw`; consumed by `tty_cooked`.
 # Module-global rather than caller-owned so any exit path (including
 # signal handlers and panic paths) can reach it for cleanup without
@@ -146,6 +159,58 @@ fn tty_cooked(fd) {
     if (rc < 0) { return 0 - 1; }
     _tty_in_raw = 0;
     return 0;
+}
+
+# Query terminal dimensions via TIOCGWINSZ. Writes rows + cols into
+# the caller's out-pointers. Returns 0 on success, -1 on ioctl
+# failure (most often: fd is not a TTY).
+#
+# struct winsize layout (Linux):
+#   off 0  u16 row     # rows of cells
+#   off 2  u16 col     # cols of cells
+#   off 4  u16 xpix    # pixel width  (rarely populated; ignored)
+#   off 6  u16 ypix    # pixel height (rarely populated; ignored)
+#
+# v0.3.0 — added for chakshu M2 Slice D (dynamic resize). Cyim's
+# editor would also benefit when it picks up darshana at Phase 4.
+fn tty_winsize(fd, out_rows, out_cols) {
+    var ws[8];
+    var rc = syscall(SYS_IOCTL, fd, TIOCGWINSZ, &ws);
+    if (rc < 0) { return 0 - 1; }
+    var rows = load8(&ws + 0) | (load8(&ws + 1) << 8);
+    var cols = load8(&ws + 2) | (load8(&ws + 3) << 8);
+    store64(out_rows, rows);
+    store64(out_cols, cols);
+    return 0;
+}
+
+# Block the signals in `sigmask` on this thread and create a signalfd
+# that delivers them. Returns the signalfd, or -1 on failure (caller
+# should degrade gracefully — falling back to no-signal-handling is
+# usually preferable to refusing to launch).
+#
+# `sigmask` is a single u64 representing a Linux sigset_t (bit N set
+# = signal N+1 in the mask). Common values are exposed as constants:
+# TTY_SIGMASK_EXIT for HUP/INT/TERM cleanup, TTY_SIGMASK_WINCH for
+# resize. Callers can OR them or build custom masks.
+#
+# Avoids the rt_sigaction x86_64 sa_restorer trampoline trap by
+# routing signals to a regular fd instead of installing synchronous
+# handlers — pure syscall, no inline assembly needed.
+#
+# v0.3.0 — promoted from chakshu's `_tui_open_exit_signalfd` after
+# chakshu became the second consumer needing the same machinery
+# (Slice D adds SIGWINCH handling — same pattern, different mask).
+fn tty_open_signalfd(sigmask) {
+    var mask[8];
+    var i = 0;
+    while (i < 8) { store8(&mask + i, 0); i = i + 1; }
+    store64(&mask, sigmask);
+    # SIG_BLOCK = 0 (the `how` arg to sigprocmask)
+    var rc = sys_sigprocmask(0, &mask, 0);
+    if (rc < 0) { return 0 - 1; }
+    # signalfd(fd=-1, mask, flags=0) → new fd
+    return sys_signalfd(0 - 1, &mask, 0);
 }
 
 #endif

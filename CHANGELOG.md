@@ -6,6 +6,65 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No unreleased changes._
 
+## [0.3.0] — 2026-05-09 — M2: chakshu-driven extensions
+
+The Phase 3 work the original chakshu TUI extraction plan deferred —
+finally executing because chakshu's M2 Slice D (dynamic resize)
+needs primitives darshana didn't have. Three new functions plus
+two helper constants. No breaking changes; pure additions, so any
+v0.2.0 consumer keeps working.
+
+### Added
+
+- **`tty_winsize(fd, out_rows, out_cols)`** — TIOCGWINSZ ioctl wrapper.
+  Reads terminal dimensions into the caller's out-pointers; returns 0
+  on success, -1 on ioctl failure. Lives in `src/termios.cyr` under
+  the `CYRIUS_TARGET_LINUX` gate alongside `tty_raw` / `tty_cooked`.
+  `TIOCGWINSZ = 0x5413` exposed as a const for callers wanting to
+  ioctl directly. Driven by chakshu's M2 Slice D.
+- **`tty_open_signalfd(sigmask)`** — promoted from chakshu's
+  `_tui_open_exit_signalfd`, generalized to take a mask. Blocks the
+  signals on the calling thread via `sys_sigprocmask` (SIG_BLOCK) and
+  creates a signalfd that delivers them. Caller-supplied mask covers
+  any signal set; common-case constants below. Avoids the
+  `rt_sigaction` x86_64 sa_restorer trampoline trap by routing to a
+  regular fd instead of installing synchronous handlers.
+- **`TTY_SIGMASK_EXIT = 0x4003`** — HUP/INT/TERM bitmap for the
+  "guaranteed cleanup at exit" pattern. Linux sigset_t encoding:
+  bit 0 (HUP) | bit 1 (INT) | bit 14 (TERM).
+- **`TTY_SIGMASK_WINCH = 0x08000000`** — SIGWINCH(28) bit 27. Used
+  by chakshu Slice D to wake the render loop on resize. Disjoint
+  from EXIT — callers can OR them into one signalfd or open two
+  separate fds (chakshu does the latter for clearer dispatch).
+- **`tty_clear_to_eol()` / `tty_clear_to_end()`** — partial-clear
+  ANSI helpers (CSI K and CSI J). Promoted from chakshu's inline
+  `_tui_clear_eol` / `_tui_clear_to_end`. Used in render loops to
+  wipe row leftovers without flickering the whole screen.
+
+### Tests
+
+- 4 new assertions on the constants (TTY_SIGMASK_EXIT/WINCH math +
+  disjointness, TIOCGWINSZ kernel ABI value). Total 44 (was 40).
+  TTY-bound functions (`tty_winsize`, `tty_open_signalfd`) need a
+  real TTY fd / signal delivery to exercise; integration coverage
+  comes via cyim's PTY smoke at Phase 4.
+
+### Tooling
+
+- `scripts/smoke.sh` API contract surface check expanded to require
+  the four new function names + three new constants. The dist drift
+  check auto-catches forgetting to regenerate `dist/darshana.cyr`
+  after the source changes.
+
+### Notes
+
+- No breaking changes — pure additions. v0.2.0 consumers (none yet
+  outside chakshu, which is consuming v0.2.0 today) can stay on v0.2.0
+  if they don't need the new surface. chakshu's Slice D bumps to
+  v0.3.0 to use `tty_winsize` + `TTY_SIGMASK_WINCH`; cyim's eventual
+  Phase 4 migration also benefits from `tty_clear_to_eol/to_end` if
+  it grows partial-redraw paths.
+
 ## [0.2.0] — 2026-05-09 — M1 close
 
 The donor port. cyim's private `src/tty.cyr` now lives here as a

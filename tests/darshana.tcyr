@@ -125,6 +125,25 @@ fn main() {
     assert_eq(load8(&ibuf + 1), 0x39, "99 first '9' at pos 1");
     assert_eq(load8(&ibuf + 2), 0x39, "99 second '9' at pos 2");
 
+    # ----- v0.3.0 — signal-mask constants ----------------------------
+    # Verify the published TTY_SIGMASK_* values match Linux sigset_t
+    # encoding: bit (signum - 1) per signal in the mask. Callers
+    # depend on these being correct sums; a typo would silently route
+    # the wrong signals to the signalfd.
+    test_group("termios.cyr — TTY_SIGMASK_* values");
+    # SIGHUP=1 → bit 0, SIGINT=2 → bit 1, SIGTERM=15 → bit 14.
+    assert_eq(TTY_SIGMASK_EXIT, 0x4003, "EXIT mask = HUP|INT|TERM");
+    # SIGWINCH=28 → bit 27.
+    assert_eq(TTY_SIGMASK_WINCH, 0x08000000, "WINCH mask = SIGWINCH(28)");
+    # The two masks must be disjoint — caller can OR them safely.
+    assert_eq(TTY_SIGMASK_EXIT & TTY_SIGMASK_WINCH, 0, "EXIT and WINCH disjoint");
+
+    # ----- v0.3.0 — TIOCGWINSZ const ---------------------------------
+    # The ioctl number is set in stone by the kernel ABI; verify we
+    # haven't accidentally bumped it.
+    test_group("termios.cyr — TIOCGWINSZ");
+    assert_eq(TIOCGWINSZ, 0x5413, "TIOCGWINSZ kernel ABI value");
+
     return assert_summary();
 }
 
