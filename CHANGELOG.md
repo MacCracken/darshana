@@ -82,6 +82,17 @@ upcoming cyim migration is a manifest swap, not a rename.
   indirection (was a literal `"0.1.0"` from the `cyrius init`
   template); CI version-consistency check now closed-loop.
 
+### Fixed
+
+- CI Test step uses explicit `cyrius test tests/darshana.tcyr` rather
+  than bare `cyrius test`. The bare form's auto-discovery failed on
+  the GitHub-hosted runner against the 5.10.20 toolchain artifact with
+  `No .tcyr files found in tests/tcyr/ or tests/` even though the
+  test file was checked in and discovery worked locally — the
+  discovery surface has varied between cyrius releases. The documented
+  form per `cyrius help test` is `cyrius test <test.cyr>`; using it
+  explicitly removes the discovery surface from CI altogether.
+
 ## [0.1.0] — 2026-05-09
 
 Initial scaffold. No working code yet — the donor port from

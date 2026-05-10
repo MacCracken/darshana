@@ -70,9 +70,14 @@ jobs:
           [ $fail -eq 0 ] || { echo "lint: non-cosmetic warnings present"; exit 1; }
 
       - name: Test
-        # Bare `cyrius test` auto-discovers tests/*.tcyr (cc5 v5.6.28+)
-        # and also runs the [build].test entry if present.
-        run: cyrius test
+        # Explicit path — bare `cyrius test` (no arg) relies on
+        # auto-discovery that has varied between cyrius releases
+        # (and failed in CI on 5.10.20 with "No .tcyr files found in
+        # tests/tcyr/ or tests/" despite tests/darshana.tcyr being
+        # checked in). The documented form per `cyrius help test` is
+        # `cyrius test <test.cyr>`; using it explicitly avoids the
+        # discovery surface entirely.
+        run: cyrius test tests/darshana.tcyr
 
       - name: Project smoke (scripts/smoke.sh)
         run: bash scripts/smoke.sh
