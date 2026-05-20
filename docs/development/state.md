@@ -5,22 +5,34 @@
 
 ## Version
 
-**0.3.0** — M2 close (chakshu-driven extensions). v0.2.0 was the donor port from cyim/src/tty.cyr (2026-05-09); v0.3.0 adds `tty_winsize` (TIOCGWINSZ), `tty_open_signalfd(mask)` + TTY_SIGMASK_EXIT/WINCH constants, and `tty_clear_to_eol/to_end` ANSI helpers. Driven by chakshu's M2 Slice D needs (dynamic resize). Pure additions — v0.2.0 consumers unaffected.
+**0.3.5** — tagged 2026-05-20. SGR helpers (`tty_sgr`,
+`tty_sgr_reset`, 16 named foreground-color constants) added for
+bannermanor's M5 (`bnrmr --color cyan TEXT`). Toolchain pin caught
+up to ecosystem-wide 6.0.1. Pure additions on the API surface;
+v0.3.0 consumers unaffected.
+
+**0.3.0** — tagged 2026-05-09. M2 close (chakshu-driven extensions).
+v0.2.0 was the donor port from cyim/src/tty.cyr; v0.3.0 added
+`tty_winsize` (TIOCGWINSZ), `tty_open_signalfd(mask)` +
+TTY_SIGMASK_EXIT/WINCH constants, and `tty_clear_to_eol/to_end`
+ANSI helpers. Driven by chakshu's M2 Slice D needs (dynamic resize).
 
 ## Toolchain
 
-- **Cyrius pin**: `5.10.20` (in `cyrius.cyml [package].cyrius`, via `${file:VERSION}` indirection on the package version). Matches the chakshu pin so the two repos move together until a hard reason forces them apart.
+- **Cyrius pin**: `6.0.1` (in `cyrius.cyml [package].cyrius`, via
+  `${file:VERSION}` indirection on the package version). Bumped from
+  `5.10.20` at v0.3.5 — caught up to the ecosystem-wide cycc.
 
 ## Source
 
 | File | Lines | Surface |
 |------|-------|---------|
 | `src/termios.cyr` | ~225 | `TIO_*` flags, `tio_load32/store32`, `tty_apply_raw_flags`, `tty_raw`, `tty_cooked`, **v0.3.0:** `TIOCGWINSZ`, `TTY_SIGMASK_EXIT/WINCH`, `tty_winsize`, `tty_open_signalfd`. Linux-only via `#ifdef CYRIUS_TARGET_LINUX`. |
-| `src/ansi.cyr` | ~75 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`, **v0.3.0:** `tty_clear_to_eol`, `tty_clear_to_end`. Any vt100-compatible terminal. |
+| `src/ansi.cyr` | ~165 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`, **v0.3.0:** `tty_clear_to_eol`, `tty_clear_to_end`, **v0.3.5:** `tty_sgr`, `tty_sgr_reset`, 16 `TTY_FG_*` constants. Any vt100-compatible terminal. |
 | `src/cursor.cyr` | ~50 | `tty_itoa`, `tty_move`. Composes the CSI row;colH escape inline. |
 | `src/main.cyr` | 14 | Convenience entry — `include`s the three sub-modules so smoke + tests get the whole surface in one shot. |
 | `programs/smoke.cyr` | ~17 | Compile-link smoke. |
-| `dist/darshana.cyr` | 340 | Bundled distribution (regenerate via `cyrius distlib`). What consumers `include "lib/darshana.cyr"`. |
+| `dist/darshana.cyr` | 409 | Bundled distribution (regenerate via `cyrius distlib`). What consumers `include "lib/darshana.cyr"`. |
 
 Total source ≈ 365 lines (v0.3.0). All public symbol names match cyim's donor for the v0.2.0 surface — Phase 4 cyim migration is a manifest swap. v0.3.0 additions are new (no donor counterpart) and extraction-ready for any future consumer.
 
@@ -44,6 +56,7 @@ Direct (declared in `cyrius.cyml`):
 |----------|--------|
 | [chakshu](https://github.com/MacCracken/chakshu) | **Live on v0.2.0** since chakshu's 0.2.1 (M2 Slice A); will bump to v0.3.0 for M2 Slice D (dynamic resize). |
 | [cyim](https://github.com/MacCracken/cyim) | Not yet integrated. Pending Phase 4 migration (drops `cyim/src/tty.cyr`, depends on darshana). |
+| [bannermanor](https://github.com/MacCracken/bannermanor) | Wiring v0.3.5 in for bnrmr's M5 (`bnrmr --color cyan TEXT`). First non-TUI consumer; uses `tty_sgr` + `TTY_FG_*` constants only. Drove the v0.3.5 SGR addition. |
 
 Planned (legacy table):
 

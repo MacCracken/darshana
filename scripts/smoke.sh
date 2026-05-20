@@ -58,14 +58,14 @@ pass "dist/darshana.cyr matches src/ — no drift"
 # ============================================================
 echo "[smoke] public surface"
 
-required_syms="tty_apply_raw_flags tty_raw tty_cooked tty_alt_enter tty_alt_leave tty_clear tty_cursor_hide tty_cursor_show tty_cursor_home tty_move tty_itoa tio_load32 tio_store32 tty_winsize tty_open_signalfd tty_clear_to_eol tty_clear_to_end"
+required_syms="tty_apply_raw_flags tty_raw tty_cooked tty_alt_enter tty_alt_leave tty_clear tty_cursor_hide tty_cursor_show tty_cursor_home tty_move tty_itoa tio_load32 tio_store32 tty_winsize tty_open_signalfd tty_clear_to_eol tty_clear_to_end tty_sgr tty_sgr_reset"
 for sym in $required_syms; do
     grep -qE "^fn ${sym}\b" dist/darshana.cyr \
         || fail "dist/darshana.cyr missing 'fn ${sym}' (cyim API contract)"
 done
 pass "all $(echo "$required_syms" | wc -w) cyim-API tty_* / tio_* symbols present in dist"
 
-required_flags="TIO_ECHO TIO_ICANON TIO_ISIG TIO_IEXTEN TIO_ICRNL TIO_IXON TIO_OPOST TIO_CSIZE TIO_CS8 TIO_BRKINT TIO_INPCK TIO_ISTRIP TIO_CC_BASE TIO_VTIME TIO_VMIN TIO_BUF_SIZE TIOCGWINSZ TTY_SIGMASK_EXIT TTY_SIGMASK_WINCH"
+required_flags="TIO_ECHO TIO_ICANON TIO_ISIG TIO_IEXTEN TIO_ICRNL TIO_IXON TIO_OPOST TIO_CSIZE TIO_CS8 TIO_BRKINT TIO_INPCK TIO_ISTRIP TIO_CC_BASE TIO_VTIME TIO_VMIN TIO_BUF_SIZE TIOCGWINSZ TTY_SIGMASK_EXIT TTY_SIGMASK_WINCH TTY_FG_BLACK TTY_FG_RED TTY_FG_GREEN TTY_FG_YELLOW TTY_FG_BLUE TTY_FG_MAGENTA TTY_FG_CYAN TTY_FG_WHITE TTY_FG_BRIGHT_BLACK TTY_FG_BRIGHT_RED TTY_FG_BRIGHT_GREEN TTY_FG_BRIGHT_YELLOW TTY_FG_BRIGHT_BLUE TTY_FG_BRIGHT_MAGENTA TTY_FG_BRIGHT_CYAN TTY_FG_BRIGHT_WHITE"
 for flag in $required_flags; do
     grep -qE "^var ${flag} " dist/darshana.cyr \
         || fail "dist/darshana.cyr missing 'var ${flag}' (cyim API contract)"

@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "दर्शन — viewing/showing. Linux TTY/raw-mode primitives (termios, ANSI, cursor) for AGNOS first-party tools (cyim, chakshu, ...)."
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "5.10.20"
+cyrius = "6.0.1"
 
 [build]
 entry = "programs/smoke.cyr"

@@ -4,7 +4,54 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_No unreleased changes._
+## [0.3.5] — 2026-05-20 — SGR helpers + toolchain bump
+
+Two changes, both driven by bannermanor's M5 (color via darshana):
+
+1. **SGR helpers.** Pre-0.3.5, darshana covered cursor / alt-screen
+   / clear / signalfd / termios — every screen control except text
+   color. bannermanor's `--color cyan TEXT` needed primitives this
+   library didn't have, so they're added here rather than inlined in
+   the consumer (the CLAUDE.md "no raw ANSI in the consumer" rule).
+2. **Toolchain bump 5.10.20 → 6.0.1.** Caught darshana up to the
+   ecosystem-wide cycc pin. Pure version-pin change — `cyrius update`
+   refreshed `lib/` from the matching snapshot; no source edits
+   required.
+
+### Added
+
+- **`tty_sgr(code)`** — emit `CSI <code>m` to set an SGR attribute.
+  Most callers pass a `TTY_FG_*` constant, but any 1–3 digit decimal
+  works; this is the door for future bold (1) / underline (4) /
+  background (40–47, 100–107) helpers without growing the function
+  surface.
+- **`tty_sgr_reset()`** — emit `CSI 0m` to clear all SGR attributes.
+  Pair with every `tty_sgr` call before returning to the user's
+  shell prompt; darshana does not install an exit handler.
+- **16 named foreground-color constants** — `TTY_FG_BLACK` (30) …
+  `TTY_FG_WHITE` (37), `TTY_FG_BRIGHT_BLACK` (90) …
+  `TTY_FG_BRIGHT_WHITE` (97). Values are raw SGR parameter codes;
+  consumers map color names to these and pass to `tty_sgr`.
+
+Background colors (40–47 / 100–107) and ANSI-256 / truecolor are
+deliberately deferred — bannermanor M5 only needs the 16 named
+foregrounds, and CLAUDE.md says "consumers drive the API."
+
+### Changed
+
+- `cyrius.cyml` pin bumped `5.10.20` → `6.0.1`.
+- `lib/` refreshed via `cyrius update` to the 6.0.1 snapshot.
+- `scripts/smoke.sh` API-surface check now requires `tty_sgr`,
+  `tty_sgr_reset`, and the 16 `TTY_FG_*` constants. Total: 19
+  required fn symbols (was 17), 35 required const symbols (was 19).
+
+### Notes
+
+- The `lib/fmt.cyr` `undefined function 'vec_get'` build warning is
+  pre-existing (predates this release) and benign — fmt is not
+  invoked from darshana's own source, only present transitively in
+  `lib/`. The unreachable fn count climbed because the dist bundle
+  now carries the new SGR symbols.
 
 ## [0.3.0] — 2026-05-09 — M2: chakshu-driven extensions
 
