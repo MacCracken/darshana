@@ -4,6 +4,42 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-20 — M3 close-out + docstring hardening
+
+Doc-only patch shipped the same day as 0.4.0 once cyim 1.7.1
+satisfied the M3 gate (cyim CI green on darshana 0.4.0 + cyrius
+6.0.1). Two deferred-hardening items from the 0.4.0 audit land
+here; no source-behavior change, no surface change.
+
+### Changed
+
+- **`TIO_BUF_SIZE` docstring** — clarifies the role of the
+  constant (canonical name for callers ioctling TCGETS/TCSETS
+  directly) and records the Cyrius array-size constraint that
+  forces the internal `_tty_saved[60]` / `work[60]` declarations
+  to use the matching literal instead of the named constant.
+  Both sites now carry an inline comment tying them back to
+  `TIO_BUF_SIZE`. Behavior unchanged.
+- **`tty_winsize` docstring** — documents the out-pointer
+  contract: `out_rows` / `out_cols` each receive an i64 (8 bytes)
+  via `store64`, so callers must pass `&var` where `var` is a
+  Cyrius natural. Catches a footgun where a caller passing a
+  pointer to a smaller slot (e.g., a byte field inside a struct)
+  would silently overflow.
+
+### Docs
+
+- `docs/development/state.md` and `docs/development/roadmap.md`
+  refreshed to drop the "remote CI green pending push" hedging
+  language from the 0.4.0 cut. M3 close is now recorded as fact
+  (cyim 1.7.1 shipped on darshana 0.4.0).
+
+### Notes
+
+- No source-behavior change between 0.4.0 and 0.4.1. The dist
+  bundle grows by ~18 lines (docstring additions only); the DCE'd
+  smoke binary is byte-identical.
+
 ## [0.4.0] — 2026-05-20 — M3: cyim integration milestone
 
 The milestone cut associated with cyim adopting darshana as its TTY

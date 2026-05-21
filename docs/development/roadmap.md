@@ -57,7 +57,7 @@ cyim drops its private `src/tty.cyr` and depends on darshana. Touches a differen
 - [x] cyim's existing test suite stays green (no behavior regression) — verified locally on the 0.4.0 + 6.0.1 manifest
 - [x] cyim's M-level milestones in its own roadmap don't shift — confirmed; the bump is a forward-compat dep refresh, no cyim feature work
 
-**Gate to M4**: cyim CI green on the darshana-dep branch. Local build + tests pass; remote CI green pending push of darshana v0.4.0 tag and the cyim manifest PR.
+**Gate to M4**: cyim CI green on the darshana-dep branch. Satisfied — cyim 1.7.1 (2026-05-20) shipped on darshana 0.4.0 + cyrius 6.0.1.
 
 ### M4 — chakshu integration (v0.5.0)
 

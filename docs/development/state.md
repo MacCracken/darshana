@@ -5,13 +5,19 @@
 
 ## Version
 
-**0.4.0** — tagged 2026-05-20. M3 milestone cut. One hardening
-change (`tty_sgr` now rejects codes outside `[0, 999]` with `-1`
-before writing) and one ADR (0002 — termios state-restore posture).
-No new public functions; no breaking changes. The M3 *close
-ceremony* (state.md consumers table updated, roadmap M3 ✓) lands as
-a separate doc-only commit after cyim CI is green on the bumped dep
-— see Roadmap status below.
+**0.4.1** — tagged 2026-05-20. Doc-only patch following the M3
+close. Tightens `TIO_BUF_SIZE` and `tty_winsize` docstrings
+(deferred-hardening items #3 and #4 from the 0.4.0 audit) and
+drops the "pending push" hedging from state.md / roadmap.md now
+that cyim 1.7.1 made the M3 gate fact. Bundle gains ~18 lines of
+documentation; behavior unchanged.
+
+**0.4.0** — tagged 2026-05-20. **M3 closed.** One hardening change
+(`tty_sgr` now rejects codes outside `[0, 999]` with `-1` before
+writing) and one ADR (0002 — termios state-restore posture). No new
+public functions; no breaking changes. cyim shipped 1.7.1 the same
+day with `[deps.darshana].tag = "0.4.0"` + cyrius pin 6.0.1,
+satisfying the M3 gate.
 
 **0.3.5** — tagged 2026-05-20. SGR helpers (`tty_sgr`,
 `tty_sgr_reset`, 16 named foreground-color constants) added for
@@ -35,14 +41,14 @@ ANSI helpers. Driven by chakshu's M2 Slice D needs (dynamic resize).
 
 | File | Lines | Surface |
 |------|-------|---------|
-| `src/termios.cyr` | ~225 | `TIO_*` flags, `tio_load32/store32`, `tty_apply_raw_flags`, `tty_raw`, `tty_cooked`, **v0.3.0:** `TIOCGWINSZ`, `TTY_SIGMASK_EXIT/WINCH`, `tty_winsize`, `tty_open_signalfd`. Linux-only via `#ifdef CYRIUS_TARGET_LINUX`. |
+| `src/termios.cyr` | ~235 | `TIO_*` flags, `tio_load32/store32`, `tty_apply_raw_flags`, `tty_raw`, `tty_cooked`, **v0.3.0:** `TIOCGWINSZ`, `TTY_SIGMASK_EXIT/WINCH`, `tty_winsize`, `tty_open_signalfd`. **v0.4.1:** tightened docstrings on `TIO_BUF_SIZE` (canonical-name + Cyrius array-size constraint) and `tty_winsize` (i64 out-pointer contract). Linux-only via `#ifdef CYRIUS_TARGET_LINUX`. |
 | `src/ansi.cyr` | ~170 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`, **v0.3.0:** `tty_clear_to_eol`, `tty_clear_to_end`, **v0.3.5:** `tty_sgr`, `tty_sgr_reset`, 16 `TTY_FG_*` constants. **v0.4.0:** `tty_sgr` validates input range `[0, 999]`. Any vt100-compatible terminal. |
 | `src/cursor.cyr` | ~50 | `tty_itoa`, `tty_move`. Composes the CSI row;colH escape inline. |
 | `src/main.cyr` | 14 | Convenience entry — `include`s the three sub-modules so smoke + tests get the whole surface in one shot. |
 | `programs/smoke.cyr` | ~17 | Compile-link smoke. |
-| `dist/darshana.cyr` | 430 | Bundled distribution (regenerate via `cyrius distlib`). What consumers `include "lib/darshana.cyr"`. |
+| `dist/darshana.cyr` | 448 | Bundled distribution (regenerate via `cyrius distlib`). What consumers `include "lib/darshana.cyr"`. |
 
-Total source ≈ 460 lines (v0.4.0). All public symbol names match cyim's donor for the v0.2.0 surface — cyim's migration to darshana is a manifest swap (cyim 1.7.0 picked this up at darshana 0.2.0). v0.3.0+ additions are extension-only (no donor counterpart) and extraction-ready for any future consumer.
+Total source ≈ 450 lines (v0.4.1; docstring expansion versus 0.4.0). All public symbol names match cyim's donor for the v0.2.0 surface — cyim's migration to darshana is a manifest swap (cyim 1.7.0 picked this up at darshana 0.2.0; bumped to 0.4.0 at cyim 1.7.1). v0.3.0+ additions are extension-only (no donor counterpart) and extraction-ready for any future consumer.
 
 ## Tests
 
@@ -63,7 +69,7 @@ Direct (declared in `cyrius.cyml`):
 | Consumer | Status |
 |----------|--------|
 | [chakshu](https://github.com/MacCracken/chakshu) | **Live on v0.2.0** since chakshu's 0.2.1 (M2 Slice A); will bump to v0.3.0 for M2 Slice D (dynamic resize). |
-| [cyim](https://github.com/MacCracken/cyim) | **Bumped to v0.4.0** + cyrius 6.0.1 on 2026-05-20. cyim 1.7.0 has been the live darshana consumer since picking up darshana 0.2.0; `cyim/src/tty.cyr` reduced from ~207 lines to 38 (only the cyim-specific `tty_probe` stays local); 25 callsites in cyim/src/ resolve against darshana symbols. Local build + tests green on the bumped manifest; remote CI green pending push. |
+| [cyim](https://github.com/MacCracken/cyim) | **Live on v0.4.0** + cyrius 6.0.1 since cyim 1.7.1 (2026-05-20). 1.7.0 was the original adopter on darshana 0.2.0; 1.7.1 closed M3. `cyim/src/tty.cyr` reduced from ~207 lines to 38 (only the cyim-specific `tty_probe` stays local); 25 callsites in cyim/src/ resolve against darshana symbols. |
 | [bannermanor](https://github.com/MacCracken/bannermanor) | Wiring v0.3.5 in for bnrmr's M5 (`bnrmr --color cyan TEXT`). First non-TUI consumer; uses `tty_sgr` + `TTY_FG_*` constants only. Drove the v0.3.5 SGR addition. |
 
 ## Carry-Forward
@@ -85,7 +91,7 @@ Direct (declared in `cyrius.cyml`):
 - M0 (v0.1.0) — scaffold ✓
 - M1 (v0.2.0) — donor port ✓
 - M2 (v0.3.0) — chakshu-driven extensions ✓ — `tty_winsize`, `tty_open_signalfd`, partial-clear helpers, TTY_SIGMASK_*
-- M3 (v0.4.0) — cyim integration milestone ✓ **(this release)**. cyim 1.7.0 has been live on darshana 0.2.0 since its port; M3 ceremony bumped cyim's manifest to darshana 0.4.0 + cyrius 6.0.1 on 2026-05-20 with local build + tests green. Remote CI green is pending the darshana tag push + cyim PR (gate stays "cyim CI green on the integrated branch").
+- M3 (v0.4.0) — cyim integration milestone ✓ **(this release)**. cyim 1.7.0 was the original adopter on darshana 0.2.0; cyim 1.7.1 (2026-05-20) bumped to darshana 0.4.0 + cyrius 6.0.1 and satisfied the M3 gate ("cyim CI green on the integrated branch").
 - M4 (v0.5.0) — chakshu integration confirmed (chakshu picked up darshana at its M2 Slice A in v0.2.1) ✓ in spirit; formal close when chakshu M2 ships at v0.5.0
 - M5 (v1.0.0) — both consumers green for ≥30 days — not started
 

@@ -44,6 +44,13 @@ var TIO_VMIN     = 6;
 # Termios buffer size. The kernel struct is 36 bytes active, but the ioctl
 # write tolerates any size >= 36; 60 covers the historically padded variants
 # without straddling a stack red-zone.
+#
+# Exposed as the canonical name for callers ioctling TCGETS/TCSETS directly
+# (e.g., a consumer that wants to read termios state without taking it raw).
+# Cyrius requires array sizes to be literals or enum constants, not `var`
+# constants, so the internal `_tty_saved[60]` and `work[60]` declarations
+# below use the matching literal; if this value ever changes, both sites
+# (this constant + the array declarations) must move together.
 var TIO_BUF_SIZE = 60;
 
 # Read 32-bit little-endian field at `off` inside `buf`.
@@ -125,7 +132,8 @@ var TTY_SIGMASK_WINCH = 0x08000000;
 # Saved cooked-mode termios. Populated on `tty_raw`; consumed by `tty_cooked`.
 # Module-global rather than caller-owned so any exit path (including
 # signal handlers and panic paths) can reach it for cleanup without
-# threading state.
+# threading state. The literal `60` mirrors `TIO_BUF_SIZE` — see that
+# constant's docstring for why the duplication exists.
 var _tty_saved[60];
 var _tty_in_raw = 0;
 
@@ -138,7 +146,7 @@ fn tty_raw(fd) {
     var rc = syscall(SYS_IOCTL, fd, TCGETS, &_tty_saved);
     if (rc < 0) { return 0 - 1; }
 
-    var work[60];
+    var work[60];                       # size mirrors TIO_BUF_SIZE
     var i = 0;
     while (i < 60) {
         store8(&work + i, load8(&_tty_saved + i));
@@ -165,14 +173,24 @@ fn tty_cooked(fd) {
 # the caller's out-pointers. Returns 0 on success, -1 on ioctl
 # failure (most often: fd is not a TTY).
 #
+# Out-pointer contract: `out_rows` and `out_cols` each receive an
+# i64 (8 bytes) via `store64`. Callers must pass `&var` where `var`
+# is a Cyrius natural — i.e., declared as `var rows = 0;`. Passing
+# a pointer to a smaller slot (e.g., a single byte inside a struct)
+# will overflow that slot. The values themselves fit in u16 (kernel
+# struct field width) and rarely exceed ~1000, but the slot width is
+# i64, not u16.
+#
 # struct winsize layout (Linux):
 #   off 0  u16 row     # rows of cells
 #   off 2  u16 col     # cols of cells
 #   off 4  u16 xpix    # pixel width  (rarely populated; ignored)
 #   off 6  u16 ypix    # pixel height (rarely populated; ignored)
 #
-# v0.3.0 — added for chakshu M2 Slice D (dynamic resize). Cyim's
-# editor would also benefit when it picks up darshana at Phase 4.
+# v0.3.0 — added for chakshu M2 Slice D (dynamic resize). cyim's
+# editor would also benefit if/when it grows resize-aware rendering;
+# the cyim 1.7.1 dep bump brings the symbol in but doesn't yet call
+# it.
 fn tty_winsize(fd, out_rows, out_cols) {
     var ws[8];
     var rc = syscall(SYS_IOCTL, fd, TIOCGWINSZ, &ws);
