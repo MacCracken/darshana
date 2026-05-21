@@ -4,6 +4,53 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-20 — M3: cyim integration milestone
+
+The milestone cut associated with cyim adopting darshana as its TTY
+primitive provider. cyim 1.7.0 already ships with
+`[deps.darshana] tag = "0.2.0"`; the M3 close ceremony — bumping
+cyim from 0.2.0 → 0.4.0 to pick up the post-port additions
+(`tty_winsize`, `tty_open_signalfd`, partial-clear helpers, SGR
+helpers) — happens in cyim's repo. From darshana's side, this
+release adds one hardening item and one ADR; no breaking changes,
+no new public functions.
+
+### Added
+
+- **ADR 0002 — Termios state-restore posture.** Codifies the design
+  decision that darshana provides the primitives (module-global
+  `_tty_saved`, idempotent `tty_cooked`, `tty_open_signalfd` +
+  `TTY_SIGMASK_EXIT`) and consumers own the teardown contract —
+  *not* the other way around. Closes the v1.0 release criterion
+  "Security posture documented — termios state-restore guarantees
+  on every exit path." See [`docs/adr/0002-state-restore-posture.md`](docs/adr/0002-state-restore-posture.md).
+
+### Changed
+
+- **`tty_sgr(code)` now validates its input.** Codes outside `[0, 999]`
+  return `-1` *before* any bytes reach fd 1. Previous behavior on an
+  out-of-range code was to emit a malformed CSI sequence (the digit
+  formatter assumed `code < 1000`); the buffer was sized to absorb
+  the extra byte so there was no overflow, but the terminal would
+  see garbage. Backwards-compatible for any caller already passing
+  a value in range (every `TTY_FG_*` constant is in `[30, 97]`).
+
+### Tests
+
+- 3 new assertions on `tty_sgr` rejection paths
+  (negative / `>= 1000` / deeply negative). Total 47 (was 44). The
+  rejection paths short-circuit before any write, so they're safe
+  to call in-test without polluting the output with stray ANSI.
+
+### Notes
+
+- M3 close ceremony — bumping `state.md` consumers table to
+  "cyim 1.7.0 → live on darshana 0.4.0" and marking the roadmap M3
+  ✓ — lands as a separate doc-only commit after cyim CI is green
+  on the bumped dep, per the M3 gate.
+- No source line-count change worth noting (≈3 lines added to
+  `src/ansi.cyr` for the guard + docstring; nothing else moved).
+
 ## [0.3.5] — 2026-05-20 — SGR helpers + toolchain bump
 
 Two changes, both driven by bannermanor's M5 (color via darshana):

@@ -144,6 +144,18 @@ fn main() {
     test_group("termios.cyr — TIOCGWINSZ");
     assert_eq(TIOCGWINSZ, 0x5413, "TIOCGWINSZ kernel ABI value");
 
+    # ----- v0.4.0 — tty_sgr bounds check -----------------------------
+    # tty_sgr accepts a 1–3 digit SGR parameter [0, 999]. Anything
+    # outside that range is rejected with -1 *before* any bytes reach
+    # fd 1, so a malformed CSI sequence can't leak to the terminal.
+    # Valid codes can't be unit-tested here without redirecting stdout
+    # (they write the escape and return 0); rejection paths short-
+    # circuit before the write and are safe to call in-test.
+    test_group("ansi.cyr — tty_sgr bounds");
+    assert_eq(tty_sgr(0 - 1),   0 - 1, "negative code rejected");
+    assert_eq(tty_sgr(1000),    0 - 1, "code >= 1000 rejected");
+    assert_eq(tty_sgr(0 - 999), 0 - 1, "deeply-negative code rejected");
+
     return assert_summary();
 }
 

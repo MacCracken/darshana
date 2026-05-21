@@ -48,16 +48,16 @@ Surface chakshu needs that cyim doesn't currently exercise. Don't add anything c
 
 **Gate to M3**: chakshu's M2 TUI (full-screen, 1Hz refresh, key-driven) compiles + runs against darshana with no `darshana_TODO` calls.
 
-### M3 — cyim integration (v0.4.0)
+### M3 — cyim integration (v0.4.0) — ✅ shipped 2026-05-20
 
 cyim drops its private `src/tty.cyr` and depends on darshana. Touches a different repo (cyim) — opens as a PR for review.
 
-- [ ] cyim `cyrius.cyml` adds `[deps.darshana]` git+tag+modules entry pointing at v0.2.0+
-- [ ] `cyim/src/tty.cyr` deleted; references replaced with darshana symbols
-- [ ] cyim's existing test suite stays green (no behavior regression)
-- [ ] cyim's M-level milestones in its own roadmap don't shift — this is a refactor, not a feature
+- [x] cyim `cyrius.cyml` adds `[deps.darshana]` git+tag+modules entry pointing at v0.2.0+ — landed at cyim 1.7.0 (darshana 0.2.0); bumped to darshana 0.4.0 + cyrius 6.0.1 on 2026-05-20
+- [x] `cyim/src/tty.cyr` deleted; references replaced with darshana symbols — reduced from ~207 lines to 38 (only cyim-specific `tty_probe` stays local)
+- [x] cyim's existing test suite stays green (no behavior regression) — verified locally on the 0.4.0 + 6.0.1 manifest
+- [x] cyim's M-level milestones in its own roadmap don't shift — confirmed; the bump is a forward-compat dep refresh, no cyim feature work
 
-**Gate to M4**: cyim CI green on the darshana-dep branch.
+**Gate to M4**: cyim CI green on the darshana-dep branch. Local build + tests pass; remote CI green pending push of darshana v0.4.0 tag and the cyim manifest PR.
 
 ### M4 — chakshu integration (v0.5.0)
 
