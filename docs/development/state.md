@@ -102,6 +102,10 @@ Direct (declared in `cyrius.cyml`):
 - M2 (v0.3.0) — chakshu-driven extensions ✓ — `tty_winsize`, `tty_open_signalfd`, partial-clear helpers, TTY_SIGMASK_*
 - M3 (v0.4.0) — cyim integration milestone ✓ **(this release)**. cyim 1.7.0 was the original adopter on darshana 0.2.0; cyim 1.7.1 (2026-05-20) bumped to darshana 0.4.0 + cyrius 6.0.1 and satisfied the M3 gate ("cyim CI green on the integrated branch").
 - M4 (v0.5.0) — chakshu integration ✓ **closed 2026-05-20**. chakshu's M2 (Full TUI) shipped at chakshu 0.5.0 on darshana 0.3.0; chakshu 0.6.1 advanced to darshana 0.4.1 as the close ceremony. Both consumers (cyim 1.7.1, chakshu 0.6.1) are now on the same dep pin.
+- **Soak-window cuts** (v0.6.0 / v0.8.0) — planned during the M5 calendar gate:
+    - v0.6.0 — in-repo PTY harness (early soak); closes the two v1.0 "API frozen — tested" + "test coverage adequate" partials.
+    - v0.8.0 — `docs/examples/` + final API audit + `docs/architecture/` notes (late soak); pre-freeze polish on the actual v1.0 surface.
+    - See [`roadmap.md`](roadmap.md) §Soak-window cuts for the full plan + per-cut checklist.
 - M5 (v1.0.0) — both consumers green for ≥30 days — calendar-gated from 2026-05-20; earliest viable cut ~2026-06-19.
 
 See [`roadmap.md`](roadmap.md) for the full milestone definitions.

@@ -68,6 +68,33 @@ chakshu picks up darshana to power its M2 TUI. Touches chakshu repo.
 
 **Gate to M5**: chakshu M2 closes (full-screen TUI, parity with htop) using darshana. Satisfied — chakshu 0.5.0 (2026-05-19) shipped the Full TUI exercising the full v0.3.0 darshana surface (`tty_raw/cooked`, alt-screen, `tty_winsize`, `tty_open_signalfd`, partial-clear helpers, cursor positioning).
 
+### Soak-window cuts (v0.6.0 — v0.8.0)
+
+The M5 gate "both consumers green for ≥30 days" is calendar-gated, not work-gated — both consumers shipped on 2026-05-20, so M5 cannot close before 2026-06-19. The intervening month is intentionally light, but two work items close the remaining v1.0 partials and lower the risk of a rushed pre-freeze audit. Skipped patch slots (v0.5.x, v0.7.x) stay open for fix-shaped cuts if regressions surface during the soak.
+
+**Constraint for both cuts** — no breaking changes to the public surface (`tty_*`, `tio_*`, `TIO_*`, `TTY_*`). Forward-compat additions are allowed only if a consumer asks (per CLAUDE.md "consumers drive the API"). Pure-internal refactors that don't touch the dist bundle bytes are fine.
+
+#### v0.6.0 — in-repo PTY harness (early soak)
+
+Closes two v1.0 partials at once: "Public API frozen — every exported symbol named, documented, **and tested**" and "Test coverage adequate for the surface area (parsers + state-restore paths)." Lands early in the soak window so the harness itself gets burn-in.
+
+- [ ] Pseudo-terminal smoke under `tests/` or `scripts/` — opens a PTY, drives `tty_raw` → write known input → read echo'd bytes → `tty_cooked`, asserting the round-trip behaviour
+- [ ] Exercises the symbols the v0.5.0 live-fd tests can't touch under `cyrius test`: `tty_raw`, `tty_cooked`, `tty_alt_enter/leave`, `tty_clear*`, `tty_cursor_*`, `tty_move`, `tty_sgr` valid-code emission
+- [ ] CI integration — runs as part of `build-and-test` so the gate is enforced on every push, not just developer machines
+- [ ] State.md Tests row updated to reflect coverage of the previously consumer-only surface
+
+**Why early in soak**: the harness is the most net-new code shipping during soak. Better to let it run against the integrated stack for ~3 weeks than to land it the day before v1.0 cut.
+
+#### v0.8.0 — documentation + final API audit (late soak)
+
+Pre-freeze polish. Doc-shaped and lower-risk; lands close to v1.0 so the audit reflects the actual freeze surface (any v0.6.x patches included).
+
+- [ ] `docs/examples/` directory — at least one runnable example matching the ADR 0002 teardown shape (raw-enter, render loop, signalfd-driven exit, full restoration sequence). `docs/examples/` is named in CLAUDE.md as a doc path but doesn't exist yet.
+- [ ] Final API audit — walk every exported symbol (`fn tty_*`, `fn tio_*`, every `var TIO_*` / `var TTY_*`), confirm the docstring is sufficient to consume without reading the function body. Log any gaps in a single audit pass and patch them in the same cut.
+- [ ] `docs/architecture/` populated — currently has only `README.md`; v1.0 freeze deserves one or two architecture notes (e.g., "why module-globals for `_tty_saved`", "the syscall-vs-libc decision," cross-referencing ADRs).
+
+**Why late in soak**: doc/audit work benefits from being applied to the *actual* v1.0 surface, after any soak-revealed fixes have landed. Doing the audit pre-soak risks needing a re-audit after a 0.5.x patch.
+
 ### M5 — v1.0 (v1.0.0) — calendar-gated from 2026-05-20
 
 - [ ] Both consumers green, both green for ≥30 days — both adopted (cyim 1.7.1 + chakshu 0.6.1 on darshana 0.4.1 since 2026-05-20); earliest viable cut ~2026-06-19
