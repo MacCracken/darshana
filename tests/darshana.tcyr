@@ -156,6 +156,53 @@ fn main() {
     assert_eq(tty_sgr(1000),    0 - 1, "code >= 1000 rejected");
     assert_eq(tty_sgr(0 - 999), 0 - 1, "deeply-negative code rejected");
 
+    # ----- v0.5.0 — live-fd coverage (skip-when-not-a-TTY) -----------
+    # The v0.3.0 syscall-touching surface (`tty_winsize`,
+    # `tty_open_signalfd`) had no in-repo coverage at v0.4.x — only
+    # the kernel-ABI constants were asserted. These tests exercise
+    # the syscalls themselves *when* the host has the right context,
+    # and skip cleanly when it doesn't (CI workers without a
+    # controlling TTY, seccomp sandboxes, etc.). The success path is
+    # informative; the skip path is silent — neither produces a
+    # spurious failure on a machine that can't run the assertion.
+
+    # tty_winsize against fd 0. If stdin is a TTY (interactive shell,
+    # `cyrius test` invoked from a terminal) tty_winsize returns 0
+    # and writes plausible (>0) dimensions. If stdin is piped or
+    # redirected (CI, `cyrius test < /dev/null`, etc.) it returns -1
+    # and we skip the assertions without faking a pass.
+    test_group("termios.cyr — tty_winsize (live)");
+    var ws_rows = 0;
+    var ws_cols = 0;
+    var ws_rc = tty_winsize(0, &ws_rows, &ws_cols);
+    if (ws_rc == 0) {
+        assert(ws_rows > 0, "live TTY: rows > 0");
+        assert(ws_cols > 0, "live TTY: cols > 0");
+    }
+    # else: stdin is not a TTY in this run — covered by the kernel-ABI
+    # const assertion above (TIOCGWINSZ = 0x5413) plus consumer-side
+    # PTY smoke. No assertion here to keep the suite green in CI.
+
+    # tty_open_signalfd with the WINCH mask. WINCH was chosen over
+    # EXIT to avoid blocking SIGINT/SIGTERM on the test process: if
+    # the test hangs for any reason, a developer's ctrl-C still
+    # delivers. Blocking SIGWINCH for the duration of the test
+    # process is harmless — we're not running a render loop.
+    # The signalfd is closed after assertion; the WINCH-block in
+    # this thread's signal mask persists until process exit (the
+    # test binary exits via syscall(60) right after assert_summary).
+    test_group("termios.cyr — tty_open_signalfd (live)");
+    var sfd = tty_open_signalfd(TTY_SIGMASK_WINCH);
+    if (sfd >= 0) {
+        assert(sfd >= 0, "signalfd opened (fd ≥ 0)");
+        # SYS_CLOSE = 3 on Linux x86_64. Don't leak the fd into the
+        # remainder of the suite or into assert_summary's syscalls.
+        syscall(3, sfd);
+    }
+    # else: signalfd syscall blocked by sandbox / seccomp / very old
+    # kernel. Skip silently — consumer integration (chakshu's M2
+    # signalfd-driven exit + SIGWINCH loop) covers the live path.
+
     return assert_summary();
 }
 

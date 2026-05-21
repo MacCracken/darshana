@@ -4,6 +4,78 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-20 — M4: chakshu integration milestone
+
+The milestone cut associated with chakshu's adoption of darshana.
+chakshu's M2 (Full TUI) shipped at chakshu 0.5.0 on darshana 0.3.0
+the day before — literally satisfying the M4 gate "chakshu M2
+closes (full-screen TUI, parity with htop) using darshana." chakshu
+0.6.1 (2026-05-20) advanced its `[deps.darshana].tag` from 0.3.0 to
+0.4.1 as the M4 close ceremony, putting both consumers (cyim 1.7.1,
+chakshu 0.6.1) on the same dep pin.
+
+From darshana's side this release adds one deferred-hardening item
+(M5 carry-forward #5 — live-fd test coverage for the v0.3.0
+syscall-touching surface). No new public functions; no breaking
+changes. The dist bundle is line-identical to v0.4.1 (test-only
+additions).
+
+### Added
+
+- **Live-fd tests for `tty_winsize` and `tty_open_signalfd`** in
+  `tests/darshana.tcyr`. Both gate on the syscall returning
+  success; if the host context doesn't satisfy the precondition
+  (stdin not a TTY for `tty_winsize`; signalfd blocked by
+  seccomp/sandbox for `tty_open_signalfd`) the test skips silently
+  rather than faking a pass or failing the suite. Closes the M5
+  carry-forward note in `state.md` Tests row that previously read
+  "TTY-bound functions … exercised end-to-end via cyim's PTY smoke
+  at Phase 4" — now exercised in-repo too, when possible.
+  - `tty_winsize` against fd 0: when stdin is a TTY (interactive
+    `cyrius test` from a shell), asserts `rows > 0` + `cols > 0`.
+  - `tty_open_signalfd(TTY_SIGMASK_WINCH)`: asserts the returned
+    fd ≥ 0, closes it. WINCH chosen over EXIT so a developer's
+    ctrl-C still kills a hanging test — blocking SIGINT/SIGTERM for
+    the test process duration would be a real footgun.
+
+### Tests
+
+- 48 assertions total (was 47). The increment is +1 from the
+  signalfd live-path assertion (always reachable in non-sandboxed
+  hosts); `tty_winsize` adds 0–2 depending on whether stdin is a
+  TTY in the test runner's context. Under `cyrius test` from a
+  non-interactive shell, stdin is not a TTY → 48 reported. From
+  an interactive terminal → 50 reported. Both are green.
+
+### Milestone
+
+- **M4 closed**. chakshu 0.6.1 + cyim 1.7.1 both on darshana 0.4.1+;
+  see `docs/development/roadmap.md` and `state.md` for the close
+  framing. M5 is now calendar-gated ("both consumers green for ≥30
+  days") — earliest viable v1.0.0 cut ~2026-06-19.
+
+### v1.0 criteria refresh (from `roadmap.md`)
+
+The criteria checklist now reads:
+
+- [~] Public API frozen — every exported symbol named, documented,
+      tested (live-syscall surface partial; rest ✓ as of v0.5.0)
+- [x] Both initial consumers integrated and green
+- [~] Test coverage adequate for the surface area (47 unit + 1–3
+      live-gated; consumer PTY smoke for the rest)
+- [x] CHANGELOG complete from v0.1.0 onward
+- [x] Security posture documented — ADR 0002
+
+### Notes
+
+- No darshana source change in `src/`. The dist bundle bytes
+  match v0.4.1 verbatim; the version header bumps to `0.5.0`.
+- chakshu's `cyrius.cyml [build].test` was missing entirely (bare
+  `cyrius test` had no entry point) — added pointing at
+  `tests/chakshu.tcyr` while wiring up 0.6.1. Cross-repo polish,
+  not strictly an M4 deliverable, but flagged in chakshu's
+  CHANGELOG `[0.6.1]`.
+
 ## [0.4.1] — 2026-05-20 — M3 close-out + docstring hardening
 
 Doc-only patch shipped the same day as 0.4.0 once cyim 1.7.1

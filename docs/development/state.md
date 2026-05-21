@@ -5,6 +5,15 @@
 
 ## Version
 
+**0.5.0** — tagged 2026-05-20. **M4 closed.** chakshu shipped its
+Full TUI at chakshu 0.5.0 (2026-05-19) on darshana 0.3.0,
+satisfying the M4 gate; chakshu 0.6.1 bumped to darshana 0.4.1 as
+the close ceremony. From darshana's side this is a test-coverage
+release: live-fd-gated tests for `tty_winsize` and
+`tty_open_signalfd` added, closing the deferred-hardening item #5.
+No new public functions; dist bundle bytes match v0.4.1 (the
+test-only additions live in `tests/darshana.tcyr`).
+
 **0.4.1** — tagged 2026-05-20. Doc-only patch following the M3
 close. Tightens `TIO_BUF_SIZE` and `tty_winsize` docstrings
 (deferred-hardening items #3 and #4 from the 0.4.0 audit) and
@@ -54,7 +63,7 @@ Total source ≈ 450 lines (v0.4.1; docstring expansion versus 0.4.0). All publi
 
 | File | Status |
 |------|--------|
-| `tests/darshana.tcyr` | **47 assertions across 7 groups** — pure-function coverage of `tio_load32/store32`, `tty_apply_raw_flags` (every flag bit + idempotence), `tty_itoa` (zero / negative / 1–3 digits / position offset), the v0.3.0 constant set (`TTY_SIGMASK_EXIT/WINCH` math + disjointness, `TIOCGWINSZ` ABI), and the v0.4.0 `tty_sgr` rejection paths. TTY-bound functions (`tty_raw`, `tty_winsize`, `tty_open_signalfd`) and `tty_sgr` valid-code emission exercised end-to-end via cyim's PTY smoke at Phase 4. |
+| `tests/darshana.tcyr` | **48–50 assertions across 9 groups** (count depends on TTY-availability in the runner — 48 when stdin is not a TTY, 50 when it is): pure-function coverage of `tio_load32/store32`, `tty_apply_raw_flags` (every flag bit + idempotence), `tty_itoa` (zero / negative / 1–3 digits / position offset), the v0.3.0 constant set (`TTY_SIGMASK_EXIT/WINCH` math + disjointness, `TIOCGWINSZ` ABI), the v0.4.0 `tty_sgr` rejection paths, and **v0.5.0** live-fd tests for `tty_winsize` (skips when stdin isn't a TTY) and `tty_open_signalfd` with the WINCH mask. `tty_raw/cooked` and valid-code SGR emission still exercised end-to-end via consumer PTY smoke (chakshu's full TUI + cyim's `tty_probe`). |
 | `tests/darshana.bcyr` | bench stub — not exercised |
 | `tests/darshana.fcyr` | fuzz stub — not exercised |
 
@@ -68,7 +77,7 @@ Direct (declared in `cyrius.cyml`):
 
 | Consumer | Status |
 |----------|--------|
-| [chakshu](https://github.com/MacCracken/chakshu) | **Live on v0.2.0** since chakshu's 0.2.1 (M2 Slice A); will bump to v0.3.0 for M2 Slice D (dynamic resize). |
+| [chakshu](https://github.com/MacCracken/chakshu) | **Live on v0.4.1** since chakshu 0.6.1 (2026-05-20). chakshu's M2 (Full TUI) shipped at chakshu 0.5.0 on darshana 0.3.0 — satisfying darshana's M4 gate "chakshu M2 closes ... using darshana." M2.5 (mihi integration) shipped at chakshu 0.6.0 the next day; 0.6.1 advances darshana 0.3.0 → 0.4.1 as the M4 close ceremony. chakshu exercises `tty_raw/cooked`, `tty_alt_*`, `tty_clear_to_eol/end`, `tty_cursor_*`, `tty_move`, `tty_winsize`, `tty_open_signalfd`, `TTY_SIGMASK_EXIT/WINCH` — full v0.3.0 surface. |
 | [cyim](https://github.com/MacCracken/cyim) | **Live on v0.4.0** + cyrius 6.0.1 since cyim 1.7.1 (2026-05-20). 1.7.0 was the original adopter on darshana 0.2.0; 1.7.1 closed M3. `cyim/src/tty.cyr` reduced from ~207 lines to 38 (only the cyim-specific `tty_probe` stays local); 25 callsites in cyim/src/ resolve against darshana symbols. |
 | [bannermanor](https://github.com/MacCracken/bannermanor) | Wiring v0.3.5 in for bnrmr's M5 (`bnrmr --color cyan TEXT`). First non-TUI consumer; uses `tty_sgr` + `TTY_FG_*` constants only. Drove the v0.3.5 SGR addition. |
 
@@ -92,7 +101,7 @@ Direct (declared in `cyrius.cyml`):
 - M1 (v0.2.0) — donor port ✓
 - M2 (v0.3.0) — chakshu-driven extensions ✓ — `tty_winsize`, `tty_open_signalfd`, partial-clear helpers, TTY_SIGMASK_*
 - M3 (v0.4.0) — cyim integration milestone ✓ **(this release)**. cyim 1.7.0 was the original adopter on darshana 0.2.0; cyim 1.7.1 (2026-05-20) bumped to darshana 0.4.0 + cyrius 6.0.1 and satisfied the M3 gate ("cyim CI green on the integrated branch").
-- M4 (v0.5.0) — chakshu integration confirmed (chakshu picked up darshana at its M2 Slice A in v0.2.1) ✓ in spirit; formal close when chakshu M2 ships at v0.5.0
-- M5 (v1.0.0) — both consumers green for ≥30 days — not started
+- M4 (v0.5.0) — chakshu integration ✓ **closed 2026-05-20**. chakshu's M2 (Full TUI) shipped at chakshu 0.5.0 on darshana 0.3.0; chakshu 0.6.1 advanced to darshana 0.4.1 as the close ceremony. Both consumers (cyim 1.7.1, chakshu 0.6.1) are now on the same dep pin.
+- M5 (v1.0.0) — both consumers green for ≥30 days — calendar-gated from 2026-05-20; earliest viable cut ~2026-06-19.
 
 See [`roadmap.md`](roadmap.md) for the full milestone definitions.
