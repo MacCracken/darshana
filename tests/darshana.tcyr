@@ -156,6 +156,105 @@ fn main() {
     assert_eq(tty_sgr(1000),    0 - 1, "code >= 1000 rejected");
     assert_eq(tty_sgr(0 - 999), 0 - 1, "deeply-negative code rejected");
 
+    # ----- v0.5.1 — truecolor SGR helpers ----------------------------
+    # The _buf variants are pure functions over a caller buffer — no
+    # fd 1 touch, fully unit-testable. Asserts exact escape bytes for
+    # known RGB triples covering 1/2/3-digit channel encodings, plus
+    # the per-channel bounds rejection (negative / >255).
+
+    test_group("ansi.cyr — _ansi_emit_u8 digit encoding");
+    var dbuf[8];
+    var di = 0;
+    while (di < 8) { store8(&dbuf + di, 0); di = di + 1; }
+    assert_eq(_ansi_emit_u8(&dbuf, 0, 0),   1, "0 → 1 digit");
+    assert_eq(load8(&dbuf + 0), 0x30, "0 written as '0'");
+    assert_eq(_ansi_emit_u8(&dbuf, 0, 5),   1, "5 → 1 digit");
+    assert_eq(load8(&dbuf + 0), 0x35, "5 written as '5'");
+    assert_eq(_ansi_emit_u8(&dbuf, 0, 42),  2, "42 → 2 digits");
+    assert_eq(load8(&dbuf + 0), 0x34, "42 first '4'");
+    assert_eq(load8(&dbuf + 1), 0x32, "42 second '2'");
+    assert_eq(_ansi_emit_u8(&dbuf, 0, 255), 3, "255 → 3 digits");
+    assert_eq(load8(&dbuf + 0), 0x32, "255 first '2'");
+    assert_eq(load8(&dbuf + 1), 0x35, "255 second '5'");
+    assert_eq(load8(&dbuf + 2), 0x35, "255 third '5'");
+
+    test_group("ansi.cyr — tty_fg_rgb_buf exact bytes");
+    var fbufx[32];
+    var fxi = 0;
+    while (fxi < 32) { store8(&fbufx + fxi, 0); fxi = fxi + 1; }
+    # (255, 0, 128) — max + min + 3-digit, exercises all three branches
+    # in _ansi_emit_u8 and confirms the framing bytes are intact.
+    var fpos = tty_fg_rgb_buf(&fbufx, 0, 255, 0, 128);
+    # ESC[ (2) + "38;2;" (5) + "255" (3) + ";" (1) + "0" (1) + ";" (1) +
+    # "128" (3) + "m" (1) = 17 bytes total; fpos is the next free slot.
+    assert_eq(fpos, 17, "fg(255,0,128) → 17 bytes (ESC[38;2;255;0;128m)");
+    assert_eq(load8(&fbufx + 0),  0x1b, "byte 0 = ESC");
+    assert_eq(load8(&fbufx + 1),  0x5b, "byte 1 = '['");
+    assert_eq(load8(&fbufx + 2),  0x33, "byte 2 = '3' (fg marker high)");
+    assert_eq(load8(&fbufx + 3),  0x38, "byte 3 = '8'");
+    assert_eq(load8(&fbufx + 4),  0x3b, "byte 4 = ';'");
+    assert_eq(load8(&fbufx + 5),  0x32, "byte 5 = '2' (truecolor marker)");
+    assert_eq(load8(&fbufx + 6),  0x3b, "byte 6 = ';'");
+    assert_eq(load8(&fbufx + 7),  0x32, "R byte 0 = '2'");
+    assert_eq(load8(&fbufx + 8),  0x35, "R byte 1 = '5'");
+    assert_eq(load8(&fbufx + 9),  0x35, "R byte 2 = '5'");
+    assert_eq(load8(&fbufx + 10), 0x3b, "sep after R");
+    assert_eq(load8(&fbufx + 11), 0x30, "G = '0' (single digit)");
+    assert_eq(load8(&fbufx + 12), 0x3b, "sep after G");
+    assert_eq(load8(&fbufx + 13), 0x31, "B byte 0 = '1'");
+    assert_eq(load8(&fbufx + 14), 0x32, "B byte 1 = '2'");
+    assert_eq(load8(&fbufx + 15), 0x38, "B byte 2 = '8'");
+    assert_eq(load8(&fbufx + 16), 0x6d, "byte 16 = 'm' (terminator)");
+
+    test_group("ansi.cyr — tty_bg_rgb_buf marker swap");
+    var gbufx[32];
+    var gxi = 0;
+    while (gxi < 32) { store8(&gbufx + gxi, 0); gxi = gxi + 1; }
+    # (1, 22, 200) — covers 1/2/3-digit on bg path.
+    var gpos = tty_bg_rgb_buf(&gbufx, 0, 1, 22, 200);
+    # ESC[ (2) + "48;2;" (5) + "1" (1) + ";" (1) + "22" (2) + ";" (1) +
+    # "200" (3) + "m" (1) = 16 bytes total.
+    assert_eq(gpos, 16, "bg(1,22,200) → 16 bytes");
+    assert_eq(load8(&gbufx + 2), 0x34, "byte 2 = '4' (bg marker high)");
+    assert_eq(load8(&gbufx + 3), 0x38, "byte 3 = '8'");
+    assert_eq(load8(&gbufx + 5), 0x32, "byte 5 = '2' (truecolor marker)");
+
+    test_group("ansi.cyr — tty_fg_rgb_buf bounds rejection");
+    var rbufx[32];
+    var rxi = 0;
+    while (rxi < 32) { store8(&rbufx + rxi, 0); rxi = rxi + 1; }
+    assert_eq(tty_fg_rgb_buf(&rbufx, 0, 0 - 1, 0,   0),   0 - 1, "R<0 rejected");
+    assert_eq(tty_fg_rgb_buf(&rbufx, 0, 256,   0,   0),   0 - 1, "R>255 rejected");
+    assert_eq(tty_fg_rgb_buf(&rbufx, 0, 0,     0 - 1, 0), 0 - 1, "G<0 rejected");
+    assert_eq(tty_fg_rgb_buf(&rbufx, 0, 0,     256,   0), 0 - 1, "G>255 rejected");
+    assert_eq(tty_fg_rgb_buf(&rbufx, 0, 0,     0,     0 - 1), 0 - 1, "B<0 rejected");
+    assert_eq(tty_fg_rgb_buf(&rbufx, 0, 0,     0,     256),   0 - 1, "B>255 rejected");
+    # Rejection must not have touched the buffer (first byte stays 0).
+    assert_eq(load8(&rbufx + 0), 0, "buf untouched on rejection");
+    # Same rejection on bg path.
+    assert_eq(tty_bg_rgb_buf(&rbufx, 0, 300, 0, 0), 0 - 1, "bg R>255 rejected");
+    assert_eq(load8(&rbufx + 0), 0, "bg: buf untouched on rejection");
+    # Direct (fd-writing) variants also reject:
+    assert_eq(tty_fg_rgb(0 - 1, 0, 0), 0 - 1, "tty_fg_rgb rejects negative R");
+    assert_eq(tty_bg_rgb(0, 0, 999),   0 - 1, "tty_bg_rgb rejects B>255");
+
+    test_group("ansi.cyr — tty_sgr_reset_buf exact bytes");
+    var rsbuf[8];
+    var rsi = 0;
+    while (rsi < 8) { store8(&rsbuf + rsi, 0); rsi = rsi + 1; }
+    var rspos = tty_sgr_reset_buf(&rsbuf, 0);
+    assert_eq(rspos, 4, "reset_buf → 4 bytes");
+    assert_eq(load8(&rsbuf + 0), 0x1b, "reset byte 0 = ESC");
+    assert_eq(load8(&rsbuf + 1), 0x5b, "reset byte 1 = '['");
+    assert_eq(load8(&rsbuf + 2), 0x30, "reset byte 2 = '0'");
+    assert_eq(load8(&rsbuf + 3), 0x6d, "reset byte 3 = 'm'");
+    # Position offset — write at non-zero pos doesn't clobber prior bytes.
+    store8(&rsbuf + 0, 0x58);   # 'X'
+    var rspos2 = tty_sgr_reset_buf(&rsbuf, 1);
+    assert_eq(rspos2, 5, "reset_buf at pos 1 → pos 5");
+    assert_eq(load8(&rsbuf + 0), 0x58, "byte 0 untouched");
+    assert_eq(load8(&rsbuf + 1), 0x1b, "ESC written at pos 1");
+
     # ----- v0.5.0 — live-fd coverage (skip-when-not-a-TTY) -----------
     # The v0.3.0 syscall-touching surface (`tty_winsize`,
     # `tty_open_signalfd`) had no in-repo coverage at v0.4.x — only

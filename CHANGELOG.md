@@ -4,6 +4,55 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.1] — anuenue truecolor unlock
+
+Adds 24-bit (truecolor) SGR helpers — the slot the v0.3.5 header
+left deferred ("ANSI-256 and truecolor will land when a consumer
+asks"). The asker is **anuenue** (the rainbow pipe-filter scaffolded
+2026-05-21), whose M1 per-character HSV phase cycle needs
+`\x1b[38;2;R;G;Bm` directly; 8/16 named colors quantize the rainbow
+into ROYGBIV-with-banding. Pure additions on the API surface —
+v0.5.0 consumers (cyim 1.7.1, chakshu 0.6.1, bannermanor v0.3.5
+adopter) are unaffected.
+
+### Added
+
+- **`tty_fg_rgb(r, g, b)` / `tty_bg_rgb(r, g, b)`** in `src/ansi.cyr`
+  — set foreground / background to 24-bit RGB by writing
+  `CSI 38;2;R;G;Bm` / `CSI 48;2;R;G;Bm` directly to fd 1. Per-channel
+  bounds `[0, 255]`; out-of-range returns -1 *before* any bytes
+  reach fd 1 (same fail-before-emit discipline as `tty_sgr`'s
+  v0.4.0 `[0, 999]` guard).
+- **`tty_fg_rgb_buf(buf, pos, r, g, b)` / `tty_bg_rgb_buf(...)` /
+  `tty_sgr_reset_buf(buf, pos)`** — buffer-targeting variants for
+  consumers that batch many escapes + payload bytes into one
+  `write(2)`. Returns the new write position; same per-channel
+  bounds rejection. anuenue's M1 line-loop is the first such
+  consumer (one syscall per line vs ~5 syscalls per character).
+  Closes the v0.3.5 header note "Phase 3 may add buf-targeting
+  variants if a pattern emerges" — anuenue is the pattern.
+- **Private helper `_ansi_emit_u8(buf, pos, val)`** — encodes a
+  u8 channel value as 1–3 ASCII decimal digits. Inlined-and-
+  conditional (same shape as `tty_sgr`'s digit emit) rather than
+  forward-referencing `cursor.cyr`'s `tty_itoa`, which the
+  `cyrius distlib` bundle order (termios → ansi → cursor) hasn't
+  yet defined at the `ansi.cyr` call site.
+- **50 new assertions** in `tests/darshana.tcyr` across 5 new
+  groups: digit-encoding (1/2/3-digit branches), `tty_fg_rgb_buf`
+  exact-byte sequence, `tty_bg_rgb_buf` marker swap, per-channel
+  bounds rejection (negative + >255 on both fg and bg paths, both
+  `_buf` and direct variants), `tty_sgr_reset_buf` exact bytes +
+  position-offset.
+
+### Notes
+
+- No breaking changes. Dist bundle line count grows by ~120
+  (helpers + comments); `tty_sgr` / `tty_sgr_reset` semantics
+  unchanged.
+- `scripts/smoke.sh` symbol-surface check updated to include the
+  five new public names (`tty_fg_rgb`, `tty_bg_rgb`,
+  `tty_fg_rgb_buf`, `tty_bg_rgb_buf`, `tty_sgr_reset_buf`).
+
 ## [0.5.0] — 2026-05-20 — M4: chakshu integration milestone
 
 The milestone cut associated with chakshu's adoption of darshana.

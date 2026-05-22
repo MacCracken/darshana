@@ -5,6 +5,15 @@
 
 ## Version
 
+**0.5.1** — *open cycle*. anuenue's M1 (the AGNOS rainbow pipe-filter,
+scaffolded 2026-05-21) is the first consumer to need 24-bit SGR.
+Adds five new public symbols (`tty_fg_rgb`, `tty_bg_rgb`,
+`tty_fg_rgb_buf`, `tty_bg_rgb_buf`, `tty_sgr_reset_buf`) — the `_buf`
+variants close the v0.3.5 deferred "Phase 3 may add buf-targeting
+variants" note. 50 new assertions land alongside (10 groups → 14).
+No breaking changes; v0.5.0 consumers (cyim 1.7.1, chakshu 0.6.1)
+unaffected. Tag pending close-ceremony.
+
 **0.5.0** — tagged 2026-05-20. **M4 closed.** chakshu shipped its
 Full TUI at chakshu 0.5.0 (2026-05-19) on darshana 0.3.0,
 satisfying the M4 gate; chakshu 0.6.1 bumped to darshana 0.4.1 as
@@ -51,7 +60,7 @@ ANSI helpers. Driven by chakshu's M2 Slice D needs (dynamic resize).
 | File | Lines | Surface |
 |------|-------|---------|
 | `src/termios.cyr` | ~235 | `TIO_*` flags, `tio_load32/store32`, `tty_apply_raw_flags`, `tty_raw`, `tty_cooked`, **v0.3.0:** `TIOCGWINSZ`, `TTY_SIGMASK_EXIT/WINCH`, `tty_winsize`, `tty_open_signalfd`. **v0.4.1:** tightened docstrings on `TIO_BUF_SIZE` (canonical-name + Cyrius array-size constraint) and `tty_winsize` (i64 out-pointer contract). Linux-only via `#ifdef CYRIUS_TARGET_LINUX`. |
-| `src/ansi.cyr` | ~170 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`, **v0.3.0:** `tty_clear_to_eol`, `tty_clear_to_end`, **v0.3.5:** `tty_sgr`, `tty_sgr_reset`, 16 `TTY_FG_*` constants. **v0.4.0:** `tty_sgr` validates input range `[0, 999]`. Any vt100-compatible terminal. |
+| `src/ansi.cyr` | ~290 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`, **v0.3.0:** `tty_clear_to_eol`, `tty_clear_to_end`, **v0.3.5:** `tty_sgr`, `tty_sgr_reset`, 16 `TTY_FG_*` constants. **v0.4.0:** `tty_sgr` validates input range `[0, 999]`. **v0.5.1:** `tty_fg_rgb`, `tty_bg_rgb`, `tty_fg_rgb_buf`, `tty_bg_rgb_buf`, `tty_sgr_reset_buf` — 24-bit SGR with per-channel `[0, 255]` bounds rejection; `_buf` variants compose into a caller buffer for batched single-write frames. Any vt100-compatible terminal. |
 | `src/cursor.cyr` | ~50 | `tty_itoa`, `tty_move`. Composes the CSI row;colH escape inline. |
 | `src/main.cyr` | 14 | Convenience entry — `include`s the three sub-modules so smoke + tests get the whole surface in one shot. |
 | `programs/smoke.cyr` | ~17 | Compile-link smoke. |
@@ -63,7 +72,7 @@ Total source ≈ 450 lines (v0.4.1; docstring expansion versus 0.4.0). All publi
 
 | File | Status |
 |------|--------|
-| `tests/darshana.tcyr` | **48–50 assertions across 9 groups** (count depends on TTY-availability in the runner — 48 when stdin is not a TTY, 50 when it is): pure-function coverage of `tio_load32/store32`, `tty_apply_raw_flags` (every flag bit + idempotence), `tty_itoa` (zero / negative / 1–3 digits / position offset), the v0.3.0 constant set (`TTY_SIGMASK_EXIT/WINCH` math + disjointness, `TIOCGWINSZ` ABI), the v0.4.0 `tty_sgr` rejection paths, and **v0.5.0** live-fd tests for `tty_winsize` (skips when stdin isn't a TTY) and `tty_open_signalfd` with the WINCH mask. `tty_raw/cooked` and valid-code SGR emission still exercised end-to-end via consumer PTY smoke (chakshu's full TUI + cyim's `tty_probe`). |
+| `tests/darshana.tcyr` | **98–100 assertions across 14 groups** (count depends on TTY-availability in the runner — 98 when stdin is not a TTY, 100 when it is): pure-function coverage of `tio_load32/store32`, `tty_apply_raw_flags` (every flag bit + idempotence), `tty_itoa` (zero / negative / 1–3 digits / position offset), the v0.3.0 constant set (`TTY_SIGMASK_EXIT/WINCH` math + disjointness, `TIOCGWINSZ` ABI), the v0.4.0 `tty_sgr` rejection paths, **v0.5.0** live-fd tests for `tty_winsize` and `tty_open_signalfd`, and **v0.5.1** truecolor coverage: `_ansi_emit_u8` digit encoding, `tty_fg_rgb_buf` / `tty_bg_rgb_buf` exact-byte verification, per-channel bounds rejection on both `_buf` and direct variants, `tty_sgr_reset_buf` exact bytes + position-offset. `tty_raw/cooked` and valid-code SGR emission still exercised end-to-end via consumer PTY smoke. |
 | `tests/darshana.bcyr` | bench stub — not exercised |
 | `tests/darshana.fcyr` | fuzz stub — not exercised |
 
@@ -80,6 +89,7 @@ Direct (declared in `cyrius.cyml`):
 | [chakshu](https://github.com/MacCracken/chakshu) | **Live on v0.4.1** since chakshu 0.6.1 (2026-05-20). chakshu's M2 (Full TUI) shipped at chakshu 0.5.0 on darshana 0.3.0 — satisfying darshana's M4 gate "chakshu M2 closes ... using darshana." M2.5 (mihi integration) shipped at chakshu 0.6.0 the next day; 0.6.1 advances darshana 0.3.0 → 0.4.1 as the M4 close ceremony. chakshu exercises `tty_raw/cooked`, `tty_alt_*`, `tty_clear_to_eol/end`, `tty_cursor_*`, `tty_move`, `tty_winsize`, `tty_open_signalfd`, `TTY_SIGMASK_EXIT/WINCH` — full v0.3.0 surface. |
 | [cyim](https://github.com/MacCracken/cyim) | **Live on v0.4.0** + cyrius 6.0.1 since cyim 1.7.1 (2026-05-20). 1.7.0 was the original adopter on darshana 0.2.0; 1.7.1 closed M3. `cyim/src/tty.cyr` reduced from ~207 lines to 38 (only the cyim-specific `tty_probe` stays local); 25 callsites in cyim/src/ resolve against darshana symbols. |
 | [bannermanor](https://github.com/MacCracken/bannermanor) | Wiring v0.3.5 in for bnrmr's M5 (`bnrmr --color cyan TEXT`). First non-TUI consumer; uses `tty_sgr` + `TTY_FG_*` constants only. Drove the v0.3.5 SGR addition. |
+| [anuenue](https://github.com/MacCracken/anuenue) | Open cycle on **v0.5.1** for M1 (`echo X \| anuenue` → rainbow ASCII). First pipe-decorator consumer; uses the new `tty_fg_rgb_buf` + `tty_sgr_reset_buf` to compose per-character escapes into a line buffer for one-write-per-line throughput. Drove the v0.5.1 truecolor addition. |
 
 ## Carry-Forward
 
