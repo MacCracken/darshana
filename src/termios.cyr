@@ -202,6 +202,22 @@ fn tty_winsize(fd, out_rows, out_cols) {
     return 0;
 }
 
+# Is `fd` an open TTY? Returns 1 if yes, 0 otherwise. Implemented as
+# the cheapest TTY-property syscall: TIOCGWINSZ succeeds only on
+# TTYs, so its return code is the same signal libc isatty(3) returns
+# (via the same ioctl path on Linux). The 8-byte winsize buffer is
+# stack-allocated and discarded; this fn does not read its contents.
+#
+# v0.5.3 — added for anuenue M6 color-mode negotiation, which
+# previously overloaded `tty_winsize` with dummy out pointers as a
+# stand-in (`_isatty_compat`). Same syscall, cleaner surface.
+fn tty_isatty(fd) {
+    var ws[8];
+    var rc = syscall(SYS_IOCTL, fd, TIOCGWINSZ, &ws);
+    if (rc < 0) { return 0; }
+    return 1;
+}
+
 # Block the signals in `sigmask` on this thread and create a signalfd
 # that delivers them. Returns the signalfd, or -1 on failure (caller
 # should degrade gracefully — falling back to no-signal-handling is

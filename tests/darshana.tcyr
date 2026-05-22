@@ -269,6 +269,101 @@ fn main() {
     assert_eq(load8(&rsbuf + 0), 0x58, "byte 0 untouched");
     assert_eq(load8(&rsbuf + 1), 0x1b, "ESC written at pos 1");
 
+    # ----- v0.5.3 — tty_sgr_buf + tty_fg_256_buf + tty_isatty --------
+    # Buf-targeting twin of tty_sgr (proposal 2026-05-22).
+
+    test_group("ansi.cyr — tty_sgr_buf 1-digit");
+    var sgbuf[16];
+    var sgi = 0;
+    while (sgi < 16) { store8(&sgbuf + sgi, 0); sgi = sgi + 1; }
+    var sgpos = tty_sgr_buf(&sgbuf, 0, 0);
+    assert_eq(sgpos, 4, "tty_sgr_buf(0) → 4 bytes (\\x1b[0m)");
+    assert_eq(load8(&sgbuf + 0), 0x1b, "byte 0 = ESC");
+    assert_eq(load8(&sgbuf + 1), 0x5b, "byte 1 = '['");
+    assert_eq(load8(&sgbuf + 2), 0x30, "byte 2 = '0'");
+    assert_eq(load8(&sgbuf + 3), 0x6d, "byte 3 = 'm'");
+
+    test_group("ansi.cyr — tty_sgr_buf 2-digit (anuenue M6 bright color)");
+    var sgi2 = 0;
+    while (sgi2 < 16) { store8(&sgbuf + sgi2, 0); sgi2 = sgi2 + 1; }
+    var sgpos2 = tty_sgr_buf(&sgbuf, 0, 91);
+    assert_eq(sgpos2, 5, "tty_sgr_buf(91) → 5 bytes (\\x1b[91m)");
+    assert_eq(load8(&sgbuf + 0), 0x1b, "byte 0 = ESC");
+    assert_eq(load8(&sgbuf + 1), 0x5b, "byte 1 = '['");
+    assert_eq(load8(&sgbuf + 2), 0x39, "byte 2 = '9'");
+    assert_eq(load8(&sgbuf + 3), 0x31, "byte 3 = '1'");
+    assert_eq(load8(&sgbuf + 4), 0x6d, "byte 4 = 'm'");
+
+    test_group("ansi.cyr — tty_sgr_buf 3-digit");
+    var sgi3 = 0;
+    while (sgi3 < 16) { store8(&sgbuf + sgi3, 0); sgi3 = sgi3 + 1; }
+    var sgpos3 = tty_sgr_buf(&sgbuf, 0, 100);
+    assert_eq(sgpos3, 6, "tty_sgr_buf(100) → 6 bytes (\\x1b[100m)");
+    assert_eq(load8(&sgbuf + 2), 0x31, "byte 2 = '1'");
+    assert_eq(load8(&sgbuf + 3), 0x30, "byte 3 = '0'");
+    assert_eq(load8(&sgbuf + 4), 0x30, "byte 4 = '0'");
+
+    test_group("ansi.cyr — tty_sgr_buf bounds");
+    var sgi4 = 0;
+    while (sgi4 < 16) { store8(&sgbuf + sgi4, 0); sgi4 = sgi4 + 1; }
+    assert_eq(tty_sgr_buf(&sgbuf, 0, 0 - 1), 0 - 1, "negative rejected");
+    assert_eq(tty_sgr_buf(&sgbuf, 0, 1000),  0 - 1, "code > 999 rejected");
+    assert_eq(load8(&sgbuf + 0), 0, "buf untouched on rejection");
+
+    test_group("ansi.cyr — tty_fg_256_buf low end");
+    var fg6[16];
+    var fg6i = 0;
+    while (fg6i < 16) { store8(&fg6 + fg6i, 0); fg6i = fg6i + 1; }
+    var fg6pos = tty_fg_256_buf(&fg6, 0, 0);
+    assert_eq(fg6pos, 9, "tty_fg_256_buf(0) → 9 bytes (\\x1b[38;5;0m)");
+    assert_eq(load8(&fg6 + 0), 0x1b, "byte 0 = ESC");
+    assert_eq(load8(&fg6 + 1), 0x5b, "byte 1 = '['");
+    assert_eq(load8(&fg6 + 2), 0x33, "byte 2 = '3'");
+    assert_eq(load8(&fg6 + 3), 0x38, "byte 3 = '8'");
+    assert_eq(load8(&fg6 + 4), 0x3b, "byte 4 = ';'");
+    assert_eq(load8(&fg6 + 5), 0x35, "byte 5 = '5'");
+    assert_eq(load8(&fg6 + 6), 0x3b, "byte 6 = ';'");
+    assert_eq(load8(&fg6 + 7), 0x30, "byte 7 = '0'");
+    assert_eq(load8(&fg6 + 8), 0x6d, "byte 8 = 'm'");
+
+    test_group("ansi.cyr — tty_fg_256_buf high end");
+    var fg6i2 = 0;
+    while (fg6i2 < 16) { store8(&fg6 + fg6i2, 0); fg6i2 = fg6i2 + 1; }
+    var fg6pos2 = tty_fg_256_buf(&fg6, 0, 255);
+    assert_eq(fg6pos2, 11, "tty_fg_256_buf(255) → 11 bytes (\\x1b[38;5;255m)");
+    assert_eq(load8(&fg6 + 7), 0x32, "byte 7 = '2'");
+    assert_eq(load8(&fg6 + 8), 0x35, "byte 8 = '5'");
+    assert_eq(load8(&fg6 + 9), 0x35, "byte 9 = '5'");
+    assert_eq(load8(&fg6 + 10), 0x6d, "byte 10 = 'm'");
+
+    test_group("ansi.cyr — tty_fg_256_buf bounds");
+    var fg6i3 = 0;
+    while (fg6i3 < 16) { store8(&fg6 + fg6i3, 0); fg6i3 = fg6i3 + 1; }
+    assert_eq(tty_fg_256_buf(&fg6, 0, 0 - 1), 0 - 1, "negative rejected");
+    assert_eq(tty_fg_256_buf(&fg6, 0, 256),   0 - 1, "n > 255 rejected");
+    assert_eq(load8(&fg6 + 0), 0, "buf untouched on rejection");
+
+    test_group("termios.cyr — tty_isatty (return shape)");
+    # tty_isatty against fd 0 (stdin). Either return value is valid
+    # depending on whether the test runner has a controlling TTY;
+    # the assertion is that both 0 and 1 are reachable without crash
+    # AND the return is one of {0, 1}, not some leaked syscall errno.
+    var ity = tty_isatty(0);
+    if (ity == 0 || ity == 1) {
+        assert_eq(1, 1, "tty_isatty returned 0 or 1");
+    } else {
+        assert_eq(ity, 0, "tty_isatty must return 0 or 1");
+    }
+    # tty_isatty against fd that's definitely not a TTY: open
+    # /dev/null and check. -1 from open shouldn't happen on Linux
+    # but skip-clean if it does (paranoid sandbox).
+    # SYS_OPENAT = 257, AT_FDCWD = -100, O_RDONLY = 0.
+    var devnull = syscall(257, 0 - 100, "/dev/null", 0, 0);
+    if (devnull >= 0) {
+        assert_eq(tty_isatty(devnull), 0, "/dev/null is not a TTY");
+        syscall(3, devnull);
+    }
+
     # ----- v0.5.0 — live-fd coverage (skip-when-not-a-TTY) -----------
     # The v0.3.0 syscall-touching surface (`tty_winsize`,
     # `tty_open_signalfd`) had no in-repo coverage at v0.4.x — only

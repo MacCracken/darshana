@@ -4,6 +4,76 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.3] — anuenue color-mode negotiation unlock
+
+Third turn of the same crank that produced 0.5.1 (truecolor for
+anuenue M1) and 0.5.2 (relative cursor for anuenue M4):
+**anuenue** is the consumer asking. Their M6 milestone (color-mode
+negotiation — detects TRUECOLOR / 256-color / 16-color / MONO from
+`--color`, `NO_COLOR`, `isatty`, `COLORTERM`, `TERM`) shipped in
+anuenue v0.7.0 with three inline stand-ins pending this work; 0.5.3
+closes the deferral. Pure additions; existing consumers (cyim 1.7.1,
+chakshu 0.6.1, bannermanor, anuenue 0.7.0) are unaffected.
+
+Sandhi-coordination proposal at
+[`sandhi/docs/proposals/2026-05-22-darshana-color-mode-helpers.md`](https://github.com/MacCracken/sandhi/blob/main/docs/proposals/2026-05-22-darshana-color-mode-helpers.md).
+
+### Added
+
+- **`tty_isatty(fd)`** in `src/termios.cyr` — proper isatty
+  primitive. Returns 1 if `fd` is an open TTY, 0 otherwise.
+  Implemented as the cheapest TTY-property syscall (TIOCGWINSZ
+  succeeds only on TTYs); same signal libc's `isatty(3)` returns
+  via the same ioctl path on Linux. Anuenue M6 previously
+  overloaded `tty_winsize` with dummy out-pointers as a stand-in
+  (`_isatty_compat`); same syscall, cleaner surface.
+- **`tty_sgr_buf(buf, pos, code)`** in `src/ansi.cyr` — buffer-
+  targeting twin of `tty_sgr`. Writes `CSI <code>m` into `buf` at
+  `pos`, returns new `pos` or -1 if `code` is outside [0, 999].
+  Same [0, 999] envelope as `tty_sgr`, same fail-before-emit
+  discipline. Used by anuenue M6's `_PHASE_ESC_TABLE` builder
+  which emits 16-color named SGR escapes (`\x1b[91m` ...
+  `\x1b[97m`) per phase into a stack buffer rather than fd 1.
+  Inlines the 1–3 digit emit (rather than calling `tty_itoa`
+  from cursor.cyr) so the dist bundle order termios → ansi →
+  cursor doesn't matter.
+- **`tty_fg_256_buf(buf, pos, n)`** in `src/ansi.cyr` —
+  256-color (8-bit indexed) foreground SGR. Writes
+  `CSI 38;5;Nm` into `buf` at `pos`, returns new `pos` or -1 if
+  `n` is outside [0, 255]. The middle of the color-fidelity
+  spectrum between 16-color named (existing `TTY_FG_*` named
+  constants) and 24-bit truecolor (0.5.1's `tty_fg_rgb` family).
+  Background twin (`tty_bg_256_buf`) not yet shipped — wait for
+  a consumer ask, same discipline as 0.5.1's bg/fg split.
+
+### Changed (rode along)
+
+- `src/ansi.cyr` reformatted to match `cyrius fmt --check`. The
+  pre-existing `tty_sgr` and `_ansi_emit_u8` if/else digit-emit
+  blocks were drifted from fmt's preferred indentation; brought
+  in line. No semantic change.
+
+### Tests
+
+- `tests/darshana.tcyr` — 9 new test groups across `tty_sgr_buf`
+  (1-digit / 2-digit / 3-digit / bounds), `tty_fg_256_buf`
+  (low end / high end / bounds), and `tty_isatty` (return shape
+  + `/dev/null` definitely-not-a-TTY assertion). **144 passing**
+  assertions (was 109 at 0.5.2 close; +35 across new helpers).
+
+### Surface count
+
+`scripts/smoke.sh` `required_syms` grew from 24 → 27.
+
+### Anuenue migration (post-release)
+
+When anuenue picks up `darshana = "0.5.3"`, the three inline
+stand-ins (`_isatty_compat`, `_fg_256_buf_compat`, `_sgr_buf_compat`)
+in `anuenue/src/color.cyr` get deleted and their call sites in
+`color.cyr` + `filter.cyr` rewrite to call the darshana forms
+directly. ~30 LOC delete + ~3 call-site renames. Mechanical
+swap (signature-identical).
+
 ## [0.5.2] — anuenue animation unlock
 
 Adds two relative-cursor helpers — `tty_cursor_up(n)` /

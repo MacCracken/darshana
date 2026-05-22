@@ -58,7 +58,7 @@ pass "dist/darshana.cyr matches src/ — no drift"
 # ============================================================
 echo "[smoke] public surface"
 
-required_syms="tty_apply_raw_flags tty_raw tty_cooked tty_alt_enter tty_alt_leave tty_clear tty_cursor_hide tty_cursor_show tty_cursor_home tty_move tty_itoa tio_load32 tio_store32 tty_winsize tty_open_signalfd tty_clear_to_eol tty_clear_to_end tty_sgr tty_sgr_reset tty_fg_rgb tty_bg_rgb tty_fg_rgb_buf tty_bg_rgb_buf tty_sgr_reset_buf"
+required_syms="tty_apply_raw_flags tty_raw tty_cooked tty_alt_enter tty_alt_leave tty_clear tty_cursor_hide tty_cursor_show tty_cursor_home tty_move tty_itoa tio_load32 tio_store32 tty_winsize tty_open_signalfd tty_clear_to_eol tty_clear_to_end tty_sgr tty_sgr_reset tty_fg_rgb tty_bg_rgb tty_fg_rgb_buf tty_bg_rgb_buf tty_sgr_reset_buf tty_isatty tty_sgr_buf tty_fg_256_buf"
 for sym in $required_syms; do
     grep -qE "^fn ${sym}\b" dist/darshana.cyr \
         || fail "dist/darshana.cyr missing 'fn ${sym}' (cyim API contract)"
