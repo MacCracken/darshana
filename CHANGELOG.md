@@ -4,6 +4,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.2] — anuenue animation unlock
+
+Adds two relative-cursor helpers — `tty_cursor_up(n)` /
+`tty_cursor_down(n)` — to round out the cursor surface. Sandhi-
+unlock pattern, second turn of the same crank that produced 0.5.1:
+**anuenue** is the consumer asking (M4 animation re-anchors the
+rendered block at the top of the buffered region each frame, which
+needs CSI `<n>A`). Pure additions; v0.5.1 consumers (cyim 1.7.1,
+chakshu 0.6.1, bannermanor adopter, anuenue's M1/M2/M3 truecolor
+filter) are unaffected.
+
+### Added
+
+- **`tty_cursor_up(n)`** in `src/cursor.cyr` — emit `CSI <n>A` to
+  move the cursor up `n` rows in the current column. `n <= 0` is a
+  no-op (CSI 0A is documented as "move 1 row" by xterm; guarding
+  here lets callers pass an unchecked row count without spurious
+  jumps). Composes the escape into a 24-byte stack buf and writes
+  it in one syscall — same single-syscall discipline as `tty_move`.
+- **`tty_cursor_down(n)`** in `src/cursor.cyr` — mirror of
+  `tty_cursor_up`. Emits `CSI <n>B`, same no-op-on-zero guard,
+  same envelope. Pairs with `tty_cursor_up` for callers that need
+  bidirectional row offsets (anuenue M4 only uses up; provided for
+  symmetry since the surface cost is one fn).
+
 ## [0.5.1] — anuenue truecolor unlock
 
 Adds 24-bit (truecolor) SGR helpers — the slot the v0.3.5 header

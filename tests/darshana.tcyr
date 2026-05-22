@@ -125,6 +125,20 @@ fn main() {
     assert_eq(load8(&ibuf + 1), 0x39, "99 first '9' at pos 1");
     assert_eq(load8(&ibuf + 2), 0x39, "99 second '9' at pos 2");
 
+    # ----- v0.5.2 — relative cursor positioning ----------------------
+    # tty_cursor_up / tty_cursor_down write CSI <n>A / B directly to
+    # fd 1. Valid n is unit-untestable here without fd-1 redirection
+    # (the escape goes to the host terminal). What we *can* lock down
+    # is the no-op-on-zero guard — callers depend on `tty_cursor_up(0)`
+    # not jumping the cursor (anuenue's M4 zero-row block case).
+    test_group("cursor.cyr — tty_cursor_up/down zero-guard");
+    assert_eq(tty_cursor_up(0),       0, "tty_cursor_up(0) is a no-op");
+    assert_eq(tty_cursor_up(0 - 1),   0, "tty_cursor_up(-1) is a no-op");
+    assert_eq(tty_cursor_up(0 - 100), 0, "tty_cursor_up(-100) is a no-op");
+    assert_eq(tty_cursor_down(0),       0, "tty_cursor_down(0) is a no-op");
+    assert_eq(tty_cursor_down(0 - 1),   0, "tty_cursor_down(-1) is a no-op");
+    assert_eq(tty_cursor_down(0 - 100), 0, "tty_cursor_down(-100) is a no-op");
+
     # ----- v0.3.0 — signal-mask constants ----------------------------
     # Verify the published TTY_SIGMASK_* values match Linux sigset_t
     # encoding: bit (signum - 1) per signal in the mask. Callers
