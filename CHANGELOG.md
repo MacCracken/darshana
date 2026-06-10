@@ -4,6 +4,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.4] — toolchain bump 6.0.1 → 6.1.24
+
+Pure version-pin release, no source changes. Catches darshana up to
+the ecosystem-wide cycc pin (the wrapper had already drifted to
+6.1.24; the manifest pin was stale at 6.0.1). `cyrius update`
+refreshed `lib/` (101 files) from the matching snapshot; no source
+edits required and the dist bundle bytes are unchanged. Build clean
+and all 144 assertions green on the new toolchain. Existing
+consumers (cyim 1.7.1, chakshu 0.6.1, bannermanor, anuenue 0.7.0)
+are unaffected — no API surface change.
+
+### Changed
+
+- `cyrius.cyml` pin bumped `6.0.1` → `6.1.24`.
+- `lib/` refreshed via `cyrius update` to the 6.1.24 snapshot.
+
 ## [0.5.3] — anuenue color-mode negotiation unlock
 
 Third turn of the same crank that produced 0.5.1 (truecolor for

@@ -4,13 +4,34 @@
 #
 # v5.10.18 — was hard-blocked on `O_WRONLY` from `lib/io.cyr` for
 # the `/dev/null` redirect in `run_capture`; cyrius's own
-# `programs/check.cyr` (the only in-tree consumer) happened to
+# check program (the only in-tree consumer) happened to
 # include io.cyr first so it parsed clean, but every downstream
 # consumer that didn't (agnosys 1.1.x specifically) hit
 # `error: undefined variable 'O_WRONLY'`. Replaced with the
 # literal `1` + a comment to keep this module self-sufficient
 # (matching the pattern in `lib/fdlopen.cyr:234` —
 # `# O_RDONLY`).
+
+# v6.0.51: Win32 has no fork/exec — the Windows process surface lives in a
+# CreateProcessW-based variant. The POSIX implementations below are guarded
+# out under CYRIUS_TARGET_WIN (the predefine chain in src/main.cyr makes
+# exactly one of WIN/MACOS/AGNOS/LINUX active, so #ifndef WIN covers Linux,
+# macOS, and agnos). See lib/process_win.cyr + issue
+# 2026-06-03-windows-pe-syscall-surface-blocks-detection.md.
+#ifdef CYRIUS_TARGET_WIN
+include "lib/process_win.cyr"
+#endif
+
+# v6.0.56: agnos has no fork/exec/dup2 either — it spawns an in-memory ELF via
+# sys_spawn + sys_waitpid. The agnos process surface lives in process_agnos.cyr;
+# the POSIX block below is excluded on agnos too (nested #ifndef AGNOS). See
+# docs/development/issues/2026-06-03-agnos-followup-after-boot.md.
+#ifdef CYRIUS_TARGET_AGNOS
+include "lib/process_agnos.cyr"
+#endif
+
+#ifndef CYRIUS_TARGET_WIN
+#ifndef CYRIUS_TARGET_AGNOS
 
 # Build argv array and execve. Called in child after fork. Does not return.
 # argv[40] = 5 × 8 B (cmd + up to 2 args + NUL + 1 slot headroom); envp[16] =
@@ -401,3 +422,6 @@ fn exec_cmd(cmdline): i64 {
     }
     return exec_vec(args);
 }
+
+#endif
+#endif

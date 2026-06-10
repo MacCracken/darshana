@@ -5,6 +5,14 @@
 
 ## Version
 
+**0.5.4** — *open cycle*. Toolchain-only bump `6.0.1` → `6.1.24`
+(catch-up to the ecosystem-wide cycc; the wrapper had already
+drifted, the manifest pin was stale). `cyrius update` refreshed
+`lib/` (101 files); no source changes, dist bundle bytes unchanged.
+Build clean, all 144 assertions green on the new toolchain. No API
+surface change; consumers (cyim 1.7.1, chakshu 0.6.1, bannermanor,
+anuenue 0.7.0) unaffected.
+
 **0.5.1** — *open cycle*. anuenue's M1 (the AGNOS rainbow pipe-filter,
 scaffolded 2026-05-21) is the first consumer to need 24-bit SGR.
 Adds five new public symbols (`tty_fg_rgb`, `tty_bg_rgb`,
@@ -51,9 +59,10 @@ ANSI helpers. Driven by chakshu's M2 Slice D needs (dynamic resize).
 
 ## Toolchain
 
-- **Cyrius pin**: `6.0.1` (in `cyrius.cyml [package].cyrius`, via
+- **Cyrius pin**: `6.1.24` (in `cyrius.cyml [package].cyrius`, via
   `${file:VERSION}` indirection on the package version). Bumped from
-  `5.10.20` at v0.3.5 — caught up to the ecosystem-wide cycc.
+  `6.0.1` at v0.5.4 (`5.10.20` → `6.0.1` was v0.3.5) — caught up to
+  the ecosystem-wide cycc.
 
 ## Source
 
