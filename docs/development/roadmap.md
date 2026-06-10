@@ -6,9 +6,9 @@
 
 ## v1.0 criteria
 
-- [~] Public API frozen — every exported symbol named, documented, and tested (names + docstrings ✓ as of v0.4.1; tested = pure-function surface covered, syscall-touching surface relies on consumer PTY smoke — see M5 carry-forward)
+- [~] Public API frozen — every exported symbol named, documented, and tested (names + docstrings ✓ as of v0.4.1; tested ✓ as of v0.6.0 — pure-function surface in `tests/darshana.tcyr`, syscall-touching + escape-emitting surface in `tests/pty.tcyr`; the only remaining `~` is the *freeze* itself, which waits for the M5 calendar gate)
 - [x] Both initial consumers (cyim, chakshu) integrated and green — cyim 1.7.1 + chakshu 0.6.1 both live on darshana 0.4.1 since 2026-05-20
-- [~] Test coverage adequate for the surface area (parsers + state-restore paths) — 47/47 unit assertions on pure-function surface; live-TTY / signalfd paths not yet covered in-repo (M5 deferred-hardening item #5)
+- [x] Test coverage adequate for the surface area (parsers + state-restore paths) — pure-function surface in `tests/darshana.tcyr`; live-TTY state-restore + escape-emission paths now covered in-repo by `tests/pty.tcyr` (v0.6.0). The signalfd live path remains consumer-covered (chakshu) plus the v0.5.0 skip-clean fd-0 probe.
 - [x] CHANGELOG complete from v0.1.0 onward
 - [x] Security posture documented — termios state-restore guarantees on every exit path (ADR 0002 landed v0.4.0)
 
@@ -78,10 +78,10 @@ The M5 gate "both consumers green for ≥30 days" is calendar-gated, not work-ga
 
 Closes two v1.0 partials at once: "Public API frozen — every exported symbol named, documented, **and tested**" and "Test coverage adequate for the surface area (parsers + state-restore paths)." Lands early in the soak window so the harness itself gets burn-in.
 
-- [ ] Pseudo-terminal smoke under `tests/` or `scripts/` — opens a PTY, drives `tty_raw` → write known input → read echo'd bytes → `tty_cooked`, asserting the round-trip behaviour
-- [ ] Exercises the symbols the v0.5.0 live-fd tests can't touch under `cyrius test`: `tty_raw`, `tty_cooked`, `tty_alt_enter/leave`, `tty_clear*`, `tty_cursor_*`, `tty_move`, `tty_sgr` valid-code emission
-- [ ] CI integration — runs as part of `build-and-test` so the gate is enforced on every push, not just developer machines
-- [ ] State.md Tests row updated to reflect coverage of the previously consumer-only surface
+- [x] Pseudo-terminal smoke under `tests/` — `tests/pty.tcyr` opens a PTY (`/dev/ptmx` → `TIOCSPTLCK` → `TIOCGPTN` → `/dev/pts/N`), drives `tty_raw` → writes `A\nB` to the slave → reads it on the master → `tty_cooked`, asserting both the byte-for-byte termios restore and the cooked-vs-raw output round-trip (OPOST/ONLCR). Shipped v0.6.0.
+- [x] Exercises the symbols the v0.5.0 live-fd tests can't touch under `cyrius test`: `tty_raw`, `tty_cooked`, `tty_isatty`, `tty_winsize` (set/get), and — via `dup2` onto fd 1 — `tty_alt_enter/leave`, `tty_clear*`, `tty_cursor_hide/show/home`, `tty_move`, `tty_cursor_up/down`, `tty_sgr` valid-code emission, `tty_sgr_reset`. 38 assertions total.
+- [x] CI integration — `tests/pty.tcyr` is auto-discovered by `cyrius test` (already a `build-and-test` step), so the gate is enforced on every push with no workflow change. Hang-proof (`O_NONBLOCK` master + bounded drains) and skip-clean in sandboxes that block `/dev/ptmx`.
+- [x] State.md Tests row updated to reflect coverage of the previously consumer-only surface.
 
 **Why early in soak**: the harness is the most net-new code shipping during soak. Better to let it run against the integrated stack for ~3 weeks than to land it the day before v1.0 cut.
 

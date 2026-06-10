@@ -4,6 +4,66 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] — in-repo PTY harness (soak-window cut)
+
+The first of the two soak-window cuts (roadmap §"Soak-window cuts").
+Closes two v1.0 partials at once — "every exported symbol named,
+documented, **and tested**" and "test coverage adequate (parsers +
+state-restore paths)" — by giving the syscall-touching surface
+deterministic in-repo coverage instead of relying on the
+opportunistic v0.5.0 live-fd tests (which only fire when the runner
+happens to have a controlling TTY on fd 0; CI does not).
+
+Test-only release — no `src/` change, no public-surface change. The
+dist bundle is unchanged apart from the regenerated `# Version:`
+header. Existing consumers (cyim 1.7.1, chakshu 0.6.1, bannermanor,
+anuenue 0.7.0) are unaffected. Lands early in the M5 soak so the
+harness itself gets burn-in against the integrated stack before the
+v1.0 freeze.
+
+### Added
+
+- **`tests/pty.tcyr`** — a pseudo-terminal harness that manufactures
+  its own TTY (open `/dev/ptmx` → `TIOCSPTLCK` unlock → `TIOCGPTN` →
+  open `/dev/pts/N`) and drives darshana against the slave end while
+  observing results on the master end. 38 assertions across:
+  - **`tty_isatty`** against a known-live slave fd (deterministic,
+    unlike the fd-0 return-shape test in `darshana.tcyr`).
+  - **`tty_winsize`** set/get round-trip — `TIOCSWINSZ` a known 24×80
+    geometry, read it back, assert exact dimensions.
+  - **State-restore round-trip** (the ADR-0002 guarantee): snapshot
+    termios → `tty_raw` → assert the raw mask applied (ECHO / ICANON /
+    ISIG / IEXTEN / OPOST cleared, CS8 set, VMIN=1 / VTIME=0) →
+    `tty_cooked` → assert termios restored **byte-for-byte**.
+  - **Behavioral output round-trip**: write `A\nB` to the slave, read
+    on the master — raw mode passes `\n` through untranslated (3
+    bytes), cooked mode injects CR via OPOST/ONLCR (`A\r\nB`, 4 bytes),
+    confirming the restore re-enabled post-processing end-to-end.
+  - **Escape-emission capture**: `dup2` the slave onto fd 1 (raw, so
+    OPOST can't rewrite the bytes) and read back the exact CSI
+    sequences from `tty_alt_enter` / `tty_alt_leave` / `tty_clear` /
+    `tty_clear_to_eol` / `tty_clear_to_end` / `tty_cursor_hide` /
+    `tty_cursor_show` / `tty_cursor_home` / `tty_move` /
+    `tty_cursor_up` / `tty_cursor_down` / `tty_sgr` (valid code) /
+    `tty_sgr_reset`. These fd-1 writers previously had *no* byte-level
+    coverage — the unit suite only reaches their `_buf` twins and the
+    rejection paths.
+
+### Notes
+
+- Hang-proof in CI: the master fd is `O_NONBLOCK` and every read is
+  bounded (a 200-iteration × 1 ms drain cap, or a non-blocking flush),
+  so a wedged kernel buffer can never stall the suite.
+- Skip-clean: every kernel step is guarded. A sandbox / seccomp policy
+  that blocks `/dev/ptmx`, the unlock ioctl, or the slave open stops
+  the harness without faking a pass — the consumer-side PTY smoke
+  (cyim / chakshu) still covers the live path end-to-end.
+- Linux-only — the pty/devpts mechanism (`TIOCGPTN`, `TIOCSPTLCK`) is
+  Linux ABI; on any other target the harness compiles to a single skip
+  assertion, matching the `CYRIUS_TARGET_LINUX` gate on `termios.cyr`.
+- Auto-discovered by `cyrius test` (it is a `tests/*.tcyr`), so the
+  gate is enforced on every push with no CI-config change.
+
 ## [0.5.4] — toolchain bump 6.0.1 → 6.1.24
 
 Pure version-pin release, no source changes. Catches darshana up to

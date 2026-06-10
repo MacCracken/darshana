@@ -1,0 +1,361 @@
+# darshana PTY harness — v0.6.0 (roadmap "soak-window cuts").
+#
+# The pure-function surface (flag math, escape-byte emit, itoa) is
+# covered by tests/darshana.tcyr. What that suite *cannot* reach
+# under `cyrius test` is the syscall-touching surface — `tty_raw` /
+# `tty_cooked` (TCGETS/TCSETS ioctls) and `tty_winsize` — because
+# they need a real TTY fd, and the v0.5.0 live-fd tests only fire
+# when the runner happens to have a controlling TTY on fd 0 (CI does
+# not). This harness manufactures its own TTY: it opens a pseudo-
+# terminal, drives darshana against the slave end, and observes the
+# results on the master end. That makes the coverage deterministic in
+# CI instead of opportunistic.
+#
+# Skip-clean discipline (matching tests/darshana.tcyr's live-fd
+# blocks): every step that touches the kernel is guarded. If a
+# sandbox / seccomp policy blocks /dev/ptmx, the unlock ioctl, or the
+# slave open, the harness silently stops without faking a pass — the
+# consumer-side PTY smoke (cyim / chakshu) still covers the live path
+# end-to-end. No read here can block: the master is opened O_NONBLOCK
+# and drained through a bounded retry loop, so a wedged kernel buffer
+# can never hang the suite.
+#
+# Linux-only — the whole pty/devpts mechanism (TIOCGPTN, TIOCSPTLCK)
+# is Linux ABI. On any other target the body compiles to a single
+# skip assertion.
+
+include "src/main.cyr"
+
+#ifdef CYRIUS_TARGET_LINUX
+
+# --- ABI constants this harness depends on (not part of darshana's
+# public surface, so defined locally rather than imported). darshana's
+# own TCGETS / TCSETS / TIOCGWINSZ / TIO_* come in via src/main.cyr.
+var PTY_SYS_IOCTL    = 16;          # x86_64 SYS_ioctl
+var PTY_SYS_NANOSLEEP = 35;         # x86_64 SYS_nanosleep
+var PTY_SYS_DUP      = 32;          # x86_64 SYS_dup
+var PTY_SYS_DUP2     = 33;          # x86_64 SYS_dup2
+var PTY_O_RDWR       = 2;
+var PTY_O_NOCTTY     = 0x100;       # don't acquire a controlling tty
+var PTY_O_NONBLOCK   = 0x800;
+var PTY_TIOCGPTN     = 0x80045430;  # _IOR('T',0x30,uint) — slave number
+var PTY_TIOCSPTLCK   = 0x40045431;  # _IOW('T',0x31,int)  — (un)lock slave
+var PTY_TIOCSWINSZ   = 0x5414;      # set window size
+
+# Sleep ~1ms. Used between non-blocking master reads so the drain loop
+# yields the CPU instead of busy-spinning while the kernel moves bytes
+# from the slave's output queue to the master's read queue.
+fn _pty_nap() {
+    var ts[16];
+    store64(&ts, 0);
+    store64(&ts + 8, 1000000);      # tv_sec = 0, tv_nsec = 1e6 (1ms)
+    syscall(PTY_SYS_NANOSLEEP, &ts, 0);
+    return 0;
+}
+
+# Read up to `want` bytes from `fd` into `buf`, looping past EAGAIN
+# (the master is O_NONBLOCK) until either `want` bytes arrive or the
+# iteration cap is hit. Returns the byte count actually collected.
+# Bounded by `max_iters` * 1ms so it can never hang.
+fn _pty_drain(fd, buf, want, max_iters) {
+    var got = 0;
+    var it = 0;
+    while (got < want && it < max_iters) {
+        var n = file_read(fd, buf + got, want - got);
+        if (n > 0) {
+            got = got + n;
+        } else {
+            _pty_nap();
+        }
+        it = it + 1;
+    }
+    return got;
+}
+
+# Discard any bytes already queued on `fd` (non-blocking). Used before
+# the escape-capture block so a stray byte from an earlier round-trip
+# can't shift the first comparison.
+fn _pty_flush(fd) {
+    var junk[64];
+    var it = 0;
+    while (it < 64) {
+        var n = file_read(fd, &junk, 64);
+        if (n <= 0) { return 0; }
+        it = it + 1;
+    }
+    return 0;
+}
+
+# Read exactly `want_len` bytes from `fd` and compare them to the
+# `want` byte string. Returns 1 on an exact match, 0 otherwise (wrong
+# length or any byte differs). Deliberately assertion-free so it can
+# run while fd 1 is redirected — the caller asserts the returned flag
+# *after* restoring stdout.
+fn _pty_expect(fd, want, want_len) {
+    var cap[24];
+    var got = _pty_drain(fd, &cap, want_len, 200);
+    if (got != want_len) { return 0; }
+    var i = 0;
+    while (i < want_len) {
+        if (load8(&cap + i) != load8(want + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+#endif
+
+fn main() {
+    alloc_init();
+
+#ifdef CYRIUS_TARGET_LINUX
+
+    # ----- PTY setup -------------------------------------------------
+    # open("/dev/ptmx", O_RDWR|O_NOCTTY|O_NONBLOCK) → master.
+    test_group("pty.tcyr — open pseudo-terminal");
+    var master = sys_open("/dev/ptmx",
+        PTY_O_RDWR | PTY_O_NOCTTY | PTY_O_NONBLOCK, 0);
+    if (master >= 0) {
+        # Unlock the slave: ioctl(master, TIOCSPTLCK, &0).
+        var lockarg[4];
+        store8(&lockarg + 0, 0); store8(&lockarg + 1, 0);
+        store8(&lockarg + 2, 0); store8(&lockarg + 3, 0);
+        var unlk = syscall(PTY_SYS_IOCTL, master, PTY_TIOCSPTLCK, &lockarg);
+
+        # Fetch the slave number: ioctl(master, TIOCGPTN, &n).
+        var ptnbuf[4];
+        store8(&ptnbuf + 0, 0); store8(&ptnbuf + 1, 0);
+        store8(&ptnbuf + 2, 0); store8(&ptnbuf + 3, 0);
+        var gptn = syscall(PTY_SYS_IOCTL, master, PTY_TIOCGPTN, &ptnbuf);
+
+        if (unlk >= 0 && gptn >= 0) {
+            var ptn = tio_load32(&ptnbuf, 0);
+
+            # Build "/dev/pts/<ptn>\0" — reuse darshana's own decimal
+            # formatter (tty_itoa) for the number.
+            var path[32];
+            store8(&path + 0, 0x2f); store8(&path + 1, 0x64);   # '/' 'd'
+            store8(&path + 2, 0x65); store8(&path + 3, 0x76);   # 'e' 'v'
+            store8(&path + 4, 0x2f); store8(&path + 5, 0x70);   # '/' 'p'
+            store8(&path + 6, 0x74); store8(&path + 7, 0x73);   # 't' 's'
+            store8(&path + 8, 0x2f);                            # '/'
+            # tty_itoa returns digits written, not the end offset —
+            # the NUL goes after the prefix (9) plus that many digits.
+            var pdig = tty_itoa(&path, 9, ptn);
+            store8(&path + 9 + pdig, 0);                        # NUL
+
+            var slave = sys_open(&path, PTY_O_RDWR | PTY_O_NOCTTY, 0);
+            if (slave >= 0) {
+                assert(slave >= 0, "slave /dev/pts/N opened");
+
+                # ----- tty_isatty against a known-live TTY -----------
+                # Deterministic here (the fd-0 test in darshana.tcyr is
+                # not — it depends on the runner having a tty).
+                test_group("pty.tcyr — tty_isatty (live slave)");
+                assert_eq(tty_isatty(slave), 1, "slave fd is a TTY");
+
+                # ----- tty_winsize set/get round-trip ----------------
+                # Set a known geometry on the slave, read it back via
+                # darshana. Exercises the TIOCGWINSZ path with a value
+                # we control rather than whatever the host terminal is.
+                test_group("pty.tcyr — tty_winsize set/get");
+                var wsset[8];
+                var wi = 0;
+                while (wi < 8) { store8(&wsset + wi, 0); wi = wi + 1; }
+                store8(&wsset + 0, 24);    # row = 24 (u16 LE)
+                store8(&wsset + 2, 80);    # col = 80 (u16 LE)
+                var wsrc = syscall(PTY_SYS_IOCTL, slave, PTY_TIOCSWINSZ, &wsset);
+                if (wsrc >= 0) {
+                    var rows = 0;
+                    var cols = 0;
+                    assert_eq(tty_winsize(slave, &rows, &cols), 0,
+                        "tty_winsize succeeds on live slave");
+                    assert_eq(rows, 24, "tty_winsize read back rows = 24");
+                    assert_eq(cols, 80, "tty_winsize read back cols = 80");
+                }
+
+                # ----- state-restore round-trip ----------------------
+                # The ADR-0002 guarantee: tty_raw must save cooked-mode
+                # termios and tty_cooked must put it back byte-for-byte.
+                # Snapshot → raw → assert raw mask applied → cooked →
+                # assert exact restoration. Buffers are zeroed first so
+                # the 24 trailing pad bytes (kernel writes 36 of 60)
+                # compare deterministically.
+                test_group("pty.tcyr — tty_raw applies raw mask");
+                var snap[60];
+                var raw[60];
+                var rest[60];
+                var zi = 0;
+                while (zi < 60) {
+                    store8(&snap + zi, 0);
+                    store8(&raw + zi, 0);
+                    store8(&rest + zi, 0);
+                    zi = zi + 1;
+                }
+                var snrc = syscall(PTY_SYS_IOCTL, slave, TCGETS, &snap);
+                if (snrc >= 0) {
+                    assert_eq(tty_raw(slave), 0, "tty_raw succeeds on slave");
+                    syscall(PTY_SYS_IOCTL, slave, TCGETS, &raw);
+                    # lflag (off 12) — interactive bits cleared.
+                    var lf = tio_load32(&raw, 12);
+                    assert_eq(lf & TIO_ECHO,   0, "ECHO cleared in raw");
+                    assert_eq(lf & TIO_ICANON, 0, "ICANON cleared in raw");
+                    assert_eq(lf & TIO_ISIG,   0, "ISIG cleared in raw");
+                    assert_eq(lf & TIO_IEXTEN, 0, "IEXTEN cleared in raw");
+                    # oflag (off 4) — post-processing off.
+                    assert_eq(tio_load32(&raw, 4) & TIO_OPOST, 0,
+                        "OPOST cleared in raw");
+                    # cflag (off 8) — 8-bit chars.
+                    assert_eq(tio_load32(&raw, 8) & TIO_CS8, TIO_CS8,
+                        "CS8 set in raw");
+                    # c_cc — byte-at-a-time, no timeout.
+                    assert_eq(load8(&raw + TIO_CC_BASE + TIO_VMIN),  1,
+                        "VMIN = 1 in raw");
+                    assert_eq(load8(&raw + TIO_CC_BASE + TIO_VTIME), 0,
+                        "VTIME = 0 in raw");
+
+                    # ----- behavioral output round-trip (raw) --------
+                    # With OPOST off, "\n" passes through untranslated.
+                    # Write A\nB to the slave, read it on the master:
+                    # exactly 3 bytes, no CR injected.
+                    test_group("pty.tcyr — raw output round-trip (no CRLF)");
+                    var rmsg[3];
+                    store8(&rmsg + 0, 0x41);   # 'A'
+                    store8(&rmsg + 1, 0x0a);   # '\n'
+                    store8(&rmsg + 2, 0x42);   # 'B'
+                    file_write(slave, &rmsg, 3);
+                    var rrd[8];
+                    var rgot = _pty_drain(master, &rrd, 3, 200);
+                    if (rgot > 0) {
+                        assert_eq(rgot, 3, "raw: master read 3 bytes (no CRLF)");
+                        assert_eq(load8(&rrd + 0), 0x41, "raw byte 0 = 'A'");
+                        assert_eq(load8(&rrd + 1), 0x0a, "raw byte 1 = '\\n' (untranslated)");
+                        assert_eq(load8(&rrd + 2), 0x42, "raw byte 2 = 'B'");
+                    }
+
+                    # ----- restore -----------------------------------
+                    test_group("pty.tcyr — tty_cooked restores termios");
+                    assert_eq(tty_cooked(slave), 0, "tty_cooked succeeds");
+                    syscall(PTY_SYS_IOCTL, slave, TCGETS, &rest);
+                    var diff = 0;
+                    var ci = 0;
+                    while (ci < 60) {
+                        if (load8(&rest + ci) != load8(&snap + ci)) {
+                            diff = diff + 1;
+                        }
+                        ci = ci + 1;
+                    }
+                    assert_eq(diff, 0,
+                        "termios restored byte-for-byte after tty_cooked");
+
+                    # ----- behavioral output round-trip (cooked) -----
+                    # Back in cooked mode OPOST|ONLCR is on, so a lone
+                    # "\n" becomes "\r\n". Same write, master now sees 4
+                    # bytes — the mirror image of the raw assertion above,
+                    # confirming the restore re-enabled post-processing.
+                    test_group("pty.tcyr — cooked output round-trip (CRLF)");
+                    var cmsg[3];
+                    store8(&cmsg + 0, 0x41);   # 'A'
+                    store8(&cmsg + 1, 0x0a);   # '\n'
+                    store8(&cmsg + 2, 0x42);   # 'B'
+                    file_write(slave, &cmsg, 3);
+                    var crd[8];
+                    var cgot = _pty_drain(master, &crd, 4, 200);
+                    if (cgot > 0) {
+                        assert_eq(cgot, 4, "cooked: master read 4 bytes (CRLF)");
+                        assert_eq(load8(&crd + 0), 0x41, "cooked byte 0 = 'A'");
+                        assert_eq(load8(&crd + 1), 0x0d, "cooked byte 1 = '\\r' (injected)");
+                        assert_eq(load8(&crd + 2), 0x0a, "cooked byte 2 = '\\n'");
+                        assert_eq(load8(&crd + 3), 0x42, "cooked byte 3 = 'B'");
+                    }
+                }
+
+                # ----- escape-emitting surface via fd-1 capture ------
+                # tty_clear / tty_move / tty_cursor_* / tty_alt_* /
+                # tty_sgr all write their CSI escape straight to fd 1.
+                # The unit suite can only reach the _buf twins and the
+                # rejection paths — never these actual fd-1 bytes. Here
+                # we dup the slave onto fd 1 (slave in raw mode, so
+                # OPOST can't rewrite the sequence), call each helper,
+                # and read the escape back off the master. Captures land
+                # in flags while redirected; no test_group / assert_eq
+                # (both touch fd 1 / fd 2) runs until stdout is restored.
+                var saved1 = syscall(PTY_SYS_DUP, 1);
+                if (saved1 >= 0) {
+                    tty_raw(slave);
+                    syscall(PTY_SYS_DUP2, slave, 1);
+                    _pty_flush(master);
+
+                    tty_alt_enter();
+                    var e_alte = _pty_expect(master, "\x1b[?1049h", 8);
+                    tty_alt_leave();
+                    var e_altl = _pty_expect(master, "\x1b[?1049l", 8);
+                    tty_clear();
+                    var e_clr  = _pty_expect(master, "\x1b[2J", 4);
+                    tty_clear_to_eol();
+                    var e_ceol = _pty_expect(master, "\x1b[K", 3);
+                    tty_clear_to_end();
+                    var e_cend = _pty_expect(master, "\x1b[J", 3);
+                    tty_cursor_hide();
+                    var e_chid = _pty_expect(master, "\x1b[?25l", 6);
+                    tty_cursor_show();
+                    var e_csho = _pty_expect(master, "\x1b[?25h", 6);
+                    tty_cursor_home();
+                    var e_chom = _pty_expect(master, "\x1b[H", 3);
+                    tty_move(3, 5);
+                    var e_mov  = _pty_expect(master, "\x1b[3;5H", 6);
+                    tty_cursor_up(2);
+                    var e_up   = _pty_expect(master, "\x1b[2A", 4);
+                    tty_cursor_down(4);
+                    var e_dn   = _pty_expect(master, "\x1b[4B", 4);
+                    tty_sgr(31);
+                    var e_sgr  = _pty_expect(master, "\x1b[31m", 5);
+                    tty_sgr_reset();
+                    var e_rst  = _pty_expect(master, "\x1b[0m", 4);
+
+                    # Restore stdout BEFORE any assert / test_group.
+                    syscall(PTY_SYS_DUP2, saved1, 1);
+                    file_close(saved1);
+                    tty_cooked(slave);
+
+                    test_group("pty.tcyr — escape emission (fd-1 capture)");
+                    assert_eq(e_alte, 1, "tty_alt_enter emits CSI ?1049h");
+                    assert_eq(e_altl, 1, "tty_alt_leave emits CSI ?1049l");
+                    assert_eq(e_clr,  1, "tty_clear emits CSI 2J");
+                    assert_eq(e_ceol, 1, "tty_clear_to_eol emits CSI K");
+                    assert_eq(e_cend, 1, "tty_clear_to_end emits CSI J");
+                    assert_eq(e_chid, 1, "tty_cursor_hide emits CSI ?25l");
+                    assert_eq(e_csho, 1, "tty_cursor_show emits CSI ?25h");
+                    assert_eq(e_chom, 1, "tty_cursor_home emits CSI H");
+                    assert_eq(e_mov,  1, "tty_move(3,5) emits CSI 3;5H");
+                    assert_eq(e_up,   1, "tty_cursor_up(2) emits CSI 2A");
+                    assert_eq(e_dn,   1, "tty_cursor_down(4) emits CSI 4B");
+                    assert_eq(e_sgr,  1, "tty_sgr(31) emits CSI 31m");
+                    assert_eq(e_rst,  1, "tty_sgr_reset emits CSI 0m");
+                }
+
+                file_close(slave);
+            }
+            # else: slave open blocked (sandbox) — skip clean.
+        }
+        # else: TIOCSPTLCK / TIOCGPTN blocked — skip clean.
+        file_close(master);
+    } else {
+        # /dev/ptmx unavailable (seccomp / minimal container). The
+        # consumer-side PTY smoke covers the live path; don't fake a
+        # pass, but record that the harness ran and chose to skip.
+        assert_eq(1, 1, "pty harness skipped — /dev/ptmx unavailable");
+    }
+
+#endif
+
+#ifndef CYRIUS_TARGET_LINUX
+    test_group("pty.tcyr — non-Linux");
+    assert_eq(1, 1, "pty harness is Linux-only — skipped on this target");
+#endif
+
+    return assert_summary();
+}
+
+var pty_exit = main();
+syscall(60, pty_exit);

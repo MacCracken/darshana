@@ -5,6 +5,18 @@
 
 ## Version
 
+**0.6.0** — *open cycle*. First soak-window cut: an in-repo PTY
+harness (`tests/pty.tcyr`) that manufactures its own pseudo-terminal
+and drives darshana's syscall-touching + escape-emitting surface
+against it, observing results on the master end. 38 assertions cover
+`tty_isatty`, `tty_winsize` set/get, the `tty_raw`→`tty_cooked`
+state-restore round-trip (byte-for-byte), the cooked-vs-raw output
+round-trip (OPOST/ONLCR behavior), and fd-1 escape capture for the
+13 `tty_*` writers that had no byte-level coverage. Test-only — no
+`src/` or public-surface change; dist bundle unchanged bar the
+`# Version:` header. Closes the v1.0 "every symbol tested" +
+"state-restore paths covered" partials. Consumers unaffected.
+
 **0.5.4** — *open cycle*. Toolchain-only bump `6.0.1` → `6.1.24`
 (catch-up to the ecosystem-wide cycc; the wrapper had already
 drifted, the manifest pin was stale). `cyrius update` refreshed
@@ -74,7 +86,7 @@ ANSI helpers. Driven by chakshu's M2 Slice D needs (dynamic resize).
 | `src/cursor.cyr` | ~50 | `tty_itoa`, `tty_move`. Composes the CSI row;colH escape inline. |
 | `src/main.cyr` | 14 | Convenience entry — `include`s the three sub-modules so smoke + tests get the whole surface in one shot. |
 | `programs/smoke.cyr` | ~17 | Compile-link smoke. |
-| `dist/darshana.cyr` | 448 | Bundled distribution (regenerate via `cyrius distlib`). What consumers `include "lib/darshana.cyr"`. |
+| `dist/darshana.cyr` | 678 | Bundled distribution (regenerate via `cyrius distlib`). What consumers `include "lib/darshana.cyr"`. |
 
 Total source ≈ 450 lines (v0.4.1; docstring expansion versus 0.4.0). All public symbol names match cyim's donor for the v0.2.0 surface — cyim's migration to darshana is a manifest swap (cyim 1.7.0 picked this up at darshana 0.2.0; bumped to 0.4.0 at cyim 1.7.1). v0.3.0+ additions are extension-only (no donor counterpart) and extraction-ready for any future consumer.
 
@@ -82,7 +94,8 @@ Total source ≈ 450 lines (v0.4.1; docstring expansion versus 0.4.0). All publi
 
 | File | Status |
 |------|--------|
-| `tests/darshana.tcyr` | **98–100 assertions across 14 groups** (count depends on TTY-availability in the runner — 98 when stdin is not a TTY, 100 when it is): pure-function coverage of `tio_load32/store32`, `tty_apply_raw_flags` (every flag bit + idempotence), `tty_itoa` (zero / negative / 1–3 digits / position offset), the v0.3.0 constant set (`TTY_SIGMASK_EXIT/WINCH` math + disjointness, `TIOCGWINSZ` ABI), the v0.4.0 `tty_sgr` rejection paths, **v0.5.0** live-fd tests for `tty_winsize` and `tty_open_signalfd`, and **v0.5.1** truecolor coverage: `_ansi_emit_u8` digit encoding, `tty_fg_rgb_buf` / `tty_bg_rgb_buf` exact-byte verification, per-channel bounds rejection on both `_buf` and direct variants, `tty_sgr_reset_buf` exact bytes + position-offset. `tty_raw/cooked` and valid-code SGR emission still exercised end-to-end via consumer PTY smoke. |
+| `tests/darshana.tcyr` | **98–100 assertions across 14 groups** (count depends on TTY-availability in the runner — 98 when stdin is not a TTY, 100 when it is): pure-function coverage of `tio_load32/store32`, `tty_apply_raw_flags` (every flag bit + idempotence), `tty_itoa` (zero / negative / 1–3 digits / position offset), the v0.3.0 constant set (`TTY_SIGMASK_EXIT/WINCH` math + disjointness, `TIOCGWINSZ` ABI), the v0.4.0 `tty_sgr` rejection paths, **v0.5.0** live-fd tests for `tty_winsize` and `tty_open_signalfd`, and **v0.5.1** truecolor coverage: `_ansi_emit_u8` digit encoding, `tty_fg_rgb_buf` / `tty_bg_rgb_buf` exact-byte verification, per-channel bounds rejection on both `_buf` and direct variants, `tty_sgr_reset_buf` exact bytes + position-offset. |
+| `tests/pty.tcyr` | **38 assertions (v0.6.0)** — the in-repo PTY harness. Opens a real pseudo-terminal (`/dev/ptmx` → `TIOCSPTLCK` → `TIOCGPTN` → `/dev/pts/N`) and drives darshana against the slave: `tty_isatty` on a known-live fd, `tty_winsize` set/get round-trip (24×80), the `tty_raw`→`tty_cooked` termios state-restore (byte-for-byte), the cooked-vs-raw output round-trip (OPOST/ONLCR), and fd-1 escape-byte capture (via `dup2` onto fd 1) for `tty_alt_enter/leave`, `tty_clear`, `tty_clear_to_eol/end`, `tty_cursor_hide/show/home`, `tty_move`, `tty_cursor_up/down`, `tty_sgr` (valid code), `tty_sgr_reset`. Closes the syscall-touching + valid-code-emission gap that was previously consumer-PTY-smoke only. Hang-proof (`O_NONBLOCK` master, bounded drains) and skip-clean (guards every kernel step; Linux-only). |
 | `tests/darshana.bcyr` | bench stub — not exercised |
 | `tests/darshana.fcyr` | fuzz stub — not exercised |
 
@@ -122,8 +135,8 @@ Direct (declared in `cyrius.cyml`):
 - M2 (v0.3.0) — chakshu-driven extensions ✓ — `tty_winsize`, `tty_open_signalfd`, partial-clear helpers, TTY_SIGMASK_*
 - M3 (v0.4.0) — cyim integration milestone ✓ **(this release)**. cyim 1.7.0 was the original adopter on darshana 0.2.0; cyim 1.7.1 (2026-05-20) bumped to darshana 0.4.0 + cyrius 6.0.1 and satisfied the M3 gate ("cyim CI green on the integrated branch").
 - M4 (v0.5.0) — chakshu integration ✓ **closed 2026-05-20**. chakshu's M2 (Full TUI) shipped at chakshu 0.5.0 on darshana 0.3.0; chakshu 0.6.1 advanced to darshana 0.4.1 as the close ceremony. Both consumers (cyim 1.7.1, chakshu 0.6.1) are now on the same dep pin.
-- **Soak-window cuts** (v0.6.0 / v0.8.0) — planned during the M5 calendar gate:
-    - v0.6.0 — in-repo PTY harness (early soak); closes the two v1.0 "API frozen — tested" + "test coverage adequate" partials.
+- **Soak-window cuts** (v0.6.0 / v0.8.0) — during the M5 calendar gate:
+    - v0.6.0 — in-repo PTY harness ✓ **shipped (this release)**. `tests/pty.tcyr`, 38 assertions; closes the two v1.0 "API frozen — tested" + "test coverage adequate" partials.
     - v0.8.0 — `docs/examples/` + final API audit + `docs/architecture/` notes (late soak); pre-freeze polish on the actual v1.0 surface.
     - See [`roadmap.md`](roadmap.md) §Soak-window cuts for the full plan + per-cut checklist.
 - M5 (v1.0.0) — both consumers green for ≥30 days — calendar-gated from 2026-05-20; earliest viable cut ~2026-06-19.
