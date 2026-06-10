@@ -10,7 +10,8 @@ Pure version-pin release, no source changes. Catches darshana up to
 the ecosystem-wide cycc pin (the wrapper had already drifted to
 6.1.24; the manifest pin was stale at 6.0.1). `cyrius update`
 refreshed `lib/` (101 files) from the matching snapshot; no source
-edits required and the dist bundle bytes are unchanged. Build clean
+edits required (`dist/darshana.cyr` regenerated only to stamp the
+new `# Version:` header). Build clean
 and all 144 assertions green on the new toolchain. Existing
 consumers (cyim 1.7.1, chakshu 0.6.1, bannermanor, anuenue 0.7.0)
 are unaffected — no API surface change.

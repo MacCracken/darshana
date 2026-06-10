@@ -8,8 +8,9 @@
 **0.5.4** — *open cycle*. Toolchain-only bump `6.0.1` → `6.1.24`
 (catch-up to the ecosystem-wide cycc; the wrapper had already
 drifted, the manifest pin was stale). `cyrius update` refreshed
-`lib/` (101 files); no source changes, dist bundle bytes unchanged.
-Build clean, all 144 assertions green on the new toolchain. No API
+`lib/` (101 files); no source changes (`dist/darshana.cyr`
+regenerated only to stamp the new `# Version:` header). Build
+clean, all 144 assertions green on the new toolchain. No API
 surface change; consumers (cyim 1.7.1, chakshu 0.6.1, bannermanor,
 anuenue 0.7.0) unaffected.
 
