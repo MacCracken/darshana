@@ -58,12 +58,26 @@ pass "dist/darshana.cyr matches src/ — no drift"
 # ============================================================
 echo "[smoke] public surface"
 
-required_syms="tty_apply_raw_flags tty_raw tty_cooked tty_alt_enter tty_alt_leave tty_clear tty_cursor_hide tty_cursor_show tty_cursor_home tty_move tty_itoa tio_load32 tio_store32 tty_winsize tty_open_signalfd tty_clear_to_eol tty_clear_to_end tty_sgr tty_sgr_reset tty_fg_rgb tty_bg_rgb tty_fg_rgb_buf tty_bg_rgb_buf tty_sgr_reset_buf tty_isatty tty_sgr_buf tty_fg_256_buf"
+required_syms="tty_raw tty_cooked tty_alt_enter tty_alt_leave tty_clear tty_cursor_hide tty_cursor_show tty_cursor_home tty_cursor_up tty_cursor_down tty_move tty_dec_buf tio_load32 tio_store32 tty_winsize tty_open_signalfd tty_close_signalfd tty_clear_to_eol tty_clear_to_eos tty_sgr tty_sgr_reset tty_fg_rgb tty_bg_rgb tty_fg_rgb_buf tty_bg_rgb_buf tty_sgr_reset_buf tty_isatty tty_sgr_buf tty_fg_256_buf"
 for sym in $required_syms; do
     grep -qE "^fn ${sym}\b" dist/darshana.cyr \
         || fail "dist/darshana.cyr missing 'fn ${sym}' (cyim API contract)"
 done
 pass "all $(echo "$required_syms" | wc -w) cyim-API tty_* / tio_* symbols present in dist"
+
+# Bidirectional self-audit: every public fn ACTUALLY in dist must be
+# listed in required_syms above, so the contract list can never
+# silently lag the shipped surface (the loop above only catches the
+# other direction — listed-but-missing-from-dist). This is how
+# tty_cursor_up / tty_cursor_down went unchecked for several releases.
+actual_fns=$(grep -oE '^fn (tty_|tio_)[A-Za-z0-9_]+' dist/darshana.cyr | awk '{print $2}' | sort -u)
+for fn in $actual_fns; do
+    case " $required_syms " in
+        *" $fn "*) : ;;
+        *) fail "dist/darshana.cyr exports 'fn ${fn}' but required_syms omits it (surface check lagging dist — add it here)" ;;
+    esac
+done
+pass "required_syms covers every public fn symbol in dist ($(echo "$actual_fns" | wc -w) total — no lag)"
 
 required_flags="TIO_ECHO TIO_ICANON TIO_ISIG TIO_IEXTEN TIO_ICRNL TIO_IXON TIO_OPOST TIO_CSIZE TIO_CS8 TIO_BRKINT TIO_INPCK TIO_ISTRIP TIO_CC_BASE TIO_VTIME TIO_VMIN TIO_BUF_SIZE TIOCGWINSZ TTY_SIGMASK_EXIT TTY_SIGMASK_WINCH TTY_FG_BLACK TTY_FG_RED TTY_FG_GREEN TTY_FG_YELLOW TTY_FG_BLUE TTY_FG_MAGENTA TTY_FG_CYAN TTY_FG_WHITE TTY_FG_BRIGHT_BLACK TTY_FG_BRIGHT_RED TTY_FG_BRIGHT_GREEN TTY_FG_BRIGHT_YELLOW TTY_FG_BRIGHT_BLUE TTY_FG_BRIGHT_MAGENTA TTY_FG_BRIGHT_CYAN TTY_FG_BRIGHT_WHITE"
 for flag in $required_flags; do

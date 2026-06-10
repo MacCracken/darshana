@@ -1,6 +1,6 @@
 # ADR 0002 — Termios state-restore is a consumer responsibility
 
-**Status**: Accepted
+**Status**: Accepted (amended 2026-06-10 for v0.7.0 — see Amendments)
 **Date**: 2026-05-20
 **Deciders**: project owner
 
@@ -55,13 +55,16 @@ contract darshana enables.
 
 What darshana provides:
 
-- **Module-global saved state.** `_tty_saved[60]` and `_tty_in_raw`
-  in `src/termios.cyr` are reachable from any consumer-installed
-  signal handler or panic path — no state-threading required to call
-  `tty_cooked(0)` from outside the raw-mode entry point.
-- **Idempotent restore.** `tty_cooked(fd)` is a no-op if not in raw,
-  so consumers can call it unconditionally from multiple exit paths
-  (atexit, SIGINT handler, panic) without double-restore failure.
+- **Module-global saved state.** `_tty_saved[60]`, `_tty_in_raw`, and
+  `_tty_raw_fd` in `src/termios.cyr` are reachable from any
+  consumer-installed signal handler or panic path — no state-threading
+  required to call `tty_cooked()` from outside the raw-mode entry point.
+- **Idempotent restore.** `tty_cooked()` (zero-arg as of v0.7.0) is a
+  no-op if not in raw, so consumers can call it unconditionally from
+  multiple exit paths (atexit, SIGINT handler, panic) without
+  double-restore failure. Single-raw-fd model: darshana tracks exactly
+  one raw fd (`_tty_raw_fd`); `tty_cooked()` restores onto it, and a
+  second `tty_raw` on a *different* fd while still raw is refused (-1).
 - **`tty_open_signalfd(sigmask)` + `TTY_SIGMASK_EXIT`.** The
   recommended path for HUP/INT/TERM cleanup. Returns a signalfd the
   consumer's main loop reads; the consumer drains the signal and
@@ -72,7 +75,11 @@ What darshana provides:
   1. `tty_cursor_show()` — cursor visible
   2. `tty_alt_leave()`   — primary screen restored
   3. `tty_sgr_reset()`   — colors back to default (if `tty_sgr` was used)
-  4. `tty_cooked(fd)`    — line discipline restored
+  4. `tty_cooked()`      — line discipline restored (zero-arg as of
+     v0.7.0; restores the fd `tty_raw` saved)
+  5. `tty_close_signalfd(fd, mask)` — if a signalfd was opened: close
+     it and unblock the signals (v0.7.0; without it the `SIG_BLOCK`
+     installed by `tty_open_signalfd` persists after exit)
 
 What darshana does **not** do:
 
@@ -95,7 +102,7 @@ What darshana does **not** do:
   shape change to adopt darshana.
 - Module-global saved state + idempotent restore are the minimum
   primitives needed to make consumer-side restore *reliable*. A
-  consumer that does the simplest possible thing — `atexit { tty_cooked(0);
+  consumer that does the simplest possible thing — `atexit { tty_cooked();
   tty_alt_leave(); tty_cursor_show(); }` plus a signalfd loop on
   `TTY_SIGMASK_EXIT` — is fully covered.
 - No hidden ordering between darshana's `atexit` and the consumer's
@@ -144,12 +151,36 @@ over the framework shape), not a constraint of the code. ADRs are
 the right home for decisions; architecture docs explain what's true
 once a decision has been made.
 
+## Amendments
+
+**2026-06-10 (v0.7.0).** The state-restore primitives were reshaped
+during the pre-v1.0 hardening sweep, *without* changing this ADR's core
+decision (primitives, not framework; the consumer owns teardown):
+
+- `tty_cooked(fd)` → `tty_cooked()` (zero-arg). The fd parameter
+  advertised a per-fd restore the single saved-state slot can't deliver
+  (`tty_raw(A)` + `tty_cooked(B)` would have written A's state onto B).
+  `tty_raw` now records the owning fd in `_tty_raw_fd`, `tty_cooked()`
+  restores onto it, and a second concurrent `tty_raw` on a different fd
+  is refused (-1) rather than silently stranding the first fd in raw.
+- `tty_close_signalfd(fd, sigmask)` added as the teardown counterpart
+  to `tty_open_signalfd`. The open call's `SIG_BLOCK` is otherwise
+  irreversible within darshana (closing the fd alone does not unblock);
+  the new primitive closes the fd and restores the signal mask, and is
+  step 5 of the teardown sequence above.
+
+Both are breaking signature changes, taken pre-freeze precisely because
+the frozen v1.0 surface should not advertise a capability the data
+model can't deliver, nor freeze an open primitive without its teardown
+counterpart. Blast radius was one mechanical edit each in cyim/chakshu
+(both already called `tty_cooked(0)`).
+
 ## References
 
 - v1.0 release criterion in [`docs/development/roadmap.md`](../development/roadmap.md)
 - CLAUDE.md domain rule: "Don't grow into a TUI framework."
-- `src/termios.cyr` — `_tty_saved`, `_tty_in_raw`, `tty_raw`,
-  `tty_cooked`, `tty_open_signalfd`
+- `src/termios.cyr` — `_tty_saved`, `_tty_in_raw`, `_tty_raw_fd`,
+  `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`
 - `src/ansi.cyr` — `tty_alt_enter/leave`, `tty_cursor_hide/show`,
   `tty_sgr_reset`
 - Donor restore wiring: `cyim/src/main.cyr` (the consumer pattern

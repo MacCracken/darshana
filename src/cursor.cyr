@@ -5,20 +5,29 @@
 # encode into the escape) — different shape from the fixed-bytes
 # escape helpers in ansi.cyr.
 #
-# tty_itoa is private-by-convention (no underscore prefix to keep the
-# cyim API surface intact) but only used by tty_move. Lifted into the
-# darshana surface in case a future caller wants to compose a custom
-# escape with embedded integers.
+# tty_dec_buf (the decimal formatter) is a public member of the `_buf`
+# family — consumers compose custom escapes with embedded integers
+# through it (cyim's status line does). It lives here because the
+# cursor escapes need it; its `_buf` naming and new-position return
+# match tty_sgr_buf / tty_fg_rgb_buf in ansi.cyr.
 
-# Write decimal `val` (>= 0) into `buf` at `pos`. Returns digits written.
-# Single-digit zero is the only zero case; otherwise we collect digits
-# in reverse and copy them back in order.
-fn tty_itoa(buf, pos, val) {
+# Write the decimal digits of `val` into `buf` at `pos`; return the new
+# write position (`pos` + number of digits). A negative or zero `val`
+# is written as a single '0'. Collects digits in reverse into a scratch
+# buffer, then copies them back in order.
+#
+# Renamed from `tty_itoa` in v0.7.0 with the return harmonized from
+# digit-count to new-position: the old name was a generic misnomer and
+# the digit-count return was the lone odd-one-out in the `_buf` family
+# (every other `_buf` helper returns the new position) — a documented
+# footgun. `tmp` is sized 24: an i64 is at most 20 decimal digits, so
+# 24 leaves headroom.
+fn tty_dec_buf(buf, pos, val) {
     if (val <= 0) {
         store8(buf + pos, 0x30);
-        return 1;
+        return pos + 1;
     }
-    var tmp[20];
+    var tmp[24];
     var d = 0;
     while (val > 0) {
         store8(&tmp + d, 0x30 + (val % 10));
@@ -30,21 +39,33 @@ fn tty_itoa(buf, pos, val) {
         store8(buf + pos + i, load8(&tmp + d - 1 - i));
         i = i + 1;
     }
-    return d;
+    return pos + d;
 }
 
-# Move cursor to (row, col), 1-indexed, via CSI row;colH.
-# Composes the escape into a 32-byte stack buf and writes it in one
-# syscall — no intermediate allocations, no flush concerns.
+# Move cursor to (row, col), 1-indexed, via CSI row;colH. Returns 0
+# on success, -1 if either coordinate is outside [1, 65535] — rejected
+# *before* any byte reaches fd 1, matching the fail-before-emit
+# discipline of tty_sgr ([0,999]) and tty_fg_rgb ([0,255]). The bound
+# is the u16 winsize envelope every real caller draws from; an out-of-
+# range coordinate would otherwise feed tty_dec_buf up to 20 digits and
+# a malformed CSI to the terminal.
+#
+# Composes the escape into a stack buf and writes it in one syscall —
+# no intermediate allocations, no flush concerns. buf is sized for the
+# true worst case: ESC[ (2) + up to 20 digits + ';' (1) + up to 20
+# digits + 'H' (1) = 44 bytes, so the compose cannot overrun the stack
+# even if the [1,65535] guard above is ever loosened.
 fn tty_move(row, col) {
-    var buf[32];
+    if (row < 1 || row > 65535) { return 0 - 1; }
+    if (col < 1 || col > 65535) { return 0 - 1; }
+    var buf[44];
     store8(&buf, 0x1b);          # ESC
     store8(&buf + 1, 0x5b);      # '['
     var pos = 2;
-    pos = pos + tty_itoa(&buf, pos, row);
+    pos = tty_dec_buf(&buf, pos, row);
     store8(&buf + pos, 0x3b);    # ';'
     pos = pos + 1;
-    pos = pos + tty_itoa(&buf, pos, col);
+    pos = tty_dec_buf(&buf, pos, col);
     store8(&buf + pos, 0x48);    # 'H'
     pos = pos + 1;
     syscall(1, 1, &buf, pos);
@@ -63,7 +84,7 @@ fn tty_cursor_up(n) {
     store8(&buf, 0x1b);          # ESC
     store8(&buf + 1, 0x5b);      # '['
     var pos = 2;
-    pos = pos + tty_itoa(&buf, pos, n);
+    pos = tty_dec_buf(&buf, pos, n);
     store8(&buf + pos, 0x41);    # 'A'
     pos = pos + 1;
     syscall(1, 1, &buf, pos);
@@ -78,7 +99,7 @@ fn tty_cursor_down(n) {
     store8(&buf, 0x1b);
     store8(&buf + 1, 0x5b);
     var pos = 2;
-    pos = pos + tty_itoa(&buf, pos, n);
+    pos = tty_dec_buf(&buf, pos, n);
     store8(&buf + pos, 0x42);    # 'B'
     pos = pos + 1;
     syscall(1, 1, &buf, pos);

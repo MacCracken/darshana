@@ -36,13 +36,13 @@ fn main() {
     # Adjacent fields don't bleed
     assert_eq(tio_load32(&fbuf, 0), 0x12345678, "field at 0 untouched by write at 4");
 
-    # ----- termios.cyr — tty_apply_raw_flags ----------------------
+    # ----- termios.cyr — _tty_apply_raw_flags ----------------------
     # Set up a faked cooked-mode termios with all flags ON, then apply
     # the raw mask and verify the right bits cleared / set. Mirrors
     # cyim's vim-convention raw mode: ISIG cleared (Ctrl-C as byte),
     # OPOST cleared, etc. Same bit checks as the donor's intent.
 
-    test_group("termios.cyr — tty_apply_raw_flags");
+    test_group("termios.cyr — _tty_apply_raw_flags");
     var tbuf[60];
     var j = 0;
     while (j < 60) { store8(&tbuf + j, 0); j = j + 1; }
@@ -58,7 +58,7 @@ fn main() {
     store8(&tbuf + TIO_CC_BASE + TIO_VMIN, 99);
     store8(&tbuf + TIO_CC_BASE + TIO_VTIME, 99);
 
-    tty_apply_raw_flags(&tbuf);
+    _tty_apply_raw_flags(&tbuf);
 
     # iflag — every set bit cleared.
     assert_eq(tio_load32(&tbuf, 0) & TIO_BRKINT, 0, "BRKINT cleared");
@@ -83,44 +83,48 @@ fn main() {
     var snap[60];
     var k = 0;
     while (k < 60) { store8(&snap + k, load8(&tbuf + k)); k = k + 1; }
-    tty_apply_raw_flags(&tbuf);
+    _tty_apply_raw_flags(&tbuf);
     var match_n = 0;
     var p = 0;
     while (p < 60) {
         if (load8(&tbuf + p) == load8(&snap + p)) { match_n = match_n + 1; }
         p = p + 1;
     }
-    assert_eq(match_n, 60, "tty_apply_raw_flags is idempotent");
+    assert_eq(match_n, 60, "_tty_apply_raw_flags is idempotent");
 
-    # ----- cursor.cyr — tty_itoa decimal formatter ----------------
-    # Test the full range cyim uses (1..200 covers any terminal of
-    # reasonable size; the tested values straddle the digit boundaries).
+    # ----- cursor.cyr — tty_dec_buf decimal formatter -------------
+    # tty_dec_buf (renamed from tty_itoa in v0.7.0) returns the NEW
+    # write position (pos + digits), not the digit count. At pos 0 the
+    # return numerically equals the digit count; the pos-offset case
+    # below is where new-position vs digit-count differ (returns 3, not
+    # 2). Test the range cyim uses (values straddle the digit boundaries).
 
-    test_group("cursor.cyr — tty_itoa");
+    test_group("cursor.cyr — tty_dec_buf");
     var ibuf[24];
     # Zero
     var z = 0;
     while (z < 24) { store8(&ibuf + z, 0); z = z + 1; }
-    assert_eq(tty_itoa(&ibuf, 0, 0), 1, "0 → 1 digit");
+    assert_eq(tty_dec_buf(&ibuf, 0, 0), 1, "0 at pos 0 → new-pos 1");
     assert_eq(load8(&ibuf), 0x30, "0 written as ASCII '0'");
-    # Negative — donor treats <= 0 as 0
-    assert_eq(tty_itoa(&ibuf, 0, 0 - 5), 1, "negative → 1 digit (treated as 0)");
+    # Negative — treated as 0
+    assert_eq(tty_dec_buf(&ibuf, 0, 0 - 5), 1, "negative at pos 0 → new-pos 1 (treated as 0)");
     assert_eq(load8(&ibuf), 0x30, "negative written as ASCII '0'");
     # Single digit
-    assert_eq(tty_itoa(&ibuf, 0, 7), 1, "7 → 1 digit");
+    assert_eq(tty_dec_buf(&ibuf, 0, 7), 1, "7 at pos 0 → new-pos 1");
     assert_eq(load8(&ibuf), 0x37, "7 written as ASCII '7'");
     # Two digits
-    assert_eq(tty_itoa(&ibuf, 0, 42), 2, "42 → 2 digits");
+    assert_eq(tty_dec_buf(&ibuf, 0, 42), 2, "42 at pos 0 → new-pos 2");
     assert_eq(load8(&ibuf + 0), 0x34, "42 first digit '4'");
     assert_eq(load8(&ibuf + 1), 0x32, "42 second digit '2'");
     # Three digits
-    assert_eq(tty_itoa(&ibuf, 0, 123), 3, "123 → 3 digits");
+    assert_eq(tty_dec_buf(&ibuf, 0, 123), 3, "123 at pos 0 → new-pos 3");
     assert_eq(load8(&ibuf + 0), 0x31, "123 first '1'");
     assert_eq(load8(&ibuf + 1), 0x32, "123 second '2'");
     assert_eq(load8(&ibuf + 2), 0x33, "123 third '3'");
-    # Position offset — write at non-zero pos doesn't clobber prior bytes.
+    # Position offset — new-position return is pos + digits (3, not 2),
+    # and the write at non-zero pos doesn't clobber prior bytes.
     store8(&ibuf + 0, 0x58);   # 'X'
-    assert_eq(tty_itoa(&ibuf, 1, 99), 2, "99 at pos 1 → 2 digits");
+    assert_eq(tty_dec_buf(&ibuf, 1, 99), 3, "99 at pos 1 → new-pos 3 (pos+digits)");
     assert_eq(load8(&ibuf + 0), 0x58, "byte at pos 0 untouched");
     assert_eq(load8(&ibuf + 1), 0x39, "99 first '9' at pos 1");
     assert_eq(load8(&ibuf + 2), 0x39, "99 second '9' at pos 2");
@@ -138,6 +142,20 @@ fn main() {
     assert_eq(tty_cursor_down(0),       0, "tty_cursor_down(0) is a no-op");
     assert_eq(tty_cursor_down(0 - 1),   0, "tty_cursor_down(-1) is a no-op");
     assert_eq(tty_cursor_down(0 - 100), 0, "tty_cursor_down(-100) is a no-op");
+
+    # ----- v0.7.0 — tty_move coordinate bounds -----------------------
+    # tty_move rejects coords outside [1, 65535] with -1 *before* any
+    # byte reaches fd 1 (fail-before-emit, matching tty_sgr /
+    # tty_fg_rgb). The valid path writes the CSI escape to fd 1 and is
+    # byte-checked in pty.tcyr; the rejection path short-circuits before
+    # the write, so it is safe to assert here without redirecting stdout.
+    test_group("cursor.cyr — tty_move bounds");
+    assert_eq(tty_move(0, 5),      0 - 1, "row 0 rejected (1-indexed)");
+    assert_eq(tty_move(5, 0),      0 - 1, "col 0 rejected (1-indexed)");
+    assert_eq(tty_move(0 - 1, 5),  0 - 1, "negative row rejected");
+    assert_eq(tty_move(5, 0 - 1),  0 - 1, "negative col rejected");
+    assert_eq(tty_move(65536, 5),  0 - 1, "row > 65535 rejected");
+    assert_eq(tty_move(5, 65536),  0 - 1, "col > 65535 rejected");
 
     # ----- v0.3.0 — signal-mask constants ----------------------------
     # Verify the published TTY_SIGMASK_* values match Linux sigset_t
@@ -157,6 +175,15 @@ fn main() {
     # haven't accidentally bumped it.
     test_group("termios.cyr — TIOCGWINSZ");
     assert_eq(TIOCGWINSZ, 0x5413, "TIOCGWINSZ kernel ABI value");
+
+    # ----- v0.7.0 — TIO_BUF_SIZE drift guard -------------------------
+    # TIO_BUF_SIZE must stay 60: src/termios.cyr hard-codes the literal
+    # 60 in the _tty_saved[60] / work[60] array declarations because
+    # Cyrius array sizes can't reference a `var` constant. If the
+    # constant and those literals ever drift apart, the termios ioctl
+    # buffer and the documented size silently disagree. This pins them.
+    test_group("termios.cyr — TIO_BUF_SIZE drift guard");
+    assert_eq(TIO_BUF_SIZE, 60, "TIO_BUF_SIZE pinned to the array literals");
 
     # ----- v0.4.0 — tty_sgr bounds check -----------------------------
     # tty_sgr accepts a 1–3 digit SGR parameter [0, 999]. Anything
@@ -396,16 +423,18 @@ fn main() {
     # the test hangs for any reason, a developer's ctrl-C still
     # delivers. Blocking SIGWINCH for the duration of the test
     # process is harmless — we're not running a render loop.
-    # The signalfd is closed after assertion; the WINCH-block in
-    # this thread's signal mask persists until process exit (the
-    # test binary exits via syscall(60) right after assert_summary).
-    test_group("termios.cyr — tty_open_signalfd (live)");
+    # tty_close_signalfd then closes the fd AND unblocks SIGWINCH, so
+    # (v0.7.0) the block no longer persists past this test — exercising
+    # the teardown counterpart on the live path.
+    test_group("termios.cyr — tty_open/close_signalfd (live)");
     var sfd = tty_open_signalfd(TTY_SIGMASK_WINCH);
     if (sfd >= 0) {
         assert(sfd >= 0, "signalfd opened (fd ≥ 0)");
-        # SYS_CLOSE = 3 on Linux x86_64. Don't leak the fd into the
-        # remainder of the suite or into assert_summary's syscalls.
-        syscall(3, sfd);
+        # Teardown counterpart: closes the fd and restores the signal
+        # mask (returns 0 on success). Don't leak the fd or the block
+        # into the remainder of the suite.
+        assert_eq(tty_close_signalfd(sfd, TTY_SIGMASK_WINCH), 0,
+            "tty_close_signalfd closes fd + restores mask");
     }
     # else: signalfd syscall blocked by sandbox / seccomp / very old
     # kernel. Skip silently — consumer integration (chakshu's M2

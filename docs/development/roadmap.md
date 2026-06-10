@@ -107,5 +107,5 @@ Pre-freeze polish. Doc-shaped and lower-risk; lands close to v1.0 so the audit r
 - **macOS / BSD termios support.** cyim's tty.cyr is Linux-only; darshana follows. Add when a real consumer needs it (not before).
 - **Windows console API.** Out of project scope for any AGNOS first-party tool.
 - **Widget toolkit / form controls / render loops.** Belongs in consumers. darshana is primitives.
-- **256-color / truecolor ANSI helpers.** 16-color works; richer color is a consumer concern (or a sibling lib if a pattern emerges).
+- **A color-management layer.** The SGR primitives shipped v0.3.5–v0.5.3 as consumers asked: 16-color (`TTY_FG_*` + `tty_sgr`), 256-color (`tty_fg_256_buf`), and truecolor (`tty_fg_rgb` / `tty_bg_rgb` + `_buf` twins). What stays out of scope is anything *above* raw SGR emission — palette abstraction, nearest-color quantization, theme/colorscheme management — a consumer (or sibling-lib) concern.
 - **Mouse / bracketed paste.** Out of scope until cyim or chakshu asks.

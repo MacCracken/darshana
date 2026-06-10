@@ -75,6 +75,13 @@ fn tio_store32(buf, off, val) {
 # The bit-twiddling half of `tty_raw` extracted as a pure function so it
 # can be unit-tested without owning a real TTY fd.
 #
+# Private (`_`-prefixed) — internal to `tty_raw`, NOT part of darshana's
+# public surface. Privatized in v0.7.0: it bakes in darshana's specific
+# raw-mode mask, so no consumer has a reason to call it directly, and a
+# same-compilation-unit test can still reach it (the `_ansi_emit_u8`
+# precedent). The pure-function split exists for testability, not for
+# the API.
+#
 # Cleared:
 #   c_iflag: BRKINT | ICRNL | INPCK | ISTRIP | IXON
 #   c_oflag: OPOST              (post-processing off — \n stays \n)
@@ -88,7 +95,7 @@ fn tio_store32(buf, off, val) {
 # matches vim convention. Consumers that want kernel signal handling
 # (chakshu's render loop is not one of them yet) should clone the
 # saved cooked-mode termios and patch c_lflag themselves.
-fn tty_apply_raw_flags(buf) {
+fn _tty_apply_raw_flags(buf) {
     var iflag = tio_load32(buf, 0);
     iflag = iflag & ~(TIO_BRKINT | TIO_ICRNL | TIO_INPCK | TIO_ISTRIP | TIO_IXON);
     tio_store32(buf, 0, iflag);
@@ -136,13 +143,27 @@ var TTY_SIGMASK_WINCH = 0x08000000;
 # constant's docstring for why the duplication exists.
 var _tty_saved[60];
 var _tty_in_raw = 0;
+# The fd `tty_raw` saved state for. There is exactly one saved-state
+# slot (`_tty_saved`), so darshana tracks exactly one raw fd at a time;
+# `tty_cooked()` restores onto this fd. v0.7.0 — added so `tty_cooked`
+# could drop its (previously misleading) fd parameter.
+var _tty_raw_fd = 0;
 
-# Enter raw mode on `fd`. Saves the current termios for `tty_cooked` to
-# restore. Returns 0 on success, -1 on ioctl failure (most often: fd is
-# not a TTY). Idempotent: a second call while already raw is a no-op
-# success.
+# Enter raw mode on `fd`. Saves the current termios so `tty_cooked()`
+# can restore it, and records `fd` as the owning raw fd. Returns 0 on
+# success, -1 on ioctl failure (most often: fd is not a TTY).
+#
+# Single-raw-fd model: there is one saved-state slot, so only one fd
+# can be raw at a time. A second call while already raw on the SAME fd
+# is an idempotent no-op success; a call on a DIFFERENT fd while still
+# raw is REFUSED with -1 (v0.7.0) rather than silently overwriting the
+# saved state — overwriting would strand the first fd in raw mode with
+# no way to restore it. Call `tty_cooked()` first to release the fd.
 fn tty_raw(fd) {
-    if (_tty_in_raw == 1) { return 0; }
+    if (_tty_in_raw == 1) {
+        if (fd == _tty_raw_fd) { return 0; }
+        return 0 - 1;
+    }
     var rc = syscall(SYS_IOCTL, fd, TCGETS, &_tty_saved);
     if (rc < 0) { return 0 - 1; }
 
@@ -152,18 +173,27 @@ fn tty_raw(fd) {
         store8(&work + i, load8(&_tty_saved + i));
         i = i + 1;
     }
-    tty_apply_raw_flags(&work);
+    _tty_apply_raw_flags(&work);
 
     var rc2 = syscall(SYS_IOCTL, fd, TCSETS, &work);
     if (rc2 < 0) { return 0 - 1; }
+    _tty_raw_fd = fd;
     _tty_in_raw = 1;
     return 0;
 }
 
-# Restore cooked mode from the saved termios. Idempotent.
-fn tty_cooked(fd) {
+# Restore cooked mode onto the fd `tty_raw` saved (`_tty_raw_fd`).
+# Zero-arg as of v0.7.0: the previous `tty_cooked(fd)` signature
+# implied a per-fd restore the single saved-state slot can't deliver
+# (tty_raw(A) + tty_cooked(B) would have written A's state onto B), so
+# the parameter was dropped. Idempotent: a no-op success when not raw.
+#
+# On TCSETS failure returns -1 and leaves `_tty_in_raw` set, so the
+# caller may retry; until a restore succeeds the terminal is left in
+# raw mode (state unspecified from the user's point of view).
+fn tty_cooked() {
     if (_tty_in_raw == 0) { return 0; }
-    var rc = syscall(SYS_IOCTL, fd, TCSETS, &_tty_saved);
+    var rc = syscall(SYS_IOCTL, _tty_raw_fd, TCSETS, &_tty_saved);
     if (rc < 0) { return 0 - 1; }
     _tty_in_raw = 0;
     return 0;
@@ -174,10 +204,13 @@ fn tty_cooked(fd) {
 # failure (most often: fd is not a TTY).
 #
 # Out-pointer contract: `out_rows` and `out_cols` each receive an
-# i64 (8 bytes) via `store64`. Callers must pass `&var` where `var`
-# is a Cyrius natural — i.e., declared as `var rows = 0;`. Passing
-# a pointer to a smaller slot (e.g., a single byte inside a struct)
-# will overflow that slot. The values themselves fit in u16 (kernel
+# i64 (8 bytes) via `store64`. This is the ONLY darshana primitive
+# that writes through caller-supplied pointers (every other public fn
+# takes values or writes to fd 1), so it is the single surface where a
+# malformed out-pointer corrupts caller memory. Callers must pass
+# `&var` where `var` is a Cyrius natural — i.e., declared as
+# `var rows = 0;`. Passing a pointer to a smaller slot (e.g., a single
+# byte inside a struct) will overflow that slot. The values themselves fit in u16 (kernel
 # struct field width) and rarely exceed ~1000, but the slot width is
 # i64, not u16.
 #
@@ -202,11 +235,15 @@ fn tty_winsize(fd, out_rows, out_cols) {
     return 0;
 }
 
-# Is `fd` an open TTY? Returns 1 if yes, 0 otherwise. Implemented as
-# the cheapest TTY-property syscall: TIOCGWINSZ succeeds only on
-# TTYs, so its return code is the same signal libc isatty(3) returns
-# (via the same ioctl path on Linux). The 8-byte winsize buffer is
-# stack-allocated and discarded; this fn does not read its contents.
+# Is `fd` an open TTY? Returns 1 if yes, 0 otherwise — a strict 1/0
+# predicate, never a leaked errno. Implemented as the cheapest
+# TTY-property syscall: TIOCGWINSZ succeeds only on a TTY. This agrees
+# with libc isatty(3) in practice on Linux, though it is NOT the same
+# mechanism — glibc's isatty(3) probes via TCGETS (tcgetattr); both
+# ioctls succeed exactly on TTYs, so the verdicts match. The 8-byte
+# winsize buffer is stack-allocated and discarded; this fn does not
+# read its contents (see `tty_winsize` for the variant on the same
+# TIOCGWINSZ path that returns the dimensions).
 #
 # v0.5.3 — added for anuenue M6 color-mode negotiation, which
 # previously overloaded `tty_winsize` with dummy out pointers as a
@@ -222,6 +259,12 @@ fn tty_isatty(fd) {
 # that delivers them. Returns the signalfd, or -1 on failure (caller
 # should degrade gracefully — falling back to no-signal-handling is
 # usually preferable to refusing to launch).
+#
+# The SIG_BLOCK installed here persists on the thread until explicitly
+# undone — closing the returned fd does NOT unblock the signals. Pair
+# every successful call with `tty_close_signalfd(fd, sigmask)` on the
+# teardown path (including the SIGINT/SIGTERM exit path) to close the
+# fd and restore the prior signal mask.
 #
 # `sigmask` is a single u64 representing a Linux sigset_t (bit N set
 # = signal N+1 in the mask). Common values are exposed as constants:
@@ -243,8 +286,35 @@ fn tty_open_signalfd(sigmask) {
     # SIG_BLOCK = 0 (the `how` arg to sigprocmask)
     var rc = sys_sigprocmask(0, &mask, 0);
     if (rc < 0) { return 0 - 1; }
-    # signalfd(fd=-1, mask, flags=0) → new fd
-    return sys_signalfd(0 - 1, &mask, 0);
+    # signalfd(fd=-1, mask, SFD_CLOEXEC) → new fd. CLOEXEC so the
+    # signalfd does not leak across an execve — a consumer that takes
+    # over the screen and later spawns a child (editor shelling out,
+    # pager, $SHELL) must not hand this fd to it. SFD_CLOEXEC is the
+    # stdlib SfdFlag enum value (0x80000); same CLOEXEC discipline the
+    # stdlib's epoll/eventfd wrappers follow.
+    return sys_signalfd(0 - 1, &mask, SFD_CLOEXEC);
+}
+
+# Teardown counterpart to `tty_open_signalfd`: close `fd` and UNblock
+# the signals in `sigmask`, restoring the thread signal mask that open
+# left modified. Closing the fd alone is not enough — the SIG_BLOCK
+# would otherwise persist and the consumer's signals stay silently
+# blocked after its UI exits (e.g. a parent that resumes once the TUI
+# returns). Pass the SAME `sigmask` that was passed to
+# `tty_open_signalfd`.
+#
+# The fd is closed unconditionally (best-effort); the return reflects
+# the mask restore — 0 on success, -1 if sigprocmask fails. v0.7.0 —
+# added so the open primitive isn't frozen at v1.0 without its teardown
+# counterpart (chakshu's signalfd-driven exit is the first consumer).
+fn tty_close_signalfd(fd, sigmask) {
+    file_close(fd);
+    var mask[8];
+    var i = 0;
+    while (i < 8) { store8(&mask + i, 0); i = i + 1; }
+    store64(&mask, sigmask);
+    # SIG_UNBLOCK = 1 (the `how` arg to sigprocmask)
+    return sys_sigprocmask(1, &mask, 0);
 }
 
 #endif

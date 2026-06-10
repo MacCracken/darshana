@@ -4,6 +4,117 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] — pre-freeze hardening & API-reshaping sweep
+
+A deep hardening / refactor / optimization / security review ahead of
+the v1.0 API freeze, run as a multi-agent review (66 findings → 25
+confirmed after adversarial verification). The guiding question was
+"would we regret freezing this as-is?", so this cut deliberately
+includes **breaking** changes to the public surface — fixing an API
+wart is cheap now and needs a major bump after the freeze. The four
+sibling consumers (cyim 1.7.1, chakshu 0.6.1, bannermanor, anuenue
+0.7.0) are all coordinatable; each breaking change's blast radius is
+one or two mechanical edits (see *Consumer coordination* below).
+
+### Breaking
+
+- **`tty_cooked(fd)` → `tty_cooked()`** (zero-arg). The fd parameter
+  advertised a per-fd restore the single saved-state slot can't deliver
+  (`tty_raw(0)` + `tty_cooked(1)` would have written fd 0's termios onto
+  fd 1). `tty_raw` now records the owning fd (`_tty_raw_fd`);
+  `tty_cooked()` restores onto it; a second concurrent `tty_raw` on a
+  *different* fd is refused with -1 rather than silently stranding the
+  first. All consumers already called `tty_cooked(0)`, so the zero-arg
+  form preserves their semantics. ADR-0002 amended.
+- **`tty_itoa` → `tty_dec_buf`**, return harmonized from digit-count to
+  the **new write position**. The old name was a generic misnomer and
+  the digit-count return was the lone odd-one-out in the `_buf` family
+  (every other `_buf` composer returns the new position) — a documented
+  footgun. Scratch buffer widened 20→24 (i64 is ≤20 decimal digits).
+- **`tty_clear_to_end` → `tty_clear_to_eos`** (end-of-screen), to
+  parallel `tty_clear_to_eol` (end-of-line) so the extent is explicit
+  at the call site. Emitted bytes unchanged (still CSI J).
+- **`tty_apply_raw_flags` → `_tty_apply_raw_flags`** (privatized). It
+  bakes in darshana's specific raw-mode mask and is reached only through
+  `tty_raw`; no consumer calls it directly. Dropped from the public
+  contract (`scripts/smoke.sh`); still reachable by same-unit tests.
+
+### Added
+
+- **`tty_close_signalfd(fd, sigmask)`** — the teardown counterpart to
+  `tty_open_signalfd`. The open call's `SIG_BLOCK` was irreversible
+  within darshana (closing the fd alone doesn't unblock); this closes
+  the fd and restores the signal mask. Step 5 of the ADR-0002 teardown
+  sequence; chakshu's signalfd-driven exit is the first consumer.
+- **`tty_move` coordinate bounds** — rejects coordinates outside
+  [1, 65535] with -1 before emitting (fail-before-emit, matching
+  `tty_sgr` / `tty_fg_rgb`), giving `tty_move` the -1 return it lacked.
+
+### Security
+
+- **`tty_open_signalfd` now opens with `SFD_CLOEXEC`** so the signalfd
+  doesn't leak across an execve — a consumer that takes over the screen
+  and later spawns a child (editor shelling out, pager, `$SHELL`) must
+  not hand it the fd.
+- **`tty_move` stack-buffer sizing** — the compose buffer was `buf[32]`
+  but two max-width decimal fields total 44 bytes; resized to `buf[44]`
+  so a large coordinate cannot overrun the stack (the new clamp also
+  prevents this — defense in depth).
+- **CI security scan** gained a command-exec-sink check (`sys_system` /
+  `sys_exec*` / `system(`); darshana is syscall-only and must never
+  spawn processes.
+
+### Changed / Fixed
+
+- **`tests/pty.tcyr` now runs in CI.** The v0.6.0 harness was never
+  executed by CI (the Test step ran only `tests/darshana.tcyr`); a
+  dedicated step runs it, warning if a `SKIP pty:` token shows the
+  runner degraded.
+- **`scripts/smoke.sh` surface check** — added the missing
+  `tty_cursor_up` / `tty_cursor_down` (unchecked for several releases)
+  and a bidirectional self-audit that fails if any public `fn tty_*` /
+  `tio_*` in dist is absent from `required_syms`, so the contract list
+  can never silently lag the shipped surface again.
+- **`tests/pty.tcyr` hardening** — grep-able `SKIP pty:` tokens on every
+  skip branch; the OPOST/ONLCR round-trip drains now *fail* (not
+  silently skip) on a zero-byte read; added fd-1 capture for
+  `tty_fg_rgb` / `tty_bg_rgb`, a deterministic non-TTY `tty_isatty`
+  assertion, an ONLCR sanity check, and a single-raw-fd-model test.
+- **`tests/darshana.tcyr`** — added a `TIO_BUF_SIZE == 60` drift guard
+  (the constant must track the `[60]` array literals), `tty_move`
+  rejection assertions, and the `tty_close_signalfd` live path.
+- **Docstring / doc accuracy** — `src/main.cyr` no longer enumerates a
+  stale public-symbol list (points at `scripts/smoke.sh` as
+  authoritative) and records the naming + return conventions; fixed
+  `tty_sgr`'s reference to a non-existent "TtyFgColor enum"; softened
+  `tty_isatty`'s isatty(3)-parity claim; documented `tty_winsize` as the
+  lone caller-memory-write surface; refreshed the roadmap's stale
+  "256-color/truecolor out of scope" bullet (those shipped v0.3.5–0.5.3).
+
+### Removed
+
+- **`tests/darshana.bcyr` / `tests/darshana.fcyr`** — phantom bench/fuzz
+  stubs that were never executed (`cyrius fuzz` reads `fuzz/*.fcyr`, not
+  `tests/`) and implied coverage that didn't exist. The emitter surface
+  is boundary-tested in `darshana.tcyr` and byte-verified in `pty.tcyr`.
+
+### Consumer coordination (follow-up)
+
+The breaking changes need a coordinated dep bump to darshana 0.7.0 plus
+these call-site edits (prepared in the sibling working trees):
+
+- **cyim**: `tty_cooked(0)` → `tty_cooked()` (`src/main.cyr`,
+  `src/tty.cyr`); `tty_itoa` → `tty_dec_buf` at `src/render.cyr`
+  (`var nd = tty_dec_buf(...) - pos` keeps the digit count `pos` and
+  `visible` advance by) + `tests/tty.tcyr`; and — caught by an
+  exhaustive re-grep the per-finding blast-radius missed —
+  `tty_apply_raw_flags` → `_tty_apply_raw_flags` in `tests/tty.tcyr`,
+  which calls the now-private helper directly (white-box, first-party).
+- **chakshu**: `tty_cooked(0)` → `tty_cooked()` (`src/tui.cyr`);
+  `tty_clear_to_end` → `tty_clear_to_eos` (×3, `src/tui.cyr`);
+  optionally adopt `tty_close_signalfd` in its exit teardown.
+- **anuenue / bannermanor**: dep bump only — no changed call-sites.
+
 ## [0.6.0] — in-repo PTY harness (soak-window cut)
 
 The first of the two soak-window cuts (roadmap §"Soak-window cuts").

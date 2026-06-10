@@ -4,12 +4,31 @@
 # from cyrius.cyml directly and bundles termios/ansi/cursor into
 # dist/darshana.cyr — this file is not part of the dist bundle.
 #
-# Public symbols (preserved from cyim/src/tty.cyr donor):
-#   termios.cyr  — TIO_*, tio_load32/store32, tty_apply_raw_flags,
-#                  tty_raw, tty_cooked
-#   ansi.cyr     — tty_alt_enter/leave, tty_clear,
-#                  tty_cursor_hide/show/home
-#   cursor.cyr   — tty_itoa, tty_move
+# Public surface: the authoritative list is `scripts/smoke.sh`
+# (required_syms / required_flags), enforced against dist on every CI
+# run; `dist/darshana.cyr` is the shipped artifact. This comment does
+# NOT re-list every symbol — that enumeration drifted pre-0.7.0 (it
+# still named the now-private `tty_apply_raw_flags` and the renamed
+# `tty_itoa`). Modules by concern:
+#   termios.cyr  — termios raw/cooked, winsize, isatty, signalfd, TIO_*
+#   ansi.cyr     — alt-screen / clear / cursor-visibility / SGR color
+#   cursor.cyr   — tty_dec_buf (decimal formatter), cursor positioning
+#
+# Naming conventions (frozen at v1.0):
+#   tty_*  public functions        tio_*  termios LE field codec
+#   TIO_*  termios bit flags        TTY_*  darshana-defined constants
+#   TIOC*  raw kernel ioctl nums    _*     private-by-convention
+#                                          (in the bundle, not the API)
+#
+# Return conventions across the public surface:
+#   • side-effecting ops (tty_raw/cooked, tty_winsize, tty_move,
+#     tty_sgr, tty_fg_rgb/bg_rgb, ...) — 0 on success, -1 on
+#     failure/out-of-range reject.
+#   • `_buf` composers (tty_dec_buf, tty_sgr_buf, tty_fg_rgb_buf,
+#     tty_bg_rgb_buf, tty_sgr_reset_buf, tty_fg_256_buf) — the new
+#     write position, or -1 on out-of-range input.
+#   • predicates / fd openers — tty_isatty returns 1/0;
+#     tty_open_signalfd returns an fd (>= 0) or -1.
 
 include "src/termios.cyr"
 include "src/ansi.cyr"

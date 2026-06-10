@@ -79,6 +79,22 @@ jobs:
         # discovery surface entirely.
         run: cyrius test tests/darshana.tcyr
 
+      - name: Test (PTY harness)
+        # tests/pty.tcyr is NOT reached by the explicit single-file step
+        # above (and bare `cyrius test` auto-discovery is unreliable —
+        # see the rationale on the previous step), so without its own
+        # step the v0.6.0 syscall + fd-1 escape coverage never runs in
+        # CI. ubuntu-latest exposes /dev/ptmx, so the harness runs its
+        # full assertion set here. The harness is skip-clean by design;
+        # a 'SKIP pty:' token means the runner degraded (no pty / blocked
+        # ioctl) — surfaced as a warning, not a hard failure.
+        run: |
+          out=$(cyrius test tests/pty.tcyr)
+          echo "$out"
+          if echo "$out" | grep -q 'SKIP pty:'; then
+            echo "::warning::pty.tcyr ran degraded (SKIP token present) — PTY coverage incomplete on this runner"
+          fi
+
       - name: Project smoke (scripts/smoke.sh)
         run: bash scripts/smoke.sh
 
@@ -152,6 +168,19 @@ jobs:
             echo "  The ioctl/TCGETS/TCSETS arm is Linux-specific; macOS BSD"
             echo "  termios layout differs. Don't drop the gate without an"
             echo "  ADR documenting cross-platform termios handling."
+            FAIL=1
+          fi
+
+          # No command-exec sinks. darshana is a syscall-only primitive
+          # library (ioctl + read/write); a shell-exec sink (sys_system,
+          # exec*, or a raw execve syscall) would be both out of charter
+          # and a command-injection surface. The CLAUDE.md "no
+          # sys_system with unsanitized input" rule, enforced as "none
+          # at all" since darshana has no business spawning processes.
+          exec_hits=$(grep -rnE '\bsys_system\b|\bsys_exec[a-z]*\b|\bsystem\s*\(' src/ 2>/dev/null || true)
+          if [ -n "$exec_hits" ]; then
+            echo "FAIL: command-exec sink in src/ (darshana is syscall-only, must not spawn processes)"
+            echo "$exec_hits"
             FAIL=1
           fi
 

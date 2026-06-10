@@ -41,6 +41,7 @@ var PTY_O_NONBLOCK   = 0x800;
 var PTY_TIOCGPTN     = 0x80045430;  # _IOR('T',0x30,uint) — slave number
 var PTY_TIOCSPTLCK   = 0x40045431;  # _IOW('T',0x31,int)  — (un)lock slave
 var PTY_TIOCSWINSZ   = 0x5414;      # set window size
+var PTY_ONLCR        = 0x4;         # c_oflag: map \n -> \r\n on output
 
 # Sleep ~1ms. Used between non-blocking master reads so the drain loop
 # yields the CPU instead of busy-spinning while the kernel moves bytes
@@ -103,6 +104,19 @@ fn _pty_expect(fd, want, want_len) {
     return 1;
 }
 
+# Emit a grep-able skip marker to stdout. Every branch that bails
+# because the kernel denied a pty step prints one of these, so a
+# degraded run (sandbox / seccomp / no devpts) is VISIBLY distinct
+# from a fully-green run instead of silently reporting "0 passed". CI
+# greps for "SKIP pty:" and annotates a warning. Skip markers are NOT
+# assertions — they neither pass nor fail the suite.
+fn _pty_skip(reason) {
+    syscall(1, 1, "SKIP pty: ", 10);
+    syscall(1, 1, reason, strlen(reason));
+    syscall(1, 1, "\n", 1);
+    return 0;
+}
+
 #endif
 
 fn main() {
@@ -132,17 +146,17 @@ fn main() {
             var ptn = tio_load32(&ptnbuf, 0);
 
             # Build "/dev/pts/<ptn>\0" — reuse darshana's own decimal
-            # formatter (tty_itoa) for the number.
+            # formatter (tty_dec_buf) for the number.
             var path[32];
             store8(&path + 0, 0x2f); store8(&path + 1, 0x64);   # '/' 'd'
             store8(&path + 2, 0x65); store8(&path + 3, 0x76);   # 'e' 'v'
             store8(&path + 4, 0x2f); store8(&path + 5, 0x70);   # '/' 'p'
             store8(&path + 6, 0x74); store8(&path + 7, 0x73);   # 't' 's'
             store8(&path + 8, 0x2f);                            # '/'
-            # tty_itoa returns digits written, not the end offset —
-            # the NUL goes after the prefix (9) plus that many digits.
-            var pdig = tty_itoa(&path, 9, ptn);
-            store8(&path + 9 + pdig, 0);                        # NUL
+            # tty_dec_buf returns the new end position, so the NUL goes
+            # exactly there.
+            var pend = tty_dec_buf(&path, 9, ptn);
+            store8(&path + pend, 0);                            # NUL
 
             var slave = sys_open(&path, PTY_O_RDWR | PTY_O_NOCTTY, 0);
             if (slave >= 0) {
@@ -153,6 +167,16 @@ fn main() {
                 # not — it depends on the runner having a tty).
                 test_group("pty.tcyr — tty_isatty (live slave)");
                 assert_eq(tty_isatty(slave), 1, "slave fd is a TTY");
+                # Deterministic negative half of the predicate (F32):
+                # /dev/null is never a TTY, so tty_isatty must return 0.
+                # Pairs with the guaranteed-positive slave above to pin
+                # both arms of the 1/0 contract in one place (the fd-0
+                # test in darshana.tcyr is runner-dependent).
+                var dn = sys_open("/dev/null", PTY_O_RDWR, 0);
+                if (dn >= 0) {
+                    assert_eq(tty_isatty(dn), 0, "/dev/null is not a TTY (isatty=0)");
+                    file_close(dn);
+                }
 
                 # ----- tty_winsize set/get round-trip ----------------
                 # Set a known geometry on the slave, read it back via
@@ -225,17 +249,20 @@ fn main() {
                     store8(&rmsg + 2, 0x42);   # 'B'
                     file_write(slave, &rmsg, 3);
                     var rrd[8];
-                    var rgot = _pty_drain(master, &rrd, 3, 200);
-                    if (rgot > 0) {
-                        assert_eq(rgot, 3, "raw: master read 3 bytes (no CRLF)");
-                        assert_eq(load8(&rrd + 0), 0x41, "raw byte 0 = 'A'");
-                        assert_eq(load8(&rrd + 1), 0x0a, "raw byte 1 = '\\n' (untranslated)");
-                        assert_eq(load8(&rrd + 2), 0x42, "raw byte 2 = 'B'");
-                    }
+                    # Once we hold a real pty slave, the round-trip MUST
+                    # complete — a zero-byte drain is a regression, not a
+                    # skip, so these assert unconditionally. The 1000-iter
+                    # (≈1s) cap keeps it unhangable while giving a loaded
+                    # CI runner ample margin to flush slave→master.
+                    var rgot = _pty_drain(master, &rrd, 3, 1000);
+                    assert_eq(rgot, 3, "raw: master read 3 bytes (no CRLF)");
+                    assert_eq(load8(&rrd + 0), 0x41, "raw byte 0 = 'A'");
+                    assert_eq(load8(&rrd + 1), 0x0a, "raw byte 1 = '\\n' (untranslated)");
+                    assert_eq(load8(&rrd + 2), 0x42, "raw byte 2 = 'B'");
 
                     # ----- restore -----------------------------------
                     test_group("pty.tcyr — tty_cooked restores termios");
-                    assert_eq(tty_cooked(slave), 0, "tty_cooked succeeds");
+                    assert_eq(tty_cooked(), 0, "tty_cooked succeeds");
                     syscall(PTY_SYS_IOCTL, slave, TCGETS, &rest);
                     var diff = 0;
                     var ci = 0;
@@ -254,20 +281,25 @@ fn main() {
                     # bytes — the mirror image of the raw assertion above,
                     # confirming the restore re-enabled post-processing.
                     test_group("pty.tcyr — cooked output round-trip (CRLF)");
+                    # The CRLF expectation is only valid if the restored
+                    # cooked termios actually has OPOST|ONLCR — assert that
+                    # against the snapshot so the test justifies its own
+                    # expectation rather than assuming the pty default.
+                    assert_eq(tio_load32(&snap, 4) & (TIO_OPOST | PTY_ONLCR),
+                        TIO_OPOST | PTY_ONLCR,
+                        "snap oflag has OPOST|ONLCR (justifies CRLF)");
                     var cmsg[3];
                     store8(&cmsg + 0, 0x41);   # 'A'
                     store8(&cmsg + 1, 0x0a);   # '\n'
                     store8(&cmsg + 2, 0x42);   # 'B'
                     file_write(slave, &cmsg, 3);
                     var crd[8];
-                    var cgot = _pty_drain(master, &crd, 4, 200);
-                    if (cgot > 0) {
-                        assert_eq(cgot, 4, "cooked: master read 4 bytes (CRLF)");
-                        assert_eq(load8(&crd + 0), 0x41, "cooked byte 0 = 'A'");
-                        assert_eq(load8(&crd + 1), 0x0d, "cooked byte 1 = '\\r' (injected)");
-                        assert_eq(load8(&crd + 2), 0x0a, "cooked byte 2 = '\\n'");
-                        assert_eq(load8(&crd + 3), 0x42, "cooked byte 3 = 'B'");
-                    }
+                    var cgot = _pty_drain(master, &crd, 4, 1000);
+                    assert_eq(cgot, 4, "cooked: master read 4 bytes (CRLF)");
+                    assert_eq(load8(&crd + 0), 0x41, "cooked byte 0 = 'A'");
+                    assert_eq(load8(&crd + 1), 0x0d, "cooked byte 1 = '\\r' (injected)");
+                    assert_eq(load8(&crd + 2), 0x0a, "cooked byte 2 = '\\n'");
+                    assert_eq(load8(&crd + 3), 0x42, "cooked byte 3 = 'B'");
                 }
 
                 # ----- escape-emitting surface via fd-1 capture ------
@@ -294,7 +326,7 @@ fn main() {
                     var e_clr  = _pty_expect(master, "\x1b[2J", 4);
                     tty_clear_to_eol();
                     var e_ceol = _pty_expect(master, "\x1b[K", 3);
-                    tty_clear_to_end();
+                    tty_clear_to_eos();
                     var e_cend = _pty_expect(master, "\x1b[J", 3);
                     tty_cursor_hide();
                     var e_chid = _pty_expect(master, "\x1b[?25l", 6);
@@ -312,18 +344,25 @@ fn main() {
                     var e_sgr  = _pty_expect(master, "\x1b[31m", 5);
                     tty_sgr_reset();
                     var e_rst  = _pty_expect(master, "\x1b[0m", 4);
+                    # Direct (fd-1) truecolor writers — only their _buf
+                    # twins + rejection paths are unit-tested; this drives
+                    # the real write(2) + _ansi_emit_u8's 3-digit branch.
+                    tty_fg_rgb(255, 0, 128);
+                    var e_fgr  = _pty_expect(master, "\x1b[38;2;255;0;128m", 17);
+                    tty_bg_rgb(1, 22, 200);
+                    var e_bgr  = _pty_expect(master, "\x1b[48;2;1;22;200m", 16);
 
                     # Restore stdout BEFORE any assert / test_group.
                     syscall(PTY_SYS_DUP2, saved1, 1);
                     file_close(saved1);
-                    tty_cooked(slave);
+                    tty_cooked();
 
                     test_group("pty.tcyr — escape emission (fd-1 capture)");
                     assert_eq(e_alte, 1, "tty_alt_enter emits CSI ?1049h");
                     assert_eq(e_altl, 1, "tty_alt_leave emits CSI ?1049l");
                     assert_eq(e_clr,  1, "tty_clear emits CSI 2J");
                     assert_eq(e_ceol, 1, "tty_clear_to_eol emits CSI K");
-                    assert_eq(e_cend, 1, "tty_clear_to_end emits CSI J");
+                    assert_eq(e_cend, 1, "tty_clear_to_eos emits CSI J");
                     assert_eq(e_chid, 1, "tty_cursor_hide emits CSI ?25l");
                     assert_eq(e_csho, 1, "tty_cursor_show emits CSI ?25h");
                     assert_eq(e_chom, 1, "tty_cursor_home emits CSI H");
@@ -332,19 +371,37 @@ fn main() {
                     assert_eq(e_dn,   1, "tty_cursor_down(4) emits CSI 4B");
                     assert_eq(e_sgr,  1, "tty_sgr(31) emits CSI 31m");
                     assert_eq(e_rst,  1, "tty_sgr_reset emits CSI 0m");
+                    assert_eq(e_fgr,  1, "tty_fg_rgb(255,0,128) emits CSI 38;2;255;0;128m");
+                    assert_eq(e_bgr,  1, "tty_bg_rgb(1,22,200) emits CSI 48;2;1;22;200m");
                 }
 
+                # ----- single-raw-fd model (F01a) --------------------
+                # tty_cooked() is zero-arg and restores the fd tty_raw
+                # saved. A second tty_raw on a DIFFERENT fd while already
+                # raw is refused with -1, not silently honored — the lone
+                # saved-state slot can only restore one fd. Runs last
+                # (slave is restored + closed right after).
+                test_group("pty.tcyr — single-raw-fd model");
+                assert_eq(tty_raw(slave), 0, "tty_raw(slave) enters raw");
+                assert_eq(tty_raw(slave), 0, "tty_raw(slave) again idempotent (same fd)");
+                assert_eq(tty_raw(master), 0 - 1, "tty_raw(master) refused while slave raw");
+                assert_eq(tty_cooked(), 0, "tty_cooked() restores the saved fd");
+                assert_eq(tty_cooked(), 0, "tty_cooked() again is a no-op");
+
                 file_close(slave);
+            } else {
+                _pty_skip("slave /dev/pts open blocked");
             }
-            # else: slave open blocked (sandbox) — skip clean.
+        } else {
+            _pty_skip("TIOCSPTLCK/TIOCGPTN ioctl blocked");
         }
-        # else: TIOCSPTLCK / TIOCGPTN blocked — skip clean.
         file_close(master);
     } else {
         # /dev/ptmx unavailable (seccomp / minimal container). The
-        # consumer-side PTY smoke covers the live path; don't fake a
-        # pass, but record that the harness ran and chose to skip.
-        assert_eq(1, 1, "pty harness skipped — /dev/ptmx unavailable");
+        # consumer-side PTY smoke covers the live path; emit a skip
+        # marker (not a faked-pass assertion) so the degraded run is
+        # visible to CI's SKIP grep instead of silently green.
+        _pty_skip("/dev/ptmx unavailable");
     }
 
 #endif

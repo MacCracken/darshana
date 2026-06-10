@@ -5,11 +5,15 @@
 # wezterm, the Linux console) regardless of the host OS, so they're
 # NOT inside the CYRIUS_TARGET_LINUX gate that termios.cyr uses.
 #
-# Each helper writes a fixed escape sequence to fd 1 (stdout) directly
-# via `syscall(1, ...)`. No buffering — consumers that want frame-
-# coalesced writes should compose into their own buf and call write(2)
-# once at frame end. (Phase 3 may add buf-targeting variants if a
-# pattern emerges.)
+# Each fixed-escape helper writes its sequence to fd 1 (stdout)
+# directly via `syscall(1, ...)` and returns 0 unconditionally —
+# best-effort: the write(2) result is not checked. A 3–8 byte escape
+# to a TTY does not partial-write in practice, and a consumer mid-
+# render has no meaningful recovery from a failed escape, so the
+# emitters keep their call sites clean rather than thread an error.
+# The `_buf` composers in this file (and `tty_dec_buf` in cursor.cyr)
+# are the batching answer for frame-coalesced writes: compose into a
+# caller buffer and issue one write(2) at frame end.
 
 # Switch to the alt-screen buffer. CSI ?1049h. Saves the primary
 # screen state; the consumer's UI lives on the alt-screen and the
@@ -45,8 +49,14 @@ fn tty_clear_to_eol() {
 # Clear from cursor to end of screen. CSI J. Used at the bottom of a
 # frame to wipe rows that were populated last tick but not this one
 # (e.g., process count dropped between frames).
-# v0.3.0 — promoted from chakshu's _tui_clear_to_end.
-fn tty_clear_to_end() {
+#
+# Named `_to_eos` (end-of-screen) to parallel `tty_clear_to_eol`
+# (end-of-line) — the suffix names the extent at the call site, so a
+# consumer can't misread a full-screen-tail wipe as a line wipe.
+# v0.3.0 — promoted from chakshu's `_tui_clear_to_end`; renamed from
+# `tty_clear_to_end` in v0.7.0 to remove that ambiguity before the
+# v1.0 freeze (emitted bytes unchanged — still CSI J).
+fn tty_clear_to_eos() {
     syscall(1, 1, "\x1b[J", 3);
     return 0;
 }
@@ -109,7 +119,7 @@ var TTY_FG_BRIGHT_CYAN    = 96;
 var TTY_FG_BRIGHT_WHITE   = 97;
 
 # Emit `CSI <code>m` — the underlying SGR primitive. Most consumers
-# pass a TtyFgColor enum value (30–37 / 90–97), but any 1–3 digit
+# pass a `TTY_FG_*` constant (30–37 / 90–97), but any 1–3 digit
 # decimal code works; this is the door for future bold (1) /
 # underline (4) / bg (40–47, 100–107) helpers without growing the
 # fn surface.
