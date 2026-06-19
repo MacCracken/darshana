@@ -4,6 +4,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.1] — toolchain pin bump
+
+Toolchain-only release. No source or public-API changes.
+
+### Changed
+
+- **Cyrius pin `6.1.24` → `6.2.22`** in `cyrius.cyml [package].cyrius`.
+  The manifest pin had drifted stale behind the installed wrapper
+  (already on 6.2.22); this catches the manifest back up. `dist/darshana.cyr`
+  regenerated only to stamp the new `# Version:` header — module bodies
+  are byte-identical. Consumers (cyim 1.7.1, chakshu 0.6.1, bannermanor,
+  anuenue 0.7.0) unaffected.
+
 ## [0.7.0] — pre-freeze hardening & API-reshaping sweep
 
 A deep hardening / refactor / optimization / security review ahead of

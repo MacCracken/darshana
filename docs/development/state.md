@@ -5,6 +5,12 @@
 
 ## Version
 
+**0.7.1** — *open cycle*. Toolchain-only bump `6.1.24` → `6.2.22`
+(manifest pin had drifted stale behind the installed wrapper). No
+source or API change; `dist/darshana.cyr` regenerated only to stamp the
+new `# Version:` header. Consumers (cyim 1.7.1, chakshu 0.6.1,
+bannermanor, anuenue 0.7.0) unaffected.
+
 **0.7.0** — *open cycle*. Pre-freeze hardening / refactor / security /
 freeze-readiness sweep (multi-agent review: 66 findings → 25 confirmed).
 Deliberately includes **breaking** changes — cheap now, major-bump-
@@ -90,10 +96,11 @@ ANSI helpers. Driven by chakshu's M2 Slice D needs (dynamic resize).
 
 ## Toolchain
 
-- **Cyrius pin**: `6.1.24` (in `cyrius.cyml [package].cyrius`, via
+- **Cyrius pin**: `6.2.22` (in `cyrius.cyml [package].cyrius`, via
   `${file:VERSION}` indirection on the package version). Bumped from
-  `6.0.1` at v0.5.4 (`5.10.20` → `6.0.1` was v0.3.5) — caught up to
-  the ecosystem-wide cycc.
+  `6.1.24` at v0.7.1 (manifest pin had drifted stale behind the
+  installed wrapper again); `6.0.1` → `6.1.24` was v0.5.4 (`5.10.20` →
+  `6.0.1` was v0.3.5) — caught up to the ecosystem-wide cycc.
 
 ## Source
 
