@@ -4,6 +4,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-06-22
+
+### Changed
+
+- **cyrius toolchain pin `6.2.22` → `6.2.36`** — aligns with the latest cyrius (picks up the
+  6.2.31–6.2.36 agnos-stdlib fixes: `io.cyr` file-lock SIGILL-stub fix, agnos mutex,
+  `time_unix`#46). `dist/darshana.cyr` regenerated at the new pin; no source/API change.
+
 ## [0.8.0] — 2026-06-22
 
 ### Added
