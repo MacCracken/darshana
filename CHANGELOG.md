@@ -4,6 +4,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-22
+
+### Added
+
+- **`tty_winsize` on AGNOS** (`src/termios.cyr`) — a `#ifdef CYRIUS_TARGET_AGNOS`
+  peer to the Linux `ioctl(TIOCGWINSZ)` variant. agnos has no `ioctl`, so the
+  kernel instead exposes the live framebuffer console grid via its new
+  `winsize`#60 syscall, which returns the two counts packed in one i64
+  (`high 16 = cols`, `low 16 = rows`) or `-1` if the framebuffer isn't up. The
+  agnos branch unpacks that and writes rows + cols through the caller's
+  out-pointers, preserving the Linux `tty_winsize(fd, out_rows, out_cols)` → 0/-1
+  contract exactly (`fd` accepted for parity but ignored — the console grid is a
+  global FB property, not per-fd). This lets agnos consumers (kii, chakshu) call
+  one `tty_winsize` and size to the real console instead of a hardcoded 80×24,
+  the platform branch invisible at the call site. Raw `syscall(60)` is used
+  directly (no cyrius stdlib `sys_*` wrapper needed — the number is unambiguous
+  inside its own target's `#ifdef`). Linux behavior is unchanged. Requires
+  agnos ≥ **1.45.13** (the `winsize`#60 cut).
+
 ## [0.7.1] — toolchain pin bump
 
 Toolchain-only release. No source or public-API changes.
