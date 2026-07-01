@@ -4,6 +4,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-07-01
+
+AGNOS parity for the TTY-mode primitives. Completes the agnos branch so
+consumers (thoth / chakshu / cyim / kii) stay platform-blind — the same
+`#ifdef CYRIUS_TARGET_AGNOS` peer pattern already shipped for `tty_winsize`.
+
+### Added
+
+- **agnos peers for `tty_isatty` / `tty_raw` / `tty_cooked`** (`src/termios.cyr`).
+  agnos has no termios (no `ioctl` TCGETS/TCSETS/TIOCGWINSZ): `tty_isatty`
+  reports a tty when the framebuffer console-grid syscall (`winsize`#60)
+  succeeds (mirroring the Linux TIOCGWINSZ mechanism); `tty_raw` returns `-1`
+  (no raw-mode toggle — consumers fall back to their line REPL); `tty_cooked`
+  is a no-op success. No Linux-path or API change; `dist/darshana.cyr`
+  regenerated.
+
 ## [0.8.1] — 2026-06-22
 
 ### Changed
