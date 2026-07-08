@@ -4,6 +4,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-07-08
+
+AGNOS parity for the signalfd path. Completes the agnos branch so consumers
+(chakshu) stay platform-blind — the same `#ifdef CYRIUS_TARGET_AGNOS` peer
+pattern already shipped for `tty_winsize` (0.8.0) and `tty_isatty` / `tty_raw` /
+`tty_cooked` (0.8.2). This was the last Linux-only surface in `src/termios.cyr`;
+chakshu's `--agnos` build failed to link on `TTY_SIGMASK_EXIT` before it.
+
+### Added
+
+- **agnos peers for `tty_open_signalfd` / `tty_close_signalfd` + the
+  `TTY_SIGMASK_EXIT` / `TTY_SIGMASK_WINCH` masks** (`src/termios.cyr`). mirshi
+  supervisor-emulates the signalfd path (`sigprocmask`#17 / `signalfd`#18), so
+  the agnos peers block/create via raw `syscall(17/18, ...)` inside the
+  agnos-only branch (the AGNOS_SYS_WINSIZE self-contained pattern — no cyrius
+  stdlib `sys_*` wrapper, avoiding the Linux↔agnos syscall-number-overlap
+  hazard). mirshi's signalfd is edge-triggered + non-blocking; consumers poll
+  it via `epoll_wait`#21 / `read`#5, exactly as the Linux peers are used.
+  **The mask VALUES differ from the Linux branch**: agnos/mirshi represent a
+  signal set as `1 << sig` (bit N = signal N), not Linux's `1 << (sig-1)`
+  sigset_t layout, so `TTY_SIGMASK_EXIT` = `0x8006` (bits 1,2,15) and
+  `TTY_SIGMASK_WINCH` = `0x10000000` (bit 28) — copying the Linux `0x4003` /
+  `0x08000000` would silently watch the wrong signals. No Linux-path or API
+  change; `dist/darshana.cyr` regenerated.
+
 ## [0.8.2] — 2026-07-01
 
 AGNOS parity for the TTY-mode primitives. Completes the agnos branch so
