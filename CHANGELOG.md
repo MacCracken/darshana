@@ -4,6 +4,54 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-08-23
+
+Behavior fix on aarch64-Linux. No public-API change; x86_64 and agnos codegen
+are unaffected.
+
+### Fixed
+
+- **aarch64-Linux issued the wrong syscall for every ioctl.** `src/termios.cyr`
+  defined `var SYS_IOCTL = 16` — the x86_64 number — inside the
+  `#ifdef CYRIUS_TARGET_LINUX` gate, which is arch-blind. That shadowed the
+  stdlib's arch-aware definition (`lib/syscalls_x86_64_linux.cyr:29` = 16,
+  `lib/syscalls_aarch64_linux.cyr:47` = 29) and darshana's value won, so
+  `cyrius build --aarch64` emitted `duplicate symbol 'SYS_IOCTL' redefined with
+  conflicting value (last definition wins)` and all five ioctl callsites
+  (`tty_raw`, `tty_cooked`, `tty_winsize` ×2, `tty_isatty`) issued syscall 16.
+  On aarch64-Linux 16 is **`fremovexattr`**, not `ioctl` — the TCGETS/TCSETS/
+  TIOCGWINSZ request code was reinterpreted as an xattr-name pointer, so raw
+  mode, cooked restore and window-size query would each have failed at runtime.
+
+  The carry-forward note flagged the renumbering as unverified; it is now
+  verified as **not** translated. The ELF aarch64 branch of the backend's
+  `ESYSXLAT` chain (`src/backend/aarch64/emit.cyr`) has no `16→29` row — its
+  x86→aarch64 compat sources are 0/1/2/3/4/7/9/10/11/12/22/39/41–55/60/72–75/
+  79/82/88/217/228/232/262/269/280 plus the 1049/1054 private aliases, and 16
+  is absent from that set — so an untranslated 16 reaches the native `svc`
+  unchanged. The compiler's "syscall not routed" warning is Mach-O-only, so
+  nothing flagged it beyond the duplicate-symbol line.
+
+  Fix: drop the local `var` and let the stdlib's arch-aware `SYS_IOCTL`
+  resolve. Verified in the emitted machine code — the five callsites now
+  materialize the immediate `29` on aarch64 (previously they loaded a `.bss`
+  global holding 16), and `29` is never an `ESYSXLAT` source number, so it
+  passes through to the native aarch64 `ioctl`. x86_64 still resolves 16.
+
+  `TCGETS` (0x5401), `TCSETS` (0x5402) and `TIOCGWINSZ` (0x5413) stay local and
+  are unchanged: both Linux targets share `asm-generic/ioctls.h` (x86_64's
+  `asm/ioctls.h` is a bare include of it), so the request codes are arch-stable,
+  and the stdlib does not define them — there is no shadowing to undo.
+
+  Latent rather than live: darshana ships x86_64-Linux + agnos and has no
+  aarch64 consumer today, so no released consumer was affected. Pre-dates
+  0.9.1 (reproduces at 0.9.0).
+
+### Changed
+
+- `dist/darshana.cyr` regenerated — carries the `src/termios.cyr` change plus
+  the new `# Version:` header stamp.
+
 ## [0.9.1] — 2026-08-23
 
 Toolchain-only release. No source or public-API changes.
