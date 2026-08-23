@@ -21,6 +21,40 @@ native `ioctl`). `TCGETS` / `TCSETS` / `TIOCGWINSZ` stay local —
 arch-stable via `asm-generic/ioctls.h` and not stdlib-defined. Latent,
 not live: no aarch64 consumer ships today. 199 assertions green.
 
+**1.0.0** — **shipped 2026-08-23. The API is frozen.** No code change from
+0.9.4 — emitted bytes, test results, and the dist module bodies are
+identical. What changed is the promise.
+
+[ADR 0003](../adr/0003-v1-api-freeze.md) enumerates the frozen surface in
+full rather than gesturing at it: all 29 functions and all 37 constants,
+the four things the freeze covers (names, arity, documented return
+contract, emitted bytes and constant values) and the three it does not
+(`_`-prefixed symbols, internal structure, additive platform coverage).
+It also records the post-1.0 semver policy and names the two
+known-imperfect things frozen in — `tio_load32`/`tio_store32` bounds-check
+nothing, and the single-raw-fd model has no public reset for a
+permanently stranded slot — so neither gets rediscovered as a surprise.
+
+CLAUDE.md gained three hard rules replacing the pre-1.0 latitude: a
+frozen-symbol break needs a major bump plus its own ADR; a new public
+symbol must join `scripts/smoke.sh`; a new syscall must join
+`scripts/syscall-audit.sh`. Its platform rule ("Linux-only at
+v0.1.0–v0.4.x") was five minor versions stale and wrong since the AGNOS
+peers landed — now Linux + AGNOS, macOS out of scope. `docs/adr/README.md`
+had read "_No ADRs yet_" since v0.1.0 with two ADRs on disk; it now
+indexes all three.
+
+**Registry promotion done in the same cut**: darshana's pre-1.0 row was
+removed from agnosticos `docs/development/planning/shared-crates.md`
+(Pre-1.0 21 → 20) and added to `docs/applications/libs/README.md` under
+OS & Infrastructure (29 → 30, total 89 → 90), per the graduation
+convention. Counts re-derived by counting live rows, not carried forward.
+
+**Open at the tag**: the five consumers are still on 0.7.1–0.9.0 dep
+pins. The two v0.9.3 breaks affect zero live call sites across all five
+trees, so this is sequencing rather than correctness — but the frozen
+surface is not yet one anything is compiled against.
+
 **0.9.4** — *open cycle*. **Pre-freeze documentation + audit cut — the last
 v1.0 blocker, now closed.** No behavior change; emitted bytes unchanged.
 
@@ -281,9 +315,10 @@ at v0.9.0 too) — upstream-stdlib shaped, not a darshana defect.
     - v0.7.1 / v0.8.1 / v0.9.1 — toolchain pin catch-ups ✓ shipped (6.2.22 / 6.2.36 / 6.5.35).
     - v0.9.2 — aarch64-Linux `SYS_IOCTL` shadow fix ✓ shipped. Cleared the 0.9.1 carry-forward: ESYSXLAT verified as *not* renumbering 16→29, so the hardcoded x86_64 number was a real defect, not a harmless one.
     - v0.9.3 — **P-1 audit / refactor / hardening / security sweep** ✓ shipped (this release). signalfd failure-path fix, `_buf` negative-`pos` rejection, contract-doc repair on the freeze surface, duplication pass, smoke/CI guards. Two breaking-but-correct fixes taken deliberately pre-freeze.
-    - v0.9.4 — **pre-freeze documentation + audit cut** ✓ shipped (this release). `docs/examples/raw_loop.cyr`, `docs/architecture/` 001+002, the per-symbol API audit (0 gaps), the syscall allowlist, and the fix for the conventions block that never shipped.
+    - v1.0.0 — **the API freeze** ✓ shipped (this release). ADR 0003 enumerates the 29 fns + 37 constants; CLAUDE.md carries the post-freeze rules.
+    - v0.9.4 — **pre-freeze documentation + audit cut** ✓ shipped. `docs/examples/raw_loop.cyr`, `docs/architecture/` 001+002, the per-symbol API audit (0 gaps), the syscall allowlist, and the fix for the conventions block that never shipped.
     - **Nothing is open before the freeze.** All five v1.0 criteria are met; v1.0.0 needs the consumer dep bumps, the freeze itself, and the registry promotion.
     - Shipped-cut detail lives in [`CHANGELOG.md`](../../CHANGELOG.md); [`roadmap.md`](roadmap.md) carries only what is still open.
-- M5 (v1.0.0) — **unblocked.** The ≥30-day consumer soak elapsed 2026-06-19; all five v1.0 criteria are met as of v0.9.4. What remains is the five consumer dep bumps, the freeze tag, and the shared-crates registry promotion — acts, not work items.
+- M5 (v1.0.0) — ✅ **shipped 2026-08-23.** All five v1.0 criteria met; the surface is frozen per ADR 0003. Still open, and tracked in [`roadmap.md`](roadmap.md): the five consumer dep bumps to a `1.x` tag, and the shared-crates registry promotion.
 
 [`roadmap.md`](roadmap.md) is forward-facing only — it now carries just the v0.9.4 cut, the v1.0.0 freeze, the out-of-scope boundaries, and the post-1.0 tracked items. Closed-milestone definitions were retired there at v0.9.3; the arc above is the surviving summary, and [`CHANGELOG.md`](../../CHANGELOG.md) is the full record.

@@ -12,7 +12,11 @@ Donor: [`cyim/src/tty.cyr`](https://github.com/MacCracken/cyim) (~207 lines, Lin
 
 ## Status
 
-**v0.9.2 — pre-1.0 hardening.** The donor port and the chakshu/anuenue-driven extensions have landed; the surface is in its v1.0 pre-freeze hardening window (see [`docs/development/roadmap.md`](docs/development/roadmap.md)). The TTY surface works on Linux and, as of v0.9.0, fully on AGNOS — every syscall-touching entry point (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) has a `#ifdef CYRIUS_TARGET_AGNOS` peer over the kernel's own syscalls (requires agnos ≥ 1.45.13), so consumers stay platform-blind on both targets.
+**v1.0.0 — stable. The API is frozen.** 29 functions and 37 constants, enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) and machine-checked on every CI run. Breaking any of them now requires a major bump; additive change (new symbols, new platform peers) stays a minor bump. Pin a `1.x` tag and take minor bumps without reading a diff.
+
+The TTY surface works on Linux and, since v0.9.0, fully on AGNOS — every syscall-touching entry point (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) has an `#ifdef CYRIUS_TARGET_AGNOS` peer over the kernel's own syscalls (requires agnos ≥ 1.45.13), so consumers stay platform-blind on both targets. macOS/BSD is deliberately out of scope.
+
+Start from [`docs/examples/raw_loop.cyr`](docs/examples/raw_loop.cyr) — the full raw-mode / alt-screen / signalfd / restore-on-every-exit-path shape, runnable.
 
 Consume it via `cyrius deps` against the `dist/darshana.cyr` bundle — no need to copy `cyim/src/tty.cyr` anymore.
 

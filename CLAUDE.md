@@ -61,11 +61,14 @@ cyrius test                          # run [build].test + tests/*.tcyr
 - Do not trust external data (file / network / args) without validation
 - Do not modify `lib/` files (vendored stdlib / dep symlinks)
 - Do not hardcode toolchain versions in CI YAML — `cyrius = "X.Y.Z"` in `cyrius.cyml` is the source of truth
+- **The public API is FROZEN as of v1.0.0.** Breaking any of the 29 functions or 37 constants enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) — name, arity, documented return contract, emitted bytes, or constant value — requires a **major** bump and its own ADR. Additive change (new symbols, new platform peers, internal refactors with identical output) stays a minor bump. `_`-prefixed symbols are not frozen. This replaces the pre-v1.0 posture under which breaking the surface was encouraged; that latitude is spent.
+- **Do not add a public symbol without adding it to `scripts/smoke.sh`** (`required_syms` / `required_flags`). The surface check is bidirectional — a public name in dist that the list omits fails CI. Internal helpers take a `_` prefix instead.
+- **Do not add a syscall without adding it to `scripts/syscall-audit.sh`.** That rule is an allowlist, not a denylist: anything unlisted fails, whether or not it looks dangerous.
 
 ## Domain rules (darshana-specific)
 
 - **Don't grow into a TUI framework.** Widgets, render loops, event/input dispatch belong in the consumer. darshana is the primitive layer.
-- **Linux-only at v0.1.0–v0.4.x.** Termios layout differs on macOS (BSD); add the macOS arm only when a real consumer needs it. Gate Linux-only code via `#ifdef CYRIUS_TARGET_LINUX`.
+- **Linux + AGNOS; macOS/BSD is out of scope.** Every syscall-touching entry point has had an `#ifdef CYRIUS_TARGET_AGNOS` peer since v0.9.0, so consumers stay platform-blind across both. Termios layout differs on macOS (BSD) — add that arm only when a real consumer needs it. Gate platform-specific code via `#ifdef CYRIUS_TARGET_LINUX` / `#ifdef CYRIUS_TARGET_AGNOS`, and keep the tokens *inside* their gate: `scripts/smoke.sh` and CI check this positionally, by line number.
 - **No FFI / libc / ncurses.** Same sovereign-stack rule as chakshu / cyim. termios is `syscall(SYS_IOCTL, fd, TCGETS|TCSETS, &buf)`; ANSI is `syscall(SYS_WRITE, 1, "\e[...", n)`. No `tcgetattr(3)`, no `tputs(3)`.
 - **Consumers drive the API.** Don't add knobs cyim/chakshu haven't asked for. The whole point of extracting cyim's tty.cyr was that chakshu's needs would shape the seams — listen to those needs, don't anticipate hypothetical ones.
 

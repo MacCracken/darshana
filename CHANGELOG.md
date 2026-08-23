@@ -4,6 +4,83 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-08-23
+
+**The API freeze.** No code change from v0.9.4 — the emitted bytes, the test
+results, and `dist/darshana.cyr`'s module bodies are identical. What changes is
+the promise: the surface stops moving.
+
+darshana began as ~207 lines of `cyim/src/tty.cyr`, extracted in May 2026 once
+chakshu became the second consumer needing the same machinery. It is now 29
+functions and 37 constants over Linux and AGNOS, consumed by five projects.
+
+### Added
+
+- **[ADR 0003 — The v1.0 API freeze](docs/adr/0003-v1-api-freeze.md).** Names
+  and enumerates the frozen surface rather than gesturing at it: all 29
+  functions and all 37 constants, in full, plus the four things the freeze
+  covers (names, arity, documented return contract, emitted bytes and constant
+  values) and the three it explicitly does not (`_`-prefixed symbols, internal
+  structure, additive platform coverage). Records the post-1.0 semver policy —
+  what counts as patch, minor, and major — and names the two known-imperfect
+  things being frozen in, so nobody re-discovers them as surprises: `tio_load32`
+  / `tio_store32` bounds-check nothing, and the single-raw-fd model has no
+  public reset for a permanently stranded slot.
+- **Three hard rules in CLAUDE.md**, replacing the pre-1.0 latitude: breaking a
+  frozen symbol needs a major bump and its own ADR; a new public symbol must be
+  added to `scripts/smoke.sh`; a new syscall must be added to
+  `scripts/syscall-audit.sh`.
+
+### Changed
+
+- **`docs/adr/README.md`** had said "_No ADRs yet_" since v0.1.0 while two ADRs
+  sat on disk. It now indexes all three with their decisions and status.
+- **CLAUDE.md's platform rule** said "Linux-only at v0.1.0–v0.4.x" — five minor
+  versions out of date, and wrong since the AGNOS peers landed across
+  v0.8.0–v0.9.0. It now states Linux + AGNOS, macOS out of scope, and points at
+  the positional gate check that enforces it.
+- **README** reflects a stable, frozen v1.0.0 rather than a pre-1.0 hardening
+  window.
+
+### The frozen surface
+
+29 public functions (`tty_*`, `tio_*`) and 37 public constants (`TIO_*`,
+`TIOC*`, `TTY_*`, `TCGETS`/`TCSETS`), enumerated in full in ADR 0003 and
+machine-checked bidirectionally against `dist/darshana.cyr` by
+`scripts/smoke.sh` on every CI run.
+
+Everything `_`-prefixed — `_tty_saved`, `_tty_in_raw`, `_tty_raw_fd`,
+`_tty_apply_raw_flags`, `_ansi_emit_u8`, `_ansi_rgb_buf`, `_ansi_rgb_write`,
+`_cursor_rel`, `_AGNOS_*` — ships in the bundle but is **not** API and may
+change in a minor release. ADR 0002 depends on the save-state globals being
+*reachable* from a consumer's exit path; reachable is not frozen, and
+`tty_cooked()` remains the supported way to restore.
+
+### Known and accepted at the freeze
+
+- **The five consumers are not yet on a v0.9.4+ dep** — chakshu and anuenue sit
+  at 0.9.0, cyim and kii at 0.8.2, bannermanor at 0.7.1. The two v0.9.3 breaks
+  were verified against all five trees and affect zero live call sites, so this
+  is a sequencing gap rather than a correctness one, but it does mean the first
+  real exercise of the frozen surface happens after this tag. Tracked in
+  [`docs/development/roadmap.md`](docs/development/roadmap.md).
+- **Registry promotion landed with the tag** — the pre-1.0 row moved out of
+  agnosticos `docs/development/planning/shared-crates.md` (Pre-1.0 21 → 20) into
+  `docs/applications/libs/README.md` under OS & Infrastructure (29 → 30, total
+  89 → 90).
+- **kii carries a pin mismatch** — its manifest `tag` says 0.8.2 while its
+  vendored bundle reads 0.9.0, because it resolves via `path = "../darshana"`.
+  To reconcile at its next bump.
+
+### Verification
+
+199 → 217 assertions green (167 `tests/darshana.tcyr` + 50 `tests/pty.tcyr`).
+`cyrius lint` clean: zero warnings, zero untracked deferrals. Smoke passes all
+seven gates — dist drift, forward and reverse fn surface, forward and reverse
+constant surface, syscall allowlist, docstring audit, positional platform gate.
+DCE parity holds. Both cross-builds (`--agnos`, `--aarch64`) clean. The example
+builds and runs, and leaves a real pseudo-terminal byte-for-byte as it found it.
+
 ## [0.9.4] — 2026-08-23
 
 The pre-freeze documentation + audit cut — **the last v1.0 blocker**. Doc- and
