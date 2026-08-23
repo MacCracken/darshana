@@ -113,6 +113,29 @@ jobs:
             echo "::warning::pty.tcyr ran degraded (SKIP token present) — PTY coverage incomplete on this runner"
           fi
 
+      - name: Build + run examples
+        # v0.9.4. docs/examples/ is documentation that has to keep
+        # WORKING, so CI builds every example and runs it. Each example
+        # is written to degrade cleanly without a controlling TTY (it
+        # checks tty_isatty first), so running it here is meaningful:
+        # it proves the include chain, the syscall surface, and the
+        # no-TTY path, not just that the file parses. An example that
+        # silently stopped compiling would be worse than no example.
+        run: |
+          fail=0
+          for ex in docs/examples/*.cyr; do
+            name=$(basename "$ex" .cyr)
+            echo "--- $name ---"
+            cyrius build "$ex" "build/example-$name" || { echo "example failed to build: $ex"; fail=1; continue; }
+            out=$("./build/example-$name" < /dev/null) || { echo "example exited non-zero: $ex"; fail=1; continue; }
+            echo "$out"
+            case "$out" in
+              *"not a TTY"*) : ;;
+              *) echo "::warning::$name did not take the no-TTY path; output was: $out" ;;
+            esac
+          done
+          [ $fail -eq 0 ] || { echo "examples: build/run failures above"; exit 1; }
+
       - name: Project smoke (scripts/smoke.sh)
         run: bash scripts/smoke.sh
 
@@ -215,31 +238,18 @@ jobs:
             fi
           fi
 
-          # No command-exec sinks. darshana is a syscall-only primitive
-          # library (ioctl + read/write); a shell-exec sink would be
-          # both out of charter and a command-injection surface. The
-          # CLAUDE.md "no sys_system with unsanitized input" rule,
-          # enforced as "none at all" since darshana has no business
-          # spawning processes.
+          # Syscall ALLOWLIST (v0.9.4 — replaces the exec-sink denylist).
+          # darshana's entire surface is raw `syscall(...)`, so a denylist
+          # could only catch the sinks someone thought to write down: the
+          # pre-v0.9.3 rule matched named stdlib wrappers only, and a raw
+          # `syscall(57)`/`syscall(59, ...)` fork+exec scored zero hits and
+          # exited green. v0.9.3 widened the pattern; this inverts it, so an
+          # unanticipated syscall (openat, socket, ptrace, ...) fails too.
           #
-          # v0.9.3: the pattern now also covers RAW syscall numbers.
-          # darshana's whole surface is `syscall(N, ...)`, so matching
-          # only named stdlib wrappers could not see the one idiom the
-          # library actually uses — a synthetic
-          # `syscall(57)` / `syscall(59, path, 0, 0)` fork+exec pair
-          # scored zero hits and the job exited green. Numbers covered
-          # (x86_64/aarch64): 56 clone, 57 fork, 58 vfork, 59 execve,
-          # 221 execveat(aarch64 221 is not exec — kept for x86_32
-          # parity), 281 execveat(x86_64), 322 execveat(aarch64),
-          # 435 clone3. NOTE: this is still a denylist; the roadmap
-          # tracks inverting it into a syscall ALLOWLIST, which is the
-          # right long-term shape for a raw-syscall library.
-          exec_hits=$(grep -rnE '\bsys_system\b|\bsys_exec[a-z]*\b|\bsystem\s*\(|syscall\s*\(\s*(56|57|58|59|221|281|322|435)\b' src/ 2>/dev/null || true)
-          if [ -n "$exec_hits" ]; then
-            echo "FAIL: command-exec sink in src/ (darshana is syscall-only, must not spawn processes)"
-            echo "$exec_hits"
-            FAIL=1
-          fi
+          # The list and its per-entry rationale live in the script, which
+          # scripts/smoke.sh also runs — one implementation, so the local
+          # and CI verdicts cannot drift apart.
+          bash scripts/syscall-audit.sh || FAIL=1
 
           echo "security scan complete (fail: $FAIL)"
           exit $FAIL

@@ -12,57 +12,32 @@
 
 ## Where v1.0 stands
 
-Four of the five v1.0 criteria are met: consumers integrated and green, test
-coverage adequate, CHANGELOG complete, security posture documented (ADR 0002).
-The ≥30-day consumer soak elapsed **2026-06-19**; five consumers are live.
+**All five v1.0 criteria are met.** Consumers integrated and green, test
+coverage adequate, CHANGELOG complete, security posture documented (ADR 0002),
+and — as of v0.9.4 — every exported symbol named, documented, and tested, with
+the per-symbol API audit returning zero gaps and now enforced by CI. The ≥30-day
+consumer soak elapsed **2026-06-19**; five consumers are live.
 
-**One criterion is open — the API freeze itself**, and it is gated on the
-v0.9.4 cut below, not on the calendar. Every exported symbol is named,
-documented, and tested; what remains is the audit that lets us commit to those
-names, and the docs a first-time consumer needs.
-
-## v0.9.4 — pre-freeze documentation + audit cut
-
-The last cut before the freeze, and **the only remaining v1.0 blocker**.
-Doc- and audit-shaped, so it lands directly before v1.0.0 and reflects the
-actual freeze surface.
-
-- [ ] **`docs/examples/` — at least one runnable example.** The directory holds
-      only a `.gitkeep`. Write the ADR 0002 teardown shape end to end:
-      raw-enter, render loop, signalfd-driven exit, full restoration on every
-      path. This is the artifact a first-time consumer copies from, and its
-      absence is the biggest gap in the pre-freeze surface.
-- [ ] **Final per-symbol API audit.** Walk every exported symbol — `fn tty_*`,
-      `fn tio_*`, and every `var TIO_*` / `TIOC*` / `TTY_*` — and confirm the
-      docstring is sufficient to consume the symbol without reading its body,
-      and that each `_buf` composer states its byte budget. v0.9.3 cleared the
-      claims already known to be false; this is the sweep for what that missed.
-      Log gaps in one pass and patch them in the same cut.
-- [ ] **`docs/architecture/` — populate the empty Items section.** Candidates:
-      why `_tty_saved` is a module global rather than caller-owned; the
-      syscall-vs-libc decision; why `tty_close_signalfd` unblocks rather than
-      restores; the single-raw-fd model. Cross-reference ADRs 0001/0002.
-- [ ] **CI syscall allowlist** *(deferred out of v0.9.3)*. Invert the exec-sink
-      denylist in `.github/workflows/ci.yml`: extract the first argument of
-      every `syscall(` in `src/*.cyr` and fail on anything outside the set
-      darshana is permitted to issue. A denylist can only catch the sinks we
-      thought of, and darshana's entire surface is raw syscalls. Needs per-arch
-      symbolic-vs-numeric handling, which is why it is its own item rather than
-      a one-line pattern widening.
-
-**Gate to v1.0.0**: all four land, CI green, and `cyrius lint` reports zero
-warnings **and zero untracked-deferral notes** across `src/`. Any new deferral
-introduced by this cut must cross-reference a CHANGELOG or roadmap entry on the
-same line — that is what keeps this file honest.
+**Nothing is blocking v1.0.0 but the decision to cut it.** What remains below is
+the freeze itself and the registry promotion — both acts, not work items.
 
 ## v1.0.0 — the freeze
 
+- [ ] **Bump the five consumers to a v0.9.4+ dep.** chakshu, anuenue, cyim, kii,
+      and bannermanor all need a dep bump for the v0.9.3/v0.9.4 dist bytes. No
+      consumer *code* change is required — the two v0.9.3 breaks were verified
+      to affect zero live call sites — but shipping v1.0.0 while consumers sit
+      on pre-audit bytes would make the freeze nominal. bannermanor is furthest
+      behind (v0.7.1); kii additionally has a manifest/vendored pin mismatch to
+      reconcile.
 - [ ] **Freeze the public API.** After this tag, no breaking change without a
       major bump. Everything pre-v1.0 has been fair game — `tty_cooked` lost its
       fd parameter, `tty_itoa` became `tty_dec_buf`, `tty_clear_to_end` became
       `tty_clear_to_eos`, `tty_sgr_reset_buf` and `tty_dec_buf` gained a -1
-      return. That latitude ends here, so anything the v0.9.4 audit finds
-      objectionable must be changed **before** the tag, not after.
+      return, and four `AGNOS_*` constants were privatized. That latitude ends
+      here. The v0.9.3 sweep and the v0.9.4 audit were the last chances to
+      object to the surface; anything still objectionable must change **before**
+      the tag, not after.
 - [ ] **Promote to the AGNOS shared-crates registry as v1.0+ stable**
       (registry entry uses the name `darshana` — see
       [ADR 0001](../adr/0001-name-darshana.md)).

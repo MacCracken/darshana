@@ -115,12 +115,23 @@ fn _cursor_rel(n, final) {
     return 0;
 }
 
+# Move the cursor up `n` rows, staying in the current column, via
+# `CSI <n>A`. The relative analogue of `tty_move`'s absolute
+# positioning — wanted by in-scrollback repainters (anuenue's M4
+# animation re-anchors at the top of the buffered block each frame).
+#
+# Always returns 0; there is no failure mode. `n <= 0` is a documented
+# NO-OP, not a rejection: xterm treats `CSI 0A` as "move 1 row", so
+# guarding here lets callers pass an unchecked row count straight
+# through without special-casing zero.
 fn tty_cursor_up(n) {
     return _cursor_rel(n, 0x41);     # 'A'
 }
 
 # Move cursor down `n` rows in the current column via CSI <n>B.
 # Mirror of tty_cursor_up — same no-op-on-zero guard, same envelope.
+# Move the cursor down `n` rows via `CSI <n>B`. Mirror of
+# `tty_cursor_up` — same no-op-on-zero guard, same always-0 return.
 fn tty_cursor_down(n) {
     return _cursor_rel(n, 0x42);     # 'B'
 }

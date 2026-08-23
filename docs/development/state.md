@@ -21,6 +21,39 @@ native `ioctl`). `TCGETS` / `TCSETS` / `TIOCGWINSZ` stay local —
 arch-stable via `asm-generic/ioctls.h` and not stdlib-defined. Latent,
 not live: no aarch64 consumer ships today. 199 assertions green.
 
+**0.9.4** — *open cycle*. **Pre-freeze documentation + audit cut — the last
+v1.0 blocker, now closed.** No behavior change; emitted bytes unchanged.
+
+Found and fixed the structural defect the audit existed to find: the
+public-surface conventions — naming, return contracts, module map —
+lived in `src/main.cyr`, which is deliberately excluded from
+`[lib].modules`, so `cyrius distlib` never copied them and **consumers
+had never seen them**. That included the return-conventions block
+v0.9.3 had just rewritten as the authoritative API contract. Moved to
+the head of `src/termios.cyr`, the first bundle module, so it is now
+the front matter of `dist/darshana.cyr`.
+
+The per-symbol audit also caught a regression from v0.9.3's own
+duplication pass: `tty_cursor_up` and `tty_fg_rgb_buf` had been reduced
+to one-line wrappers and their docstrings went with the extracted
+private helpers, leaving both public symbols **undocumented in the
+shipped bundle** with every gate green. Restored, plus 14 fns that had
+never stated a return contract and the two `tio_*` codecs that had one
+line each.
+
+`docs/examples/raw_loop.cyr` is the first runnable example — the full
+ADR 0002 teardown shape, verified under a real PTY to leave the slave
+termios byte-for-byte identical to its pre-`tty_raw` state. CI builds
+**and runs** every example. `docs/architecture/` gained its first two
+notes (the single-termios-slot model; the raw-syscall cost, including
+the aarch64 `SYS_IOCTL` trap). The exec-sink denylist became a syscall
+**allowlist** (`scripts/syscall-audit.sh`, shared by smoke and CI) —
+verified to catch a raw fork+execve, an unanticipated `openat`, and an
+unlisted `sys_*` wrapper.
+
+Audit result: **29/29 public fns and 37/37 constants, zero gaps**, and
+the audit is now a smoke check so it stays zero.
+
 **0.9.3** — *open cycle*. **P-1 audit / refactor / hardening / security
 sweep** — the last code-shaped cut before the v1.0 freeze. Four audit
 lenses (correctness, security, refactor, docs + deferred-item sweep)
@@ -220,7 +253,7 @@ at v0.9.0 too) — upstream-stdlib shaped, not a darshana defect.
 
 - ADR 0001 records the `darshana` name choice (`drishya` and other observation-family alternatives considered). Closed; no re-litigation needed.
 - macOS support is deferred — see CLAUDE.md domain rules.
-- The v0.8.0 roadmap slot (docs/examples/, final API audit, docs/architecture/ notes) was **not** what shipped as v0.8.0 — the agnos-parity work took the 0.8.x/0.9.0 cuts instead. Re-slotted at v0.9.3 into an explicit **v0.9.4** cut in [`roadmap.md`](roadmap.md), now the sole remaining v1.0 blocker. `docs/examples/` is still an empty directory; `docs/architecture/` has only a `README.md` with an empty Items section.
+- ~~The displaced v0.8.0 doc/audit slot~~ — **closed at v0.9.4.** `docs/examples/` holds a runnable, CI-executed example; `docs/architecture/` holds notes 001 and 002; the per-symbol API audit returned zero gaps and is now enforced by `scripts/smoke.sh`.
 - ~~`cyrius lint` untracked-deferral notes in `src/ansi.cyr` / `src/termios.cyr`~~ — **closed at v0.9.3**: the bg-256 twin now cross-references roadmap.md §"Out of scope", the macOS termios note cross-references CLAUDE.md's domain rule. All four src modules are deferral-note clean; keep them that way.
 
 ## Release Process
@@ -229,7 +262,9 @@ at v0.9.0 too) — upstream-stdlib shaped, not a darshana defect.
 |---------|-------|
 | CI on push/PR | `.github/workflows/ci.yml` — three jobs: build-and-test (lint, smoke binary, `cyrius test`, `scripts/smoke.sh`, distlib drift, DCE parity); security scan (no FFI imports, no >=64K stack buffers, Linux gate intact); docs + version consistency |
 | Release on semver tag | `.github/workflows/release.yml` — gates on ci.yml via `workflow_call`, version-verify against tag, regenerates dist + ships `darshana-X.Y.Z.cyr` standalone + `darshana-X.Y.Z.tar.gz` package + source tarball + SHA256SUMS, GH release with body extracted from CHANGELOG section |
-| Smoke test | `scripts/smoke.sh` — runs smoke binary, verifies dist drift, asserts the public contract surface (29 `tty_*` / `tio_*` fn symbols + 37 `TIO_* / TIOC* / TTY_*` constants present in dist) with a **bidirectional self-audit** covering both fns (v0.7.0) and constants (v0.9.3) — it fails if dist exports a public name the checklist omits, in either direction. The platform-gate check is **positional** as of v0.9.3: Linux ioctl tokens must sit inside the `CYRIUS_TARGET_LINUX` gate and agnos syscall tokens inside `CYRIUS_TARGET_AGNOS`, by line number rather than by substring presence |
+| Syscall allowlist | `scripts/syscall-audit.sh` (v0.9.4) — the permitted syscall targets and stdlib wrappers, each with its rationale. One implementation, invoked by both `scripts/smoke.sh` and the CI security job so the two cannot drift. Replaced the exec-sink denylist, which could only catch anticipated sinks. |
+| Examples | `docs/examples/*.cyr` — CI builds **and runs** each one. Every example checks `tty_isatty` first and degrades cleanly, so executing it in CI is meaningful. |
+| Smoke test | `scripts/smoke.sh` — runs smoke binary, verifies dist drift, asserts the public contract surface (29 `tty_*` / `tio_*` fn symbols + 37 `TIO_* / TIOC* / TTY_*` constants present in dist) with a **bidirectional self-audit** covering both fns (v0.7.0) and constants (v0.9.3) — it fails if dist exports a public name the checklist omits, in either direction. The platform-gate check is **positional** as of v0.9.3: Linux ioctl tokens must sit inside the `CYRIUS_TARGET_LINUX` gate and agnos syscall tokens inside `CYRIUS_TARGET_AGNOS`, by line number rather than by substring presence. A **docstring audit** (v0.9.4) additionally fails the build if any public fn lacks a docstring or a stated return contract, if any `_buf` composer omits its byte budget, or if a public constant is undocumented |
 | Cutting a release | Bump VERSION + CHANGELOG section, push tag `vX.Y.Z` (or `X.Y.Z`); release.yml takes over. Pre-1.0 tags publish as GH prerelease automatically. |
 
 ## Roadmap status
@@ -246,8 +281,9 @@ at v0.9.0 too) — upstream-stdlib shaped, not a darshana defect.
     - v0.7.1 / v0.8.1 / v0.9.1 — toolchain pin catch-ups ✓ shipped (6.2.22 / 6.2.36 / 6.5.35).
     - v0.9.2 — aarch64-Linux `SYS_IOCTL` shadow fix ✓ shipped. Cleared the 0.9.1 carry-forward: ESYSXLAT verified as *not* renumbering 16→29, so the hardcoded x86_64 number was a real defect, not a harmless one.
     - v0.9.3 — **P-1 audit / refactor / hardening / security sweep** ✓ shipped (this release). signalfd failure-path fix, `_buf` negative-`pos` rejection, contract-doc repair on the freeze surface, duplication pass, smoke/CI guards. Two breaking-but-correct fixes taken deliberately pre-freeze.
-    - **Still open before the freeze**: the **v0.9.4** doc/audit cut — `docs/examples/`, the final per-symbol API audit, `docs/architecture/` notes, and the CI syscall allowlist deferred out of v0.9.3.
+    - v0.9.4 — **pre-freeze documentation + audit cut** ✓ shipped (this release). `docs/examples/raw_loop.cyr`, `docs/architecture/` 001+002, the per-symbol API audit (0 gaps), the syscall allowlist, and the fix for the conventions block that never shipped.
+    - **Nothing is open before the freeze.** All five v1.0 criteria are met; v1.0.0 needs the consumer dep bumps, the freeze itself, and the registry promotion.
     - Shipped-cut detail lives in [`CHANGELOG.md`](../../CHANGELOG.md); [`roadmap.md`](roadmap.md) carries only what is still open.
-- M5 (v1.0.0) — the ≥30-day consumer soak **elapsed 2026-06-19**; five consumers live and green. The sole remaining blocker is the v0.9.4 doc/audit cut, not the calendar.
+- M5 (v1.0.0) — **unblocked.** The ≥30-day consumer soak elapsed 2026-06-19; all five v1.0 criteria are met as of v0.9.4. What remains is the five consumer dep bumps, the freeze tag, and the shared-crates registry promotion — acts, not work items.
 
 [`roadmap.md`](roadmap.md) is forward-facing only — it now carries just the v0.9.4 cut, the v1.0.0 freeze, the out-of-scope boundaries, and the post-1.0 tracked items. Closed-milestone definitions were retired there at v0.9.3; the arc above is the surviving summary, and [`CHANGELOG.md`](../../CHANGELOG.md) is the full record.

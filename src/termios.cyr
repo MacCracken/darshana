@@ -1,3 +1,54 @@
+# =====================================================================
+# darshana — public surface conventions (frozen at v1.0)
+# =====================================================================
+#
+# This header leads `dist/darshana.cyr`, the single-file bundle consumers
+# include. It documents the whole library surface, not just this module.
+# Per-module and per-function detail follows each symbol below.
+#
+# Naming conventions (frozen at v1.0):
+#   tty_*  public functions        tio_*  termios LE field codec
+#   TIO_*  termios bit flags        TTY_*  darshana-defined constants
+#   TIOC*  raw kernel ioctl nums    _*     private-by-convention
+#                                          (in the bundle, not the API)
+#
+# Return conventions. Every public fn falls in exactly one of these
+# four buckets:
+#   • validating side-effecting ops — tty_raw, tty_cooked,
+#     tty_winsize, tty_move, tty_sgr, tty_fg_rgb, tty_bg_rgb — 0 on
+#     success, -1 on failure or out-of-range reject (rejected before
+#     any byte reaches fd 1).
+#   • unconditional emitters — tty_alt_enter/leave, tty_clear,
+#     tty_clear_to_eol/eos, tty_cursor_hide/show/home, tty_sgr_reset,
+#     tty_cursor_up/down — ALWAYS 0. The write(2) result is not
+#     checked (rationale in ansi.cyr's header). `n <= 0` on
+#     tty_cursor_up/down is a documented no-op, not a reject: these
+#     never return -1.
+#   • `_buf` composers (tty_dec_buf, tty_sgr_buf, tty_sgr_reset_buf,
+#     tty_fg_rgb_buf, tty_bg_rgb_buf, tty_fg_256_buf) — the new write
+#     position, or -1 on out-of-range input OR on a negative incoming
+#     `pos` — so a -1 from an earlier link poisons the rest of the
+#     chain rather than being laundered into a write below the buffer.
+#     tty_dec_buf additionally clamps `val <= 0` to a single '0'.
+#     Each composer documents its own byte budget; none takes a
+#     capacity argument, so sizing the buffer is the caller's job.
+#   • predicates / fd openers — tty_isatty returns 1/0;
+#     tty_open_signalfd returns an fd (>= 0) or exactly -1, never a
+#     raw -errno.
+#
+# Modules in this bundle, by concern:
+#   termios.cyr  — termios raw/cooked, winsize, isatty, signalfd, TIO_*
+#   ansi.cyr     — alt-screen / clear / cursor-visibility / SGR color
+#   cursor.cyr   — tty_dec_buf (decimal formatter), cursor positioning
+#
+# Symbols prefixed `_` are private by convention — they ship in this
+# bundle because it is one compilation unit, but they are NOT public
+# surface and may change without a major bump. The authoritative public
+# list is `scripts/smoke.sh` (`required_syms` / `required_flags`), which
+# CI checks against this bundle in both directions.
+#
+# =====================================================================
+
 # termios.cyr — Linux raw-mode TTY (TCGETS/TCSETS via ioctl).
 #
 # Donor port from cyim/src/tty.cyr — verbatim functional behavior, split
@@ -55,7 +106,20 @@ var TIO_VMIN     = 6;
 # (this constant + the array declarations) must move together.
 var TIO_BUF_SIZE = 60;
 
-# Read 32-bit little-endian field at `off` inside `buf`.
+# Read the 32-bit little-endian field at byte offset `off` inside the
+# termios buffer `buf`. Returns the field value as a non-negative
+# integer in [0, 0xFFFFFFFF] — the four bytes are zero-extended, never
+# sign-extended, so a flag word with the top bit set reads as a large
+# positive number rather than a negative one.
+#
+# Public because a consumer may want to read termios state without
+# taking the terminal raw: ioctl `TCGETS` into a `TIO_BUF_SIZE` buffer
+# and pull fields out with this. Offsets are the kernel struct's —
+# c_iflag 0, c_oflag 4, c_cflag 8, c_lflag 12 (layout table at the top
+# of this file).
+#
+# NO bounds check: `buf` and `off` are the caller's contract. Reading at
+# an `off` beyond the buffer reads adjacent memory.
 fn tio_load32(buf, off) {
     var b0 = load8(buf + off);
     var b1 = load8(buf + off + 1);
@@ -64,7 +128,14 @@ fn tio_load32(buf, off) {
     return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
 }
 
-# Write 32-bit little-endian field at `off` inside `buf`.
+# Write `val` as a 32-bit little-endian field at byte offset `off`
+# inside the termios buffer `buf`. Only the low 32 bits of `val` are
+# stored; higher bits are discarded, not an error. Always returns 0 —
+# there is no failure mode.
+#
+# Same caller contract as `tio_load32`: NO bounds check, so an `off`
+# beyond the buffer corrupts adjacent memory. Pair it with `tio_load32`
+# for a read-modify-write against a `TCGETS` snapshot.
 fn tio_store32(buf, off, val) {
     store8(buf + off,     val & 0xFF);
     store8(buf + off + 1, (val >> 8) & 0xFF);
@@ -135,6 +206,15 @@ fn _tty_apply_raw_flags(buf) {
 # The ioctl *request* codes below stay local: they are arch-stable across
 # both Linux targets (asm-generic/ioctls.h — x86_64's asm/ioctls.h is a
 # bare include of it) and the stdlib does not define them.
+# ioctl request codes for reading and writing termios. Public surface:
+# a consumer that wants termios state without going raw does
+# `syscall(SYS_IOCTL, fd, TCGETS, &buf)` with a `TIO_BUF_SIZE` buffer,
+# and can write it back with `TCSETS`. Arch-stable across both Linux
+# targets (asm-generic/ioctls.h).
+#
+# Writing termios yourself is outside darshana's state-restore model:
+# `tty_cooked()` restores only what `tty_raw` saved, so a consumer that
+# TCSETS behind darshana's back owns undoing it. See ADR 0002.
 var TCGETS = 0x5401;
 var TCSETS = 0x5402;
 

@@ -4,6 +4,110 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-08-23
+
+The pre-freeze documentation + audit cut — **the last v1.0 blocker**. Doc- and
+audit-shaped: no behavior change to any public function, and the emitted bytes
+are unchanged. What did change is that the documentation a consumer actually
+reads now exists, is correct, and is enforced by CI rather than by good intentions.
+
+### Added
+
+- **`docs/examples/` — `raw_loop.cyr`, the first runnable example.** The
+  directory had held nothing but a `.gitkeep` since v0.1.0 while CLAUDE.md
+  listed it as a documentation path. It implements the full
+  [ADR 0002](docs/adr/0002-state-restore-posture.md) teardown shape end to end:
+  refuses a non-TTY, opens the signalfd *before* going raw so the acquire order
+  is unwindable, degrades rather than refusing to launch when the signalfd is
+  unavailable, handles Ctrl-C both as a raw byte (`ISIG` is cleared, so `0x03`
+  arrives on stdin) and as a signal, redraws on `SIGWINCH`, and restores
+  everything through a single idempotent teardown reached from every exit path.
+  Verified under a real pseudo-terminal: after it exits, the slave termios is
+  **byte-for-byte identical** to its pre-`tty_raw` state.
+- **CI builds and RUNS every example.** Examples are documentation that has to
+  keep working; one that silently stopped compiling would be worse than none.
+  Each example checks `tty_isatty` first and degrades cleanly, so CI can execute
+  it — proving the include chain, the syscall surface, and the no-TTY path, not
+  merely that the file parses.
+- **`docs/architecture/` — the empty Items section is populated.** Two notes on
+  invariants a reader cannot derive from the code:
+  [001 — Termios save-state is a module global, and there is exactly one slot]
+  (docs/architecture/001-module-global-termios-state.md) (why `tty_cooked()`
+  takes no fd, why a second `tty_raw` on a different fd is refused, what a
+  permanently failing restore strands, and why the literal `60` lives in three
+  places that must move together) and
+  [002 — Everything is a raw syscall, and what that costs]
+  (docs/architecture/002-no-libc-raw-syscalls-only.md) (hardcoded kernel struct
+  layouts, the arch-specific-syscall-number trap that actually bit us on
+  aarch64, why the ANSI helpers are deliberately outside the Linux gate, and why
+  write results go unchecked).
+- **`scripts/syscall-audit.sh` — a syscall ALLOWLIST, replacing the exec-sink
+  denylist** *(deferred out of v0.9.3)*. darshana's entire surface is raw
+  `syscall(...)`, so a denylist can only catch the sinks someone thought to
+  write down — the pre-v0.9.3 rule matched named stdlib wrappers only, and
+  v0.9.3 could do no better than widen it to a handful of numbers. Inverted, the
+  rule now fails on anything not explicitly permitted: the five syscall targets
+  darshana issues (`1`, `SYS_IOCTL`, and the three agnos numbers) and the three
+  stdlib wrappers it calls, each with its rationale in the script. Verified to
+  catch a raw `fork`+`execve` pair, an **unanticipated** `openat`, and an
+  unlisted `sys_*` wrapper. One implementation, invoked by both
+  `scripts/smoke.sh` and the CI security job, so local and CI cannot drift.
+- **A docstring audit in `scripts/smoke.sh`.** Enforces what the per-symbol
+  audit below checked by hand: every public fn has a docstring, that docstring
+  states the return contract, every `_buf` composer states its byte budget, and
+  every public constant is documented individually or by leading a documented
+  group. This exists because of the regression it would have caught — see below.
+
+### Fixed
+
+- **The public-surface conventions never shipped to consumers.** The naming
+  conventions, the return conventions, and the module map lived in
+  `src/main.cyr` — which is deliberately excluded from `[lib].modules`, so
+  `cyrius distlib` never copied them. Consumers `include "lib/darshana.cyr"` and
+  have never seen any of it, including the return-conventions block that v0.9.3
+  rewrote as the authoritative statement of the API contract. Moved to the top
+  of `src/termios.cyr`, the first entry in `[lib].modules`, so it is now the
+  front matter of `dist/darshana.cyr`. `src/main.cyr` keeps a pointer explaining
+  why the text lives where it does.
+- **Two public docstrings destroyed by the v0.9.3 duplication pass.**
+  `tty_cursor_up` and `tty_fg_rgb_buf` were reduced to one-line wrappers over
+  extracted private helpers, and their documentation went with the helper —
+  leaving both public symbols with **no docstring at all** in the shipped
+  bundle. Every gate stayed green. Restored, along with `tty_bg_rgb_buf` and
+  `tty_bg_rgb`, whose docstrings had also been thinned or duplicated by the same
+  pass. The new smoke docstring audit fails on exactly this.
+- **14 public fns never stated their return contract**, which compounded with
+  the first item: the bucket that covered them was in `main.cyr` and did not
+  ship. The nine unconditional emitters (`tty_alt_enter/leave`, `tty_clear`,
+  `tty_clear_to_eol/eos`, `tty_cursor_hide/show/home`, `tty_sgr_reset`) now each
+  state that they always return 0.
+- **`tio_load32` / `tio_store32` had a one-line docstring each** despite being
+  public surface a consumer uses to read termios without going raw. They now
+  document the zero-extension (a flag word with the top bit set reads as a large
+  positive, never negative), the kernel field offsets, the always-0 return, and
+  that neither bounds-checks `off`.
+- **`TCGETS` / `TCSETS` were promoted to listed public surface in v0.9.3 but
+  only described in passing** inside a comment about `SYS_IOCTL`. They now carry
+  their own documentation, including the warning that writing termios yourself
+  is outside darshana's state-restore model — `tty_cooked()` restores only what
+  `tty_raw` saved.
+
+### Audit result
+
+Every one of the **29 public functions** and **37 public constants** was walked
+against the criterion "is this docstring sufficient to consume the symbol
+without reading its body". Result after this cut: **0 gaps** — 29/29 functions
+document their return contract, 6/6 `_buf` composers state a byte budget, and
+all 37 constants are covered by 8 documented groups. The audit is now a CI
+check, so the answer stays 0.
+
+### Notes
+
+`docs/development/roadmap.md` drops its v0.9.4 section, per the convention
+adopted in v0.9.3 that closed work is deleted from the roadmap rather than
+checked off in place. **v1.0.0 is now unblocked**: the remaining items are the
+freeze itself and the registry promotion.
+
 ## [0.9.3] — 2026-08-23
 
 P-1 audit / refactor / hardening / security sweep — the last code-shaped cut

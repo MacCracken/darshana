@@ -104,6 +104,62 @@ done
 pass "required_flags covers every public constant in dist ($(echo "$actual_vars" | wc -w) total — no lag)"
 
 # ============================================================
+# Syscall allowlist — v0.9.4. Shared implementation with the CI
+# security job (scripts/syscall-audit.sh) so the two cannot drift.
+# ============================================================
+echo "[smoke] syscall allowlist"
+bash scripts/syscall-audit.sh || fail "syscall allowlist violation (see above)"
+
+# ============================================================
+# Docstring audit — v0.9.4. `dist/darshana.cyr` IS the documentation
+# a consumer reads, so a public symbol without a usable docstring is a
+# shipped defect, not a style nit. Enforces the three things the v0.9.4
+# per-symbol API audit checked by hand:
+#
+#   1. every public fn has a comment block immediately above it,
+#   2. that block states the return contract,
+#   3. every `_buf` composer states its byte budget (it takes no
+#      capacity argument, so the caller cannot size the buffer without
+#      that number),
+#   4. every public constant is documented, individually or by leading
+#      a documented group.
+#
+# This exists because the v0.9.3 duplication pass silently destroyed the
+# docstrings on `tty_cursor_up` and `tty_fg_rgb_buf` — the text stayed
+# with the extracted private helper and the public wrapper was left
+# bare — and every gate stayed green. Only the hand audit caught it.
+# ============================================================
+echo "[smoke] docstring audit"
+
+doc_gaps=$(awk '
+/^#/                  { if (reset) { blk=""; reset=0 } blk = blk "\n" $0; prev="c"; next }
+/^[[:space:]]*$/      { reset=1; prev="b"; next }
+/^fn (tty_|tio_)[a-z0-9_]+\(/ {
+    name=$2; sub(/\(.*/, "", name)
+    if (!seen[name]++) {
+        if (reset || blk == "")                    print "  no docstring:      " name
+        else {
+            if (blk !~ /[Rr]eturn/)                print "  return not stated: " name
+            if (name ~ /_buf$/ && blk !~ /budget/) print "  no byte budget:    " name
+        }
+    }
+    blk=""; reset=0; prev="f"; next
+}
+/^var [A-Z]/ {
+    cname=$2
+    if (!cseen[cname]++ && (reset || blk == "") && prev != "v") print "  no doc group:      " cname
+    blk=""; reset=0; prev="v"; next
+}
+{ blk=""; reset=0; prev="o" }
+' dist/darshana.cyr)
+
+if [ -n "$doc_gaps" ]; then
+    fail "public symbols in dist/darshana.cyr with inadequate docstrings:
+$doc_gaps"
+fi
+pass "every public fn documents its return; every _buf states its byte budget"
+
+# ============================================================
 # Platform gates — the Linux syscall arm must stay INSIDE
 # CYRIUS_TARGET_LINUX and the agnos arm inside CYRIUS_TARGET_AGNOS.
 # macOS BSD termios layout differs, and agnos has no ioctl at all;
