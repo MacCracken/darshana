@@ -177,25 +177,64 @@ jobs:
 
           # Linux-syscall arm must remain gated. termios.cyr's
           # SYS_IOCTL / TCGETS / TCSETS path uses Linux-specific magic
-          # numbers; macOS/BSD termios layout differs. Verify the
-          # `#ifdef CYRIUS_TARGET_LINUX` gate around the ioctl arm
-          # is present so dist consumers cross-building for non-Linux
-          # don't silently get wrong syscall numbers.
-          if ! grep -q '#ifdef CYRIUS_TARGET_LINUX' src/termios.cyr; then
-            echo "FAIL: src/termios.cyr missing CYRIUS_TARGET_LINUX gate"
+          # numbers; macOS/BSD termios layout differs, and agnos has no
+          # ioctl at all.
+          #
+          # v0.9.3: POSITIONAL, not substring-presence. The previous
+          # `grep -q '#ifdef CYRIUS_TARGET_LINUX'` had no relationship
+          # to where the ioctl code actually sat — hoisting the entire
+          # arm outside the gate left this step green, and nothing else
+          # in CI would catch it (build-and-test is ubuntu-x86_64 only,
+          # and cyrius does not error on a duplicate definition).
+          # Mirrors the same check in scripts/smoke.sh so local and CI
+          # agree.
+          lin=$(awk '/^#ifdef CYRIUS_TARGET_LINUX/{s=NR;next} s&&/^#endif/{print s, NR; exit}' src/termios.cyr)
+          agn=$(awk '/^#ifdef CYRIUS_TARGET_AGNOS/{s=NR;next} s&&/^#endif/{print s, NR; exit}' src/termios.cyr)
+          if [ -z "$lin" ] || [ -z "$agn" ]; then
+            echo "FAIL: src/termios.cyr missing a CYRIUS_TARGET_LINUX / _AGNOS gate"
             echo "  The ioctl/TCGETS/TCSETS arm is Linux-specific; macOS BSD"
             echo "  termios layout differs. Don't drop the gate without an"
             echo "  ADR documenting cross-platform termios handling."
             FAIL=1
+          else
+            stray_lin=$(grep -nE '(SYS_IOCTL|TCGETS|TCSETS|TIOCGWINSZ)' src/termios.cyr \
+                        | grep -vE '^[0-9]+: *#' \
+                        | awk -F: -v s="${lin% *}" -v e="${lin#* }" '$1 < s || $1 > e')
+            if [ -n "$stray_lin" ]; then
+              echo "FAIL: Linux ioctl tokens outside the CYRIUS_TARGET_LINUX gate (lines $lin):"
+              echo "$stray_lin"
+              FAIL=1
+            fi
+            stray_agn=$(grep -nE '_AGNOS_SYS_[A-Z]+|_AGNOS_SFD_' src/termios.cyr \
+                        | grep -vE '^[0-9]+: *#' \
+                        | awk -F: -v s="${agn% *}" -v e="${agn#* }" '$1 < s || $1 > e')
+            if [ -n "$stray_agn" ]; then
+              echo "FAIL: agnos syscall tokens outside the CYRIUS_TARGET_AGNOS gate (lines $agn):"
+              echo "$stray_agn"
+              FAIL=1
+            fi
           fi
 
           # No command-exec sinks. darshana is a syscall-only primitive
-          # library (ioctl + read/write); a shell-exec sink (sys_system,
-          # exec*, or a raw execve syscall) would be both out of charter
-          # and a command-injection surface. The CLAUDE.md "no
-          # sys_system with unsanitized input" rule, enforced as "none
-          # at all" since darshana has no business spawning processes.
-          exec_hits=$(grep -rnE '\bsys_system\b|\bsys_exec[a-z]*\b|\bsystem\s*\(' src/ 2>/dev/null || true)
+          # library (ioctl + read/write); a shell-exec sink would be
+          # both out of charter and a command-injection surface. The
+          # CLAUDE.md "no sys_system with unsanitized input" rule,
+          # enforced as "none at all" since darshana has no business
+          # spawning processes.
+          #
+          # v0.9.3: the pattern now also covers RAW syscall numbers.
+          # darshana's whole surface is `syscall(N, ...)`, so matching
+          # only named stdlib wrappers could not see the one idiom the
+          # library actually uses — a synthetic
+          # `syscall(57)` / `syscall(59, path, 0, 0)` fork+exec pair
+          # scored zero hits and the job exited green. Numbers covered
+          # (x86_64/aarch64): 56 clone, 57 fork, 58 vfork, 59 execve,
+          # 221 execveat(aarch64 221 is not exec — kept for x86_32
+          # parity), 281 execveat(x86_64), 322 execveat(aarch64),
+          # 435 clone3. NOTE: this is still a denylist; the roadmap
+          # tracks inverting it into a syscall ALLOWLIST, which is the
+          # right long-term shape for a raw-syscall library.
+          exec_hits=$(grep -rnE '\bsys_system\b|\bsys_exec[a-z]*\b|\bsystem\s*\(|syscall\s*\(\s*(56|57|58|59|221|281|322|435)\b' src/ 2>/dev/null || true)
           if [ -n "$exec_hits" ]; then
             echo "FAIL: command-exec sink in src/ (darshana is syscall-only, must not spawn processes)"
             echo "$exec_hits"

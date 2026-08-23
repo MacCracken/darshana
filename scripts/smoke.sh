@@ -79,23 +79,74 @@ for fn in $actual_fns; do
 done
 pass "required_syms covers every public fn symbol in dist ($(echo "$actual_fns" | wc -w) total — no lag)"
 
-required_flags="TIO_ECHO TIO_ICANON TIO_ISIG TIO_IEXTEN TIO_ICRNL TIO_IXON TIO_OPOST TIO_CSIZE TIO_CS8 TIO_BRKINT TIO_INPCK TIO_ISTRIP TIO_CC_BASE TIO_VTIME TIO_VMIN TIO_BUF_SIZE TIOCGWINSZ TTY_SIGMASK_EXIT TTY_SIGMASK_WINCH TTY_FG_BLACK TTY_FG_RED TTY_FG_GREEN TTY_FG_YELLOW TTY_FG_BLUE TTY_FG_MAGENTA TTY_FG_CYAN TTY_FG_WHITE TTY_FG_BRIGHT_BLACK TTY_FG_BRIGHT_RED TTY_FG_BRIGHT_GREEN TTY_FG_BRIGHT_YELLOW TTY_FG_BRIGHT_BLUE TTY_FG_BRIGHT_MAGENTA TTY_FG_BRIGHT_CYAN TTY_FG_BRIGHT_WHITE"
+required_flags="TCGETS TCSETS TIO_ECHO TIO_ICANON TIO_ISIG TIO_IEXTEN TIO_ICRNL TIO_IXON TIO_OPOST TIO_CSIZE TIO_CS8 TIO_BRKINT TIO_INPCK TIO_ISTRIP TIO_CC_BASE TIO_VTIME TIO_VMIN TIO_BUF_SIZE TIOCGWINSZ TTY_SIGMASK_EXIT TTY_SIGMASK_WINCH TTY_FG_BLACK TTY_FG_RED TTY_FG_GREEN TTY_FG_YELLOW TTY_FG_BLUE TTY_FG_MAGENTA TTY_FG_CYAN TTY_FG_WHITE TTY_FG_BRIGHT_BLACK TTY_FG_BRIGHT_RED TTY_FG_BRIGHT_GREEN TTY_FG_BRIGHT_YELLOW TTY_FG_BRIGHT_BLUE TTY_FG_BRIGHT_MAGENTA TTY_FG_BRIGHT_CYAN TTY_FG_BRIGHT_WHITE"
 for flag in $required_flags; do
     grep -qE "^var ${flag} " dist/darshana.cyr \
         || fail "dist/darshana.cyr missing 'var ${flag}' (cyim API contract)"
 done
-pass "all $(echo "$required_flags" | wc -w) TIO_* constants present in dist"
+pass "all $(echo "$required_flags" | wc -w) TIO_* / TIOC* / TTY_* constants present in dist"
+
+# Bidirectional self-audit for CONSTANTS — the mirror of the fn loop
+# above, added v0.9.3. Without it the constant contract list could
+# silently lag the shipped surface, and it had: four AGNOS_* internals
+# entered dist across v0.8.0-v0.9.0 unlisted and outside the naming
+# convention `src/main.cyr` calls frozen at v1.0. A shipped constant is
+# either public contract (list it here) or internal (`_`-prefix it).
+# Not hypothetical in this toolchain: darshana's own v0.9.2 SYS_IOCTL
+# bug was a shipped constant silently shadowing a stdlib value.
+actual_vars=$(grep -oE '^var [A-Z][A-Za-z0-9_]*' dist/darshana.cyr | awk '{print $2}' | sort -u)
+for v in $actual_vars; do
+    case " $required_flags " in
+        *" $v "*) : ;;
+        *) fail "dist/darshana.cyr exports 'var ${v}' but required_flags omits it (constant surface check lagging dist — add it here, or underscore-privatize the constant)" ;;
+    esac
+done
+pass "required_flags covers every public constant in dist ($(echo "$actual_vars" | wc -w) total — no lag)"
 
 # ============================================================
-# Linux gate — termios.cyr's syscall arm must remain inside
-# CYRIUS_TARGET_LINUX. macOS BSD termios layout differs; without
-# the gate, cross-builds silently get wrong syscall numbers.
+# Platform gates — the Linux syscall arm must stay INSIDE
+# CYRIUS_TARGET_LINUX and the agnos arm inside CYRIUS_TARGET_AGNOS.
+# macOS BSD termios layout differs, and agnos has no ioctl at all;
+# without the gates a cross-build silently gets wrong syscall numbers.
+#
+# v0.9.3: this is a POSITIONAL check. It previously just grepped for
+# the `#ifdef` string anywhere in the file, which stayed green even
+# with the entire ioctl arm hoisted outside the gate — the check had
+# no relationship to what it claimed to verify.
 # ============================================================
 echo "[smoke] platform gate"
 
-grep -q '#ifdef CYRIUS_TARGET_LINUX' src/termios.cyr \
-    || fail "src/termios.cyr missing CYRIUS_TARGET_LINUX gate (Linux-syscall arm must stay gated)"
-pass "src/termios.cyr Linux gate intact"
+gate_bounds() {   # $1 = #ifdef token -> echoes "start end"
+    awk -v tok="$1" '
+        $0 ~ "^#ifdef " tok { s = NR; next }
+        s && /^#endif/ { print s, NR; exit }
+    ' src/termios.cyr
+}
+
+lin_bounds=$(gate_bounds CYRIUS_TARGET_LINUX)
+agn_bounds=$(gate_bounds CYRIUS_TARGET_AGNOS)
+[ -n "$lin_bounds" ] || fail "src/termios.cyr: CYRIUS_TARGET_LINUX gate not found (Linux-syscall arm must stay gated)"
+[ -n "$agn_bounds" ] || fail "src/termios.cyr: CYRIUS_TARGET_AGNOS gate not found"
+
+# Every Linux-only ioctl token must sit inside the Linux gate, and
+# every agnos syscall constant inside the agnos gate. Comment lines are
+# excluded — the gates' own docstrings legitimately name these tokens.
+lin_start=${lin_bounds% *}; lin_end=${lin_bounds#* }
+agn_start=${agn_bounds% *}; agn_end=${agn_bounds#* }
+
+stray_lin=$(grep -nE '(SYS_IOCTL|TCGETS|TCSETS|TIOCGWINSZ)' src/termios.cyr \
+            | grep -vE '^[0-9]+: *#' \
+            | awk -F: -v s="$lin_start" -v e="$lin_end" '$1 < s || $1 > e')
+[ -z "$stray_lin" ] || fail "src/termios.cyr: Linux ioctl tokens outside the CYRIUS_TARGET_LINUX gate (lines $lin_start-$lin_end):
+$stray_lin"
+
+stray_agn=$(grep -nE '_AGNOS_SYS_[A-Z]+|_AGNOS_SFD_' src/termios.cyr \
+            | grep -vE '^[0-9]+: *#' \
+            | awk -F: -v s="$agn_start" -v e="$agn_end" '$1 < s || $1 > e')
+[ -z "$stray_agn" ] || fail "src/termios.cyr: agnos syscall tokens outside the CYRIUS_TARGET_AGNOS gate (lines $agn_start-$agn_end):
+$stray_agn"
+
+pass "Linux ioctl arm confined to lines $lin_start-$lin_end; agnos arm to $agn_start-$agn_end"
 
 echo
 echo "smoke: PASS ($BIN)"

@@ -1,6 +1,7 @@
 # darshana PTY harness — v0.6.0 (roadmap "soak-window cuts").
 #
-# The pure-function surface (flag math, escape-byte emit, itoa) is
+# The pure-function surface (flag math, escape-byte emit, decimal
+# formatting via tty_dec_buf) is
 # covered by tests/darshana.tcyr. What that suite *cannot* reach
 # under `cyrius test` is the syscall-touching surface — `tty_raw` /
 # `tty_cooked` (TCGETS/TCSETS ioctls) and `tty_winsize` — because
@@ -42,6 +43,9 @@ var PTY_TIOCGPTN     = 0x80045430;  # _IOR('T',0x30,uint) — slave number
 var PTY_TIOCSPTLCK   = 0x40045431;  # _IOW('T',0x31,int)  — (un)lock slave
 var PTY_TIOCSWINSZ   = 0x5414;      # set window size
 var PTY_ONLCR        = 0x4;         # c_oflag: map \n -> \r\n on output
+var PTY_SYS_PRLIMIT64 = 302;        # x86_64 SYS_prlimit64
+var PTY_SYS_RT_SIGPROCMASK = 14;    # x86_64 SYS_rt_sigprocmask
+var PTY_RLIMIT_NOFILE = 7;          # resource id for the fd ceiling
 
 # Sleep ~1ms. Used between non-blocking master reads so the drain loop
 # yields the CPU instead of busy-spinning while the kernel moves bytes
@@ -402,6 +406,66 @@ fn main() {
         # marker (not a faked-pass assertion) so the degraded run is
         # visible to CI's SKIP grep instead of silently green.
         _pty_skip("/dev/ptmx unavailable");
+    }
+
+    # --- tty_open_signalfd failure path (deterministic) ------------
+    #
+    # v0.9.3. The success path is covered opportunistically in
+    # tests/darshana.tcyr; the FAILURE path is the one that carried a
+    # defect through v0.9.2, and it can be forced deterministically by
+    # squeezing RLIMIT_NOFILE so signalfd(2) cannot allocate an fd.
+    #
+    # Pre-fix behavior (reproduced under RLIMIT_NOFILE=3): the call
+    # returned the raw -errno (-24/EMFILE) instead of -1, AND left the
+    # signals in `sigmask` blocked on the thread forever — the caller
+    # got no fd, so it had nothing to hand `tty_close_signalfd`. A
+    # consumer following the documented "degrade gracefully" advice
+    # then ran its whole session deaf to the signals it had blocked.
+    test_group("pty.tcyr — tty_open_signalfd failure path");
+    var sig_before[8];
+    store64(&sig_before, 0);
+    syscall(PTY_SYS_RT_SIGPROCMASK, 0, 0, &sig_before, 8);
+
+    var rl_old[16];
+    store64(&rl_old, 0);
+    store64(&rl_old + 8, 0);
+    var rl_rc = syscall(PTY_SYS_PRLIMIT64, 0, PTY_RLIMIT_NOFILE, 0, &rl_old);
+    if (rl_rc == 0) {
+        # Drop the ceiling to 3 — fds 0/1/2 only, so no new fd can be
+        # allocated. rlim_max is left at its old value so the raise
+        # back at the end is permitted for an unprivileged process.
+        var rl_new[16];
+        store64(&rl_new, 3);
+        store64(&rl_new + 8, load64(&rl_old + 8));
+        if (syscall(PTY_SYS_PRLIMIT64, 0, PTY_RLIMIT_NOFILE, &rl_new, 0) == 0) {
+            var fsfd = tty_open_signalfd(TTY_SIGMASK_WINCH);
+
+            # Restore the ceiling BEFORE asserting, so a failed
+            # assertion can still open files on the way out.
+            syscall(PTY_SYS_PRLIMIT64, 0, PTY_RLIMIT_NOFILE, &rl_old, 0);
+
+            var sig_after[8];
+            store64(&sig_after, 0);
+            syscall(PTY_SYS_RT_SIGPROCMASK, 0, 0, &sig_after, 8);
+
+            if (fsfd >= 0) {
+                # The squeeze did not take (fd ceiling not actually
+                # binding here). Don't fake a pass — clean up and skip.
+                tty_close_signalfd(fsfd, TTY_SIGMASK_WINCH);
+                _pty_skip("RLIMIT_NOFILE squeeze did not force signalfd failure");
+            } else {
+                assert_eq(fsfd, 0 - 1,
+                    "forced-failure open returns exactly -1, not a raw -errno");
+                assert_eq(load64(&sig_after) & TTY_SIGMASK_WINCH, 0,
+                    "forced-failure open leaves no SIG_BLOCK residue");
+                assert_eq(load64(&sig_after), load64(&sig_before),
+                    "thread signal mask is byte-identical to before the call");
+            }
+        } else {
+            _pty_skip("prlimit64 set blocked — cannot force signalfd failure");
+        }
+    } else {
+        _pty_skip("prlimit64 get blocked — cannot force signalfd failure");
     }
 
 #endif

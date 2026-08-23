@@ -20,15 +20,32 @@
 #   TIOC*  raw kernel ioctl nums    _*     private-by-convention
 #                                          (in the bundle, not the API)
 #
-# Return conventions across the public surface:
-#   • side-effecting ops (tty_raw/cooked, tty_winsize, tty_move,
-#     tty_sgr, tty_fg_rgb/bg_rgb, ...) — 0 on success, -1 on
-#     failure/out-of-range reject.
-#   • `_buf` composers (tty_dec_buf, tty_sgr_buf, tty_fg_rgb_buf,
-#     tty_bg_rgb_buf, tty_sgr_reset_buf, tty_fg_256_buf) — the new
-#     write position, or -1 on out-of-range input.
+# Return conventions across the public surface. Every public fn falls
+# in exactly one of these four buckets — the trailing "..." this block
+# carried through v0.9.2 hid the fact that the unconditional emitters
+# are their own bucket, which made the block false for 12 of the 29
+# public fns.
+#   • validating side-effecting ops — tty_raw, tty_cooked,
+#     tty_winsize, tty_move, tty_sgr, tty_fg_rgb, tty_bg_rgb — 0 on
+#     success, -1 on failure or out-of-range reject (rejected before
+#     any byte reaches fd 1).
+#   • unconditional emitters — tty_alt_enter/leave, tty_clear,
+#     tty_clear_to_eol/eos, tty_cursor_hide/show/home, tty_sgr_reset,
+#     tty_cursor_up/down — ALWAYS 0. The write(2) result is not
+#     checked (rationale in ansi.cyr's header). `n <= 0` on
+#     tty_cursor_up/down is a documented no-op, not a reject: these
+#     never return -1.
+#   • `_buf` composers (tty_dec_buf, tty_sgr_buf, tty_sgr_reset_buf,
+#     tty_fg_rgb_buf, tty_bg_rgb_buf, tty_fg_256_buf) — the new write
+#     position, or -1 on out-of-range input OR on a negative incoming
+#     `pos` (v0.9.3: a -1 from an earlier link poisons the rest of the
+#     chain instead of being laundered into a write below the buffer).
+#     tty_dec_buf additionally clamps `val <= 0` to a single '0'.
+#     Each composer documents its own byte budget; none takes a
+#     capacity argument, so sizing the buffer is the caller's job.
 #   • predicates / fd openers — tty_isatty returns 1/0;
-#     tty_open_signalfd returns an fd (>= 0) or -1.
+#     tty_open_signalfd returns an fd (>= 0) or exactly -1, never a
+#     raw -errno.
 
 include "src/termios.cyr"
 include "src/ansi.cyr"

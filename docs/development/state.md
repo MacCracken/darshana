@@ -21,6 +21,51 @@ native `ioctl`). `TCGETS` / `TCSETS` / `TIOCGWINSZ` stay local —
 arch-stable via `asm-generic/ioctls.h` and not stdlib-defined. Latent,
 not live: no aarch64 consumer ships today. 199 assertions green.
 
+**0.9.3** — *open cycle*. **P-1 audit / refactor / hardening / security
+sweep** — the last code-shaped cut before the v1.0 freeze. Four audit
+lenses (correctness, security, refactor, docs + deferred-item sweep)
+over the whole surface, every finding put through an adversarial
+refutation pass: 32 raised, 26 survived, folded into 12 work items.
+
+Fixed: `tty_open_signalfd` leaked its `SIG_BLOCK` and returned a raw
+`-errno` when `signalfd(2)` failed — reproduced under
+`RLIMIT_NOFILE=3`, where it returned **-24** and left SIGWINCH blocked
+for the process lifetime with no fd for the caller to hand
+`tty_close_signalfd`; a consumer taking the documented "degrade
+gracefully" path then ran deaf to Ctrl-C / `kill` / hangup. Now rolls
+the block back and returns exactly -1 (both peers). The `_buf`
+composers laundered a -1 sentinel into an out-of-bounds write:
+`tty_sgr_reset_buf(&b, -1)` wrote ESC at `b - 1` and returned **3**,
+erasing the sentinel; all seven now reject a negative `pos`
+(**breaking** — `tty_sgr_reset_buf` and `tty_dec_buf` gain a -1
+return; zero live call sites affected across the five consumers).
+
+Refactor: three copies of the 1–3 digit decimal emitter collapsed to
+one, fg/bg RGB to one parameterized body, `tty_cursor_up/down` to one.
+Emitted bytes verified **identical** to v0.9.2 across the full input
+envelope — 55,798 bytes of composer output plus all 29 emitters,
+byte-for-byte, with the existing suite passing unmodified.
+
+Hardening: `scripts/smoke.sh` gained a reverse audit for constants
+(four `AGNOS_*` internals had entered dist unlisted across
+v0.8.0–v0.9.0 — now `_AGNOS_*`); the platform-gate check became
+positional rather than substring-presence (it stayed green with the
+entire ioctl arm hoisted outside the gate); the CI exec-sink pattern
+now covers raw syscall numbers, not just named stdlib wrappers.
+
+Docs: `main.cyr`'s frozen return-conventions block was false for 12 of
+the 29 public fns; `tty_winsize`'s "only fn writing through caller
+pointers" claim ignored six `_buf` composers; `getting-started.md` told
+contributors to add features to `src/main.cyr`, which is excluded from
+the dist bundle (every gate stays green while the symbol ships to
+nobody); the README advertised a `SIGWINCH` handler hook that ADR 0002
+rejects. All corrected; both `cyrius lint` untracked-deferral notes
+cross-referenced and cleared.
+
+Tests **199 → 217** (167 + 50), including a deterministic
+forced-failure signalfd test. Consumers need a dep bump for the dist
+bytes; no consumer code change required.
+
 **0.9.1** — *open cycle*. Toolchain-only bump `6.2.36` → `6.5.35`
 (manifest pin had drifted stale behind the installed wrapper again;
 builds were emitting both the pin-drift warning and a `./lib/ shadows
@@ -144,10 +189,10 @@ self-audits bidirectionally).
 
 | File | Status |
 |------|--------|
-| `tests/darshana.tcyr` | **152 assertions** (a couple live-fd-gated): pure-function coverage of `tio_load32/store32`, `_tty_apply_raw_flags` (every flag bit + idempotence), `tty_dec_buf` (zero / negative / 1–3 digits / new-position offset), `tty_move` rejection bounds (v0.7.0), `TIO_BUF_SIZE` drift guard (v0.7.0), the v0.3.0 constant set (`TTY_SIGMASK_*`, `TIOCGWINSZ` ABI), `tty_sgr` rejection, **v0.5.x** truecolor + 256 `_buf` exact-byte + bounds coverage, and **live-fd** tests for `tty_winsize` and `tty_open_signalfd` + `tty_close_signalfd` (v0.7.0). |
-| `tests/pty.tcyr` | **47 assertions (v0.6.0; hardened v0.7.0)** — the in-repo PTY harness. Opens a real pseudo-terminal (`/dev/ptmx` → `TIOCSPTLCK` → `TIOCGPTN` → `/dev/pts/N`) and drives darshana against the slave: `tty_isatty` on a known-live fd (+ deterministic `/dev/null` negative), `tty_winsize` set/get (24×80), the `tty_raw`→`tty_cooked()` state-restore (byte-for-byte), the single-raw-fd model (2nd fd refused), the cooked-vs-raw output round-trip (OPOST/ONLCR, fail-not-skip), and fd-1 escape-byte capture (via `dup2`) for `tty_alt_*`, `tty_clear`, `tty_clear_to_eol/eos`, `tty_cursor_*`, `tty_move`, `tty_sgr`, `tty_sgr_reset`, `tty_fg_rgb`/`tty_bg_rgb`. Wired into CI (v0.7.0) with `SKIP pty:` degradation tokens. Hang-proof (`O_NONBLOCK` master, bounded drains) and skip-clean (Linux-only). |
+| `tests/darshana.tcyr` | **167 assertions** (a couple live-fd-gated): pure-function coverage of `tio_load32/store32`, `_tty_apply_raw_flags` (every flag bit + idempotence), `tty_dec_buf` (zero / negative / 1–3 digits / new-position offset), `tty_move` rejection bounds (v0.7.0), `TIO_BUF_SIZE` drift guard (v0.7.0), the v0.3.0 constant set (`TTY_SIGMASK_*`, `TIOCGWINSZ` ABI), `tty_sgr` rejection, **v0.5.x** truecolor + 256 `_buf` exact-byte + bounds coverage, and **live-fd** tests for `tty_winsize` and `tty_open_signalfd` + `tty_close_signalfd` (v0.7.0). |
+| `tests/pty.tcyr` | **50 assertions (v0.6.0; hardened v0.7.0 and v0.9.3)** — the in-repo PTY harness. Opens a real pseudo-terminal (`/dev/ptmx` → `TIOCSPTLCK` → `TIOCGPTN` → `/dev/pts/N`) and drives darshana against the slave: `tty_isatty` on a known-live fd (+ deterministic `/dev/null` negative), `tty_winsize` set/get (24×80), the `tty_raw`→`tty_cooked()` state-restore (byte-for-byte), the single-raw-fd model (2nd fd refused), the cooked-vs-raw output round-trip (OPOST/ONLCR, fail-not-skip), and fd-1 escape-byte capture (via `dup2`) for `tty_alt_*`, `tty_clear`, `tty_clear_to_eol/eos`, `tty_cursor_*`, `tty_move`, `tty_sgr`, `tty_sgr_reset`, `tty_fg_rgb`/`tty_bg_rgb`. Wired into CI (v0.7.0) with `SKIP pty:` degradation tokens. Hang-proof (`O_NONBLOCK` master, bounded drains) and skip-clean (Linux-only). |
 
-**199 assertions total**, green at cyrius 6.5.35.
+**217 assertions total**, green at cyrius 6.5.35.
 
 ## Dependencies
 
@@ -175,8 +220,8 @@ at v0.9.0 too) — upstream-stdlib shaped, not a darshana defect.
 
 - ADR 0001 records the `darshana` name choice (`drishya` and other observation-family alternatives considered). Closed; no re-litigation needed.
 - macOS support is deferred — see CLAUDE.md domain rules.
-- The v0.8.0 roadmap slot (docs/examples/, final API audit, docs/architecture/ notes) was **not** what shipped as v0.8.0 — the agnos-parity work took the 0.8.x/0.9.0 cuts instead. Those three doc items are still open against the v1.0 freeze.
-- `cyrius lint` on 6.5.35 reports one untracked-deferral note each in `src/ansi.cyr:317` and `src/termios.cyr:19` ("not yet" without a CHANGELOG/issue cross-reference). Zero warnings, so CI's `warn`-only gate is unaffected; worth cross-referencing during the doc cut.
+- The v0.8.0 roadmap slot (docs/examples/, final API audit, docs/architecture/ notes) was **not** what shipped as v0.8.0 — the agnos-parity work took the 0.8.x/0.9.0 cuts instead. Re-slotted at v0.9.3 into an explicit **v0.9.4** cut in [`roadmap.md`](roadmap.md), now the sole remaining v1.0 blocker. `docs/examples/` is still an empty directory; `docs/architecture/` has only a `README.md` with an empty Items section.
+- ~~`cyrius lint` untracked-deferral notes in `src/ansi.cyr` / `src/termios.cyr`~~ — **closed at v0.9.3**: the bg-256 twin now cross-references roadmap.md §"Out of scope", the macOS termios note cross-references CLAUDE.md's domain rule. All four src modules are deferral-note clean; keep them that way.
 
 ## Release Process
 
@@ -184,7 +229,7 @@ at v0.9.0 too) — upstream-stdlib shaped, not a darshana defect.
 |---------|-------|
 | CI on push/PR | `.github/workflows/ci.yml` — three jobs: build-and-test (lint, smoke binary, `cyrius test`, `scripts/smoke.sh`, distlib drift, DCE parity); security scan (no FFI imports, no >=64K stack buffers, Linux gate intact); docs + version consistency |
 | Release on semver tag | `.github/workflows/release.yml` — gates on ci.yml via `workflow_call`, version-verify against tag, regenerates dist + ships `darshana-X.Y.Z.cyr` standalone + `darshana-X.Y.Z.tar.gz` package + source tarball + SHA256SUMS, GH release with body extracted from CHANGELOG section |
-| Smoke test | `scripts/smoke.sh` — runs smoke binary, verifies dist drift, asserts the public contract surface (29 `tty_*` / `tio_*` fn symbols + 35 `TIO_* / TTY_*` constants present in dist) with a **bidirectional self-audit** (v0.7.0) that also fails if dist exports a public fn missing from the checklist, checks `CYRIUS_TARGET_LINUX` gate intact |
+| Smoke test | `scripts/smoke.sh` — runs smoke binary, verifies dist drift, asserts the public contract surface (29 `tty_*` / `tio_*` fn symbols + 37 `TIO_* / TIOC* / TTY_*` constants present in dist) with a **bidirectional self-audit** covering both fns (v0.7.0) and constants (v0.9.3) — it fails if dist exports a public name the checklist omits, in either direction. The platform-gate check is **positional** as of v0.9.3: Linux ioctl tokens must sit inside the `CYRIUS_TARGET_LINUX` gate and agnos syscall tokens inside `CYRIUS_TARGET_AGNOS`, by line number rather than by substring presence |
 | Cutting a release | Bump VERSION + CHANGELOG section, push tag `vX.Y.Z` (or `X.Y.Z`); release.yml takes over. Pre-1.0 tags publish as GH prerelease automatically. |
 
 ## Roadmap status
@@ -200,8 +245,9 @@ at v0.9.0 too) — upstream-stdlib shaped, not a darshana defect.
     - v0.8.0 / v0.8.2 / v0.9.0 — **AGNOS parity** ✓ shipped. Took the slot the roadmap had penciled for the doc cut: `#ifdef CYRIUS_TARGET_AGNOS` peers for every syscall-touching entry point, so consumers stay platform-blind.
     - v0.7.1 / v0.8.1 / v0.9.1 — toolchain pin catch-ups ✓ shipped (6.2.22 / 6.2.36 / 6.5.35).
     - v0.9.2 — aarch64-Linux `SYS_IOCTL` shadow fix ✓ shipped. Cleared the 0.9.1 carry-forward: ESYSXLAT verified as *not* renumbering 16→29, so the hardcoded x86_64 number was a real defect, not a harmless one.
-    - **Still open before the freeze**: `docs/examples/`, the final per-symbol API audit, and `docs/architecture/` notes — the v0.8.0 roadmap items that agnos parity displaced.
+    - v0.9.3 — **P-1 audit / refactor / hardening / security sweep** ✓ shipped (this release). signalfd failure-path fix, `_buf` negative-`pos` rejection, contract-doc repair on the freeze surface, duplication pass, smoke/CI guards. Two breaking-but-correct fixes taken deliberately pre-freeze.
+    - **Still open before the freeze**: the **v0.9.4** doc/audit cut — `docs/examples/`, the final per-symbol API audit, `docs/architecture/` notes, and the CI syscall allowlist deferred out of v0.9.3.
     - See [`roadmap.md`](roadmap.md) §Soak-window cuts for the full plan + per-cut checklist.
-- M5 (v1.0.0) — both consumers green for ≥30 days — calendar-gated from 2026-05-20; the ≥30-day soak has long since elapsed. Remaining blockers are the three carried-forward doc/audit items, not the calendar.
+- M5 (v1.0.0) — the ≥30-day consumer soak **elapsed 2026-06-19**; five consumers live and green. The sole remaining blocker is the v0.9.4 doc/audit cut, not the calendar.
 
 See [`roadmap.md`](roadmap.md) for the full milestone definitions.

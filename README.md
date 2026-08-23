@@ -41,7 +41,8 @@ cyrius test                                          # run tests/*.tcyr
 | ANSI escape helpers (alt-screen, clear, cursor) | Widget toolkit / form controls |
 | Cursor positioning + visibility | Render loop + frame scheduling |
 | Window-size query (`TIOCGWINSZ` on Linux, `winsize`#60 on AGNOS) | Event/input dispatch system |
-| `SIGWINCH` install + handler hook | Tab/window/pane management |
+| Signal delivery via `signalfd` — `tty_open_signalfd` / `tty_close_signalfd` + `TTY_SIGMASK_*` | Tab/window/pane management |
+| | Signal-*handler* installation (`sigaction`) — routed through `signalfd` instead; see [ADR 0002](docs/adr/0002-state-restore-posture.md) |
 
 Render loops, widgets, and event loops belong in the consumer. darshana is the primitive layer.
 

@@ -16,8 +16,10 @@
 #   off 16  c_line     u8   line discipline
 #   off 17  c_cc[19]   u8   special chars (VTIME @ 22, VMIN @ 23)
 #
-# macOS (BSD) termios is a different struct and is not yet supported —
-# the ioctl wrappers below gate to CYRIUS_TARGET_LINUX. ANSI / cursor
+# macOS (BSD) termios is a different struct and is deliberately out of
+# scope for v1.0 (CLAUDE.md domain rules; roadmap.md §"Out of scope
+# (for v1.0)") — add it when a real consumer needs it, not before.
+# The ioctl wrappers below gate to CYRIUS_TARGET_LINUX. ANSI / cursor
 # helpers (in ansi.cyr / cursor.cyr) work on any vt100-compatible
 # terminal, so the platform gate sits at the syscall boundary, not at
 # darshana's surface.
@@ -204,6 +206,15 @@ fn tty_raw(fd) {
 # On TCSETS failure returns -1 and leaves `_tty_in_raw` set, so the
 # caller may retry; until a restore succeeds the terminal is left in
 # raw mode (state unspecified from the user's point of view).
+#
+# A PERMANENTLY failing restore (EBADF once the raw fd is closed,
+# ENOTTY after a hangup) strands the slot: `_tty_in_raw` stays 1, so
+# `tty_raw` on a DIFFERENT fd is refused for the rest of the process.
+# No public reset exists, by design — every consumer's answer to a
+# failed restore is to exit. Do NOT retry `tty_cooked()` after the
+# original fd number has been closed and reissued: the retry would
+# write the dead terminal's saved 60 bytes onto whatever now owns
+# that descriptor.
 fn tty_cooked() {
     if (_tty_in_raw == 0) { return 0; }
     var rc = syscall(SYS_IOCTL, _tty_raw_fd, TCSETS, &_tty_saved);
@@ -217,10 +228,15 @@ fn tty_cooked() {
 # failure (most often: fd is not a TTY).
 #
 # Out-pointer contract: `out_rows` and `out_cols` each receive an
-# i64 (8 bytes) via `store64`. This is the ONLY darshana primitive
-# that writes through caller-supplied pointers (every other public fn
-# takes values or writes to fd 1), so it is the single surface where a
-# malformed out-pointer corrupts caller memory. Callers must pass
+# i64 (8 bytes) via `store64`. This is the only darshana primitive
+# that writes a FIXED-WIDTH value through caller-supplied pointers.
+# The six `_buf` composers — tty_dec_buf (cursor.cyr) and tty_sgr_buf
+# / tty_sgr_reset_buf / tty_fg_rgb_buf / tty_bg_rgb_buf /
+# tty_fg_256_buf (ansi.cyr) — also write through a caller pointer, but
+# a VARIABLE number of bytes at `buf + pos`, and none takes a capacity
+# argument; each documents its own byte budget. Between them those are
+# the surfaces where a malformed pointer corrupts caller memory.
+# Callers must pass
 # `&var` where `var` is a Cyrius natural — i.e., declared as
 # `var rows = 0;`. Passing a pointer to a smaller slot (e.g., a single
 # byte inside a struct) will overflow that slot. The values themselves fit in u16 (kernel
@@ -273,11 +289,18 @@ fn tty_isatty(fd) {
 # should degrade gracefully — falling back to no-signal-handling is
 # usually preferable to refusing to launch).
 #
+# A failed open leaves NO residue: if `signalfd(2)` fails after the
+# block landed, the SIG_BLOCK is rolled back before returning, so the
+# -1 path needs no caller cleanup. The failure return is always
+# exactly -1, never a raw `-errno` (v0.9.3 — through v0.9.2 the
+# `signalfd` result was returned unnormalized, so a failing call
+# surfaced e.g. -24/EMFILE and left the signals blocked forever).
+#
 # The SIG_BLOCK installed here persists on the thread until explicitly
 # undone — closing the returned fd does NOT unblock the signals. Pair
 # every successful call with `tty_close_signalfd(fd, sigmask)` on the
 # teardown path (including the SIGINT/SIGTERM exit path) to close the
-# fd and restore the prior signal mask.
+# fd and unblock the signals in `sigmask`.
 #
 # `sigmask` is a single u64 representing a Linux sigset_t (bit N set
 # = signal N+1 in the mask). Common values are exposed as constants:
@@ -293,8 +316,8 @@ fn tty_isatty(fd) {
 # (Slice D adds SIGWINCH handling — same pattern, different mask).
 fn tty_open_signalfd(sigmask) {
     var mask[8];
-    var i = 0;
-    while (i < 8) { store8(&mask + i, 0); i = i + 1; }
+    # `store64` writes all 8 bytes of `mask`, so no pre-zero loop is
+    # needed (one shipped here through v0.9.2 and was pure dead store).
     store64(&mask, sigmask);
     # SIG_BLOCK = 0 (the `how` arg to sigprocmask)
     var rc = sys_sigprocmask(0, &mask, 0);
@@ -305,16 +328,34 @@ fn tty_open_signalfd(sigmask) {
     # pager, $SHELL) must not hand this fd to it. SFD_CLOEXEC is the
     # stdlib SfdFlag enum value (0x80000); same CLOEXEC discipline the
     # stdlib's epoll/eventfd wrappers follow.
-    return sys_signalfd(0 - 1, &mask, SFD_CLOEXEC);
+    var sfd = sys_signalfd(0 - 1, &mask, SFD_CLOEXEC);
+    if (sfd < 0) {
+        # SIG_UNBLOCK = 1. Roll the block back: the caller gets no fd,
+        # so it has nothing to hand `tty_close_signalfd` and would
+        # otherwise run with these signals blocked for the whole
+        # process lifetime. This also normalizes the raw `-errno` the
+        # bare syscall passthrough surfaces into the documented -1.
+        sys_sigprocmask(1, &mask, 0);
+        return 0 - 1;
+    }
+    return sfd;
 }
 
 # Teardown counterpart to `tty_open_signalfd`: close `fd` and UNblock
-# the signals in `sigmask`, restoring the thread signal mask that open
-# left modified. Closing the fd alone is not enough — the SIG_BLOCK
-# would otherwise persist and the consumer's signals stay silently
-# blocked after its UI exits (e.g. a parent that resumes once the TUI
-# returns). Pass the SAME `sigmask` that was passed to
+# the signals in `sigmask`. Closing the fd alone is not enough — the
+# SIG_BLOCK would otherwise persist and the consumer's signals stay
+# silently blocked after its UI exits (e.g. a parent that resumes once
+# the TUI returns). Pass the SAME `sigmask` that was passed to
 # `tty_open_signalfd`.
+#
+# This UNBLOCKS; it does not RESTORE. `tty_open_signalfd` passes
+# oldset = NULL, so the prior mask is never captured — a signal that
+# was ALREADY blocked by the caller before the open is left UNBLOCKED
+# after the matching close. That is deliberate, not an oversight:
+# unblock-what-you-blocked composes when a consumer holds two
+# signalfds at once (chakshu opens an EXIT one and a WINCH one), where
+# a save-and-SIG_SETMASK restore would have the first close stomp the
+# second one's blocks.
 #
 # The fd is closed unconditionally (best-effort); the return reflects
 # the mask restore — 0 on success, -1 if sigprocmask fails. v0.7.0 —
@@ -323,8 +364,6 @@ fn tty_open_signalfd(sigmask) {
 fn tty_close_signalfd(fd, sigmask) {
     file_close(fd);
     var mask[8];
-    var i = 0;
-    while (i < 8) { store8(&mask + i, 0); i = i + 1; }
     store64(&mask, sigmask);
     # SIG_UNBLOCK = 1 (the `how` arg to sigprocmask)
     return sys_sigprocmask(1, &mask, 0);
@@ -354,10 +393,15 @@ fn tty_close_signalfd(fd, sigmask) {
 # `winsize` (the Linux↔agnos syscall-number-overlap hazard can't bite a number
 # used inside its own target's `#ifdef`). The kernel ignores the argument; a
 # dummy `0` is passed to satisfy the `syscall()` builtin's arg shape.
-var AGNOS_SYS_WINSIZE = 60;
+# Underscore-prefixed (v0.9.3): these are darshana INTERNALS, not public
+# surface. They ship in `dist/darshana.cyr` like everything else, so the
+# `_` keeps them out of the frozen `TIO_* / TIOC* / TTY_*` constant
+# namespace and out of `scripts/smoke.sh`'s constant contract list. No
+# consumer references them (verified across all five consumer trees).
+var _AGNOS_SYS_WINSIZE = 60;
 
 fn tty_winsize(fd, out_rows, out_cols) {
-    var packed = syscall(AGNOS_SYS_WINSIZE, 0);
+    var packed = syscall(_AGNOS_SYS_WINSIZE, 0);
     if (packed < 0) { return 0 - 1; }
     var rows = packed & 0xFFFF;
     var cols = (packed >> 16) & 0xFFFF;
@@ -373,7 +417,7 @@ fn tty_winsize(fd, out_rows, out_cols) {
 # successful `winsize` as "is a tty", preserving the Linux 1/0 verdict. `fd` is
 # ignored: the console grid is a global framebuffer property, not per-fd.
 fn tty_isatty(fd) {
-    if (syscall(AGNOS_SYS_WINSIZE, 0) < 0) { return 0; }
+    if (syscall(_AGNOS_SYS_WINSIZE, 0) < 0) { return 0; }
     return 1;
 }
 
@@ -411,15 +455,15 @@ var TTY_SIGMASK_WINCH = 0x10000000;
 # AGNOS syscall numbers for the signalfd path — mirshi supervisor-emulates both
 # (#17 sigprocmask, #18 signalfd). Raw `syscall(N, ...)` inside this agnos-only
 # branch is correct and needs no cyrius stdlib `sys_*` wrapper — same rationale
-# as AGNOS_SYS_WINSIZE above: the Linux↔agnos syscall-number-overlap hazard
+# as _AGNOS_SYS_WINSIZE above: the Linux↔agnos syscall-number-overlap hazard
 # can't bite a number used inside its own target's `#ifdef`.
-var AGNOS_SYS_SIGPROCMASK = 17;   # sigprocmask(how, set_ptr, oldset_ptr) → 0/-1
-var AGNOS_SYS_SIGNALFD    = 18;   # signalfd(fd, mask_ptr, flags) → fd/-1
+var _AGNOS_SYS_SIGPROCMASK = 17;   # sigprocmask(how, set_ptr, oldset_ptr) → 0/-1
+var _AGNOS_SYS_SIGNALFD    = 18;   # signalfd(fd, mask_ptr, flags) → fd/-1
 # SFD_CLOEXEC — carried for intent parity with the Linux peer's CLOEXEC
 # discipline. mirshi's MVP signalfd is an opaque supervisor-side fd (no execve
 # fd-inheritance across the ptrace boundary) and is always non-blocking, so it
 # stores `flags` but does not act on them; the value is preserved for honesty.
-var AGNOS_SFD_CLOEXEC = 0x80000;
+var _AGNOS_SFD_CLOEXEC = 0x80000;
 
 # AGNOS peer of `tty_open_signalfd`. Blocks the signals in `sigmask` on this
 # thread (sigprocmask#17, SIG_BLOCK=0) then creates an emulated signalfd
@@ -433,31 +477,37 @@ var AGNOS_SFD_CLOEXEC = 0x80000;
 # `1<<sig` set (see TTY_SIGMASK_* above), an 8-byte word like the Linux path.
 fn tty_open_signalfd(sigmask) {
     var mask[8];
-    var i = 0;
-    while (i < 8) { store8(&mask + i, 0); i = i + 1; }
     store64(&mask, sigmask);
     # SIG_BLOCK = 0 (the `how` arg to sigprocmask)
-    var rc = syscall(AGNOS_SYS_SIGPROCMASK, 0, &mask, 0);
+    var rc = syscall(_AGNOS_SYS_SIGPROCMASK, 0, &mask, 0);
     if (rc < 0) { return 0 - 1; }
     # signalfd(fd=-1, mask, SFD_CLOEXEC) → new emulated fd.
-    return syscall(AGNOS_SYS_SIGNALFD, 0 - 1, &mask, AGNOS_SFD_CLOEXEC);
+    var sfd = syscall(_AGNOS_SYS_SIGNALFD, 0 - 1, &mask, _AGNOS_SFD_CLOEXEC);
+    if (sfd < 0) {
+        # SIG_UNBLOCK = 1 — roll the block back, exactly as the Linux
+        # peer does. mirshi already normalizes its failures to -1, so
+        # only the rollback is substantive here; the shape is kept
+        # identical so the two peers stay readable side by side.
+        syscall(_AGNOS_SYS_SIGPROCMASK, 1, &mask, 0);
+        return 0 - 1;
+    }
+    return sfd;
 }
 
 # AGNOS peer of `tty_close_signalfd`: close `fd` and UNblock the signals in
-# `sigmask` (sigprocmask#17, SIG_UNBLOCK=1), restoring the thread mask that
-# open modified. Closing the fd alone is not enough — the SIG_BLOCK would
-# persist and the consumer's signals stay silently blocked after its UI exits.
+# `sigmask` (sigprocmask#17, SIG_UNBLOCK=1). Closing the fd alone is not enough
+# — the SIG_BLOCK would persist and the consumer's signals stay silently
+# blocked after its UI exits. Like the Linux peer this UNBLOCKS rather than
+# restoring a captured mask; see that docstring for why.
 # Pass the SAME `sigmask` given to `tty_open_signalfd`. The fd is closed
 # unconditionally (best-effort); the return reflects the mask restore — 0 on
 # success, -1 if sigprocmask fails. Mirrors the Linux peer above.
 fn tty_close_signalfd(fd, sigmask) {
     file_close(fd);
     var mask[8];
-    var i = 0;
-    while (i < 8) { store8(&mask + i, 0); i = i + 1; }
     store64(&mask, sigmask);
     # SIG_UNBLOCK = 1 (the `how` arg to sigprocmask)
-    return syscall(AGNOS_SYS_SIGPROCMASK, 1, &mask, 0);
+    return syscall(_AGNOS_SYS_SIGPROCMASK, 1, &mask, 0);
 }
 
 #endif

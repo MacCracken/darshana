@@ -1,9 +1,12 @@
-# darshana test suite — exercises the pure-function pieces of the M1
-# donor port. The TTY-bound functions (tty_raw / tty_cooked / tty_*)
-# need a real TTY fd to ioctl against and a way to capture stdout
-# bytes — neither is available cleanly in unit-test scope. The
-# pre-existing cyim PTY integration smoke covers them end-to-end;
-# darshana's CI re-runs cyim's smoke at Phase 4 of the migration plan.
+# darshana test suite — the pure-function surface: termios flag math,
+# decimal formatting, the `_buf` composers and their rejection paths,
+# plus opportunistic live-fd probes on fd 0 (skip-clean when the
+# runner has no controlling TTY).
+#
+# The syscall-touching and escape-emitting surface is covered
+# deterministically by tests/pty.tcyr (v0.6.0), which manufactures its
+# own pseudo-terminal rather than relying on an inherited one. CI runs
+# both files as separate steps.
 #
 # Stdlib auto-included via cyrius.cyml; src/main.cyr pulls in the
 # three domain modules.
@@ -426,6 +429,68 @@ fn main() {
     # tty_close_signalfd then closes the fd AND unblocks SIGWINCH, so
     # (v0.7.0) the block no longer persists past this test — exercising
     # the teardown counterpart on the live path.
+    # ----- _buf family — negative `pos` is rejected, not laundered ---
+    #
+    # v0.9.3. The `_buf` composers are documented (src/main.cyr) as a
+    # chainable family: each takes a write position and returns the new
+    # one, or -1 on bad input. Four members could return -1 but NO
+    # member validated the incoming `pos`, so a -1 from an earlier link
+    # was laundered: `tty_sgr_reset_buf(&b, -1)` wrote ESC at `b - 1`
+    # and returned 3 — sentinel gone, neighbouring memory clobbered,
+    # and the caller left holding a length that emits a broken escape.
+    # `tty_dec_buf(&b, -5, 7)` returned -4, a negative "new position" a
+    # caller would pass as a write(2) length.
+    test_group("_buf family — negative pos rejected, not laundered");
+    var nbuf[32];
+    assert_eq(tty_dec_buf(&nbuf, 0 - 1, 42), 0 - 1,
+        "tty_dec_buf rejects pos < 0");
+    assert_eq(tty_dec_buf(&nbuf, 0 - 5, 7), 0 - 1,
+        "tty_dec_buf rejects pos = -5 (was: returned -4)");
+    assert_eq(tty_sgr_reset_buf(&nbuf, 0 - 1), 0 - 1,
+        "tty_sgr_reset_buf rejects pos < 0 (was: returned 3)");
+    assert_eq(tty_sgr_buf(&nbuf, 0 - 1, 31), 0 - 1,
+        "tty_sgr_buf rejects pos < 0");
+    assert_eq(tty_fg_256_buf(&nbuf, 0 - 1, 7), 0 - 1,
+        "tty_fg_256_buf rejects pos < 0");
+    assert_eq(tty_fg_rgb_buf(&nbuf, 0 - 1, 0, 0, 0), 0 - 1,
+        "tty_fg_rgb_buf rejects pos < 0");
+    assert_eq(tty_bg_rgb_buf(&nbuf, 0 - 1, 0, 0, 0), 0 - 1,
+        "tty_bg_rgb_buf rejects pos < 0");
+
+    # Positive control: a valid pos still composes exactly as before,
+    # so the guard rejects only the sentinel, not ordinary use.
+    assert_eq(tty_sgr_reset_buf(&nbuf, 0), 4,
+        "tty_sgr_reset_buf still returns 4 at pos 0");
+    assert_eq(tty_dec_buf(&nbuf, 3, 42), 5,
+        "tty_dec_buf still advances 2 for a 2-digit value");
+
+    # No write below the composer's base pointer. Compose at an
+    # INTERIOR offset so the byte a pre-fix build would have clobbered
+    # (`base - 1`) is inside our own buffer and inspectable — this does
+    # not rely on stack layout.
+    var chk[32];
+    var chk_i = 0;
+    while (chk_i < 32) { store8(&chk + chk_i, 0); chk_i = chk_i + 1; }
+    tty_sgr_reset_buf(&chk + 8, 0 - 1);
+    assert_eq(load8(&chk + 7), 0,
+        "no write below the composer base (pre-fix: ESC landed here)");
+    tty_dec_buf(&chk + 8, 0 - 1, 42);
+    assert_eq(load8(&chk + 7), 0,
+        "tty_dec_buf writes nothing below its base either");
+
+    # Chain poisoning — the whole point of the change. A rejected link
+    # must keep the rest of the chain rejected rather than silently
+    # resurrecting a valid-looking position.
+    var pp = tty_fg_rgb_buf(&nbuf, 0, 0, 0, 256);   # bad channel -> -1
+    assert_eq(pp, 0 - 1, "out-of-range channel still returns -1");
+    pp = tty_sgr_reset_buf(&nbuf, pp);
+    assert_eq(pp, 0 - 1,
+        "a -1 from an earlier link poisons the rest of the chain");
+
+    # tty_move composes through two tty_dec_buf links; both propagate.
+    assert_eq(tty_move(0, 1), 0 - 1, "tty_move still rejects row 0");
+    assert_eq(tty_move(1, 65536), 0 - 1, "tty_move still rejects col 65536");
+
     test_group("termios.cyr — tty_open/close_signalfd (live)");
     var sfd = tty_open_signalfd(TTY_SIGMASK_WINCH);
     if (sfd >= 0) {
@@ -435,10 +500,25 @@ fn main() {
         # into the remainder of the suite.
         assert_eq(tty_close_signalfd(sfd, TTY_SIGMASK_WINCH), 0,
             "tty_close_signalfd closes fd + restores mask");
+    } else {
+        # v0.9.3 — the failure path is a contract too. Through v0.9.2
+        # this returned the raw `-errno` from the bare signalfd(2)
+        # passthrough (e.g. -24/EMFILE) and left the signals in
+        # `sigmask` blocked on the thread for the process lifetime,
+        # with no fd for the caller to hand `tty_close_signalfd`.
+        assert_eq(sfd, 0 - 1,
+            "failed open returns exactly -1, never a raw -errno");
+        # rt_sigprocmask(SIG_BLOCK, NULL, &cur, 8) — read the mask back.
+        var cur[8];
+        store64(&cur, 0);
+        syscall(14, 0, 0, &cur, 8);
+        assert_eq(load64(&cur) & TTY_SIGMASK_WINCH, 0,
+            "failed open rolls its SIG_BLOCK back — no mask residue");
     }
-    # else: signalfd syscall blocked by sandbox / seccomp / very old
-    # kernel. Skip silently — consumer integration (chakshu's M2
-    # signalfd-driven exit + SIGWINCH loop) covers the live path.
+    # The else branch fires when the signalfd syscall is blocked by a
+    # sandbox / seccomp policy / very old kernel, or when the process
+    # is at its fd ceiling. Consumer integration (chakshu's M2
+    # signalfd-driven exit + SIGWINCH loop) covers the success path.
 
     return assert_summary();
 }

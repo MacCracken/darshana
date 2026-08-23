@@ -4,6 +4,146 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-08-23
+
+P-1 audit / refactor / hardening / security sweep — the last code-shaped cut
+before the v1.0 API freeze. Four audit lenses (correctness, security, refactor,
+docs + deferred-item sweep) over the full surface, every finding put through an
+adversarial refutation pass: 32 raised, 26 survived, folded into 12 work items.
+
+### Breaking
+
+Both breaks are deliberate pre-freeze choices — cheap now, major-bump-expensive
+after v1.0. **Zero live call sites are affected**, verified by grep across all
+five consumer trees; consumers still need a dep bump for the dist bytes.
+
+- **`tty_sgr_reset_buf` and `tty_dec_buf` gain a `-1` return.** Neither had a
+  failure mode before. See the `_buf` fix below.
+- **The four `AGNOS_*` constants are now `_AGNOS_*`** (`_AGNOS_SYS_WINSIZE`,
+  `_AGNOS_SYS_SIGPROCMASK`, `_AGNOS_SYS_SIGNALFD`, `_AGNOS_SFD_CLOEXEC`). They
+  are darshana internals that entered the shipped namespace across v0.8.0–v0.9.0
+  without matching any of the naming patterns `src/main.cyr` calls frozen at
+  v1.0. Nothing outside darshana references them.
+
+Not a break but consumers should read it: **`tty_open_signalfd`'s failure return
+changes from a raw `-errno` to exactly `-1`** — a fix that makes the documented
+contract true.
+
+### Fixed
+
+- **`tty_open_signalfd` leaked its `SIG_BLOCK` and returned a raw `-errno` when
+  `signalfd(2)` failed** (`src/termios.cyr`, both the Linux and AGNOS peers).
+  The function blocks the signals in `sigmask`, then creates the signalfd; the
+  sigprocmask half normalized its error but the signalfd half was returned
+  unnormalized. Reproduced under `RLIMIT_NOFILE=3`: the call returned **-24**
+  (EMFILE) and left SIGWINCH blocked on the thread, with no fd for the caller to
+  hand `tty_close_signalfd`. Since the docstring tells callers to degrade
+  gracefully on failure, a consumer following it ran its whole session with
+  HUP/INT/TERM blocked — Ctrl-C inert, `kill` inert, terminal hangup inert, only
+  SIGKILL working. The failure path now rolls the block back and returns exactly
+  `-1`, so a failed open leaves no residue. Covered by a deterministic
+  forced-failure test in `tests/pty.tcyr`.
+- **The `_buf` composers laundered a `-1` sentinel into an out-of-bounds write.**
+  The family is documented as chainable — each takes a write position, returns
+  the new one, or `-1` on bad input — but no member validated the *incoming*
+  `pos`. `tty_sgr_reset_buf(&b, -1)` wrote ESC at `b - 1`, then `[0m` at `b+0..2`,
+  and returned **3**: the sentinel erased, a neighbouring stack slot clobbered,
+  and the caller left holding a length that emits a broken escape missing its
+  ESC. `tty_dec_buf(&b, -5, 7)` returned **-4**, a negative "new position" a
+  caller would pass as a `write(2)` length. All seven composers now reject a
+  negative `pos` with `-1`, and `tty_move` propagates a rejection out of either
+  of its two `tty_dec_buf` links.
+
+### Changed
+
+- **Duplication pass in `src/ansi.cyr` / `src/cursor.cyr`.** Three verbatim
+  copies of the 1–3 digit decimal emitter collapsed to one (`_ansi_emit_u8`);
+  `tty_fg_rgb_buf` / `tty_bg_rgb_buf` — 19 duplicated lines differing in a single
+  byte literal — collapsed onto a parameterized `_ansi_rgb_buf`, with
+  `tty_fg_rgb` / `tty_bg_rgb` over a shared `_ansi_rgb_write`; `tty_cursor_up` /
+  `tty_cursor_down` collapsed onto `_cursor_rel` (the copy had already drifted —
+  it had lost its comments). `tty_sgr` became a one-shot wrapper over
+  `tty_sgr_buf`, matching the shape `tty_fg_rgb` already used, and moved beside
+  it. **Emitted bytes are identical to v0.9.2** — verified across the full input
+  envelope (55,798 bytes of composer output plus all 29 emitters, byte-for-byte),
+  with the existing exact-byte suite passing unmodified.
+- **Contract docs repaired on the surface about to be frozen.** `src/main.cyr`'s
+  "Return conventions" block was false for 12 of the 29 public fns — it had no
+  bucket for the unconditional emitters, so `tty_cursor_up/down` and the fixed
+  escape writers were described as returning `-1` on failure, which they never
+  do. `tty_winsize`'s claim to be "the ONLY darshana primitive that writes
+  through caller-supplied pointers" ignored six `_buf` composers that write a
+  *variable* number of bytes through a caller pointer with no capacity argument.
+  Each composer now documents its own byte budget. `tty_close_signalfd`'s
+  docstring said it "restores the prior signal mask" — it calls `SIG_UNBLOCK`,
+  and open passes `oldset = NULL`, so the prior mask is never captured; the
+  docstring now says unblock and explains why unblock-what-you-blocked is the
+  right primitive when a consumer holds two signalfds. `tty_cooked` gained a note
+  on the stranded-slot state a permanently failing restore produces.
+- **`scripts/smoke.sh` gained a reverse audit for constants**, mirroring the one
+  it has had for functions since v0.7.0. `TCGETS` / `TCSETS` are now listed as
+  the consumer surface they already were; the four `AGNOS_*` internals were
+  privatized instead. A shipped constant must now be either public contract or
+  `_`-prefixed. The label also stopped claiming all 37 constants are `TIO_*`.
+- **The platform-gate check is positional, not substring-presence**
+  (`scripts/smoke.sh` and `.github/workflows/ci.yml`). It previously grepped for
+  `#ifdef CYRIUS_TARGET_LINUX` anywhere in the file, which stayed green with the
+  entire ioctl arm hoisted outside the gate — the check had no relationship to
+  what its comment claimed it verified. It now resolves both gates' line ranges
+  and fails if a Linux ioctl token or an agnos syscall token sits outside its
+  own gate.
+- **The CI exec-sink scan now covers raw syscall numbers.** It matched only named
+  stdlib wrappers (`sys_system`, `sys_exec*`, `system(`) while its comment
+  claimed to catch "a raw execve syscall" — and darshana's entire surface is
+  `syscall(N, ...)`, so a synthetic `syscall(57)` / `syscall(59, path, 0, 0)`
+  fork+exec pair scored zero hits and the job exited green. Inverting this
+  denylist into a syscall *allowlist* is tracked in the roadmap's v0.9.4 cut.
+- **`docs/guides/getting-started.md` no longer routes contributor work into a
+  no-op.** It said "Edit `src/main.cyr`" — a file excluded from `[lib].modules`,
+  so a public symbol added there compiles, tests green, passes the dist-drift
+  check and the smoke surface audit, and ships to nobody. It now names the three
+  domain modules, says explicitly that `main.cyr` is not in the bundle, and adds
+  the `scripts/smoke.sh` contract-list step the old six-step recipe omitted.
+- **README scope table** no longer advertises "`SIGWINCH` install + handler
+  hook". No such API exists, and ADR 0002 rejects that shape outright; the row
+  now names the `signalfd` path that actually shipped.
+- **Roadmap re-slotted and de-staled** (`docs/development/roadmap.md`). M1's and
+  M2's 12 unchecked boxes were closed (M2's with per-item resolutions, since
+  three shipped under different names and one was deliberately skipped). The
+  v0.8.0 doc/audit slot — displaced by the AGNOS parity work and reading as dead
+  history — was re-slotted as an explicit **v0.9.4** cut, now the sole remaining
+  v1.0 blocker. The M5 calendar gate, elapsed 2026-06-19, no longer reads as the
+  blocker. The soak-window constraint paragraph was retired, with a note that its
+  "refactors that don't touch the dist bundle bytes" clause was always vacuous —
+  `dist/darshana.cyr` *is* the concatenated source text.
+- **Stale shipped comments corrected.** `src/ansi.cyr` claimed 256-color and
+  truecolor "will land when a consumer asks" — both landed in that same file
+  (v0.5.1 and v0.5.3, driven by anuenue); cited a "v0.6.0 candidate per state.md
+  M5 carry-forward" whose three anchors are all dead; understated the short-end
+  256-color escape as 8 bytes (it is 9); and sized a `buf[16]` for a one-shot
+  that was never shipped. Two comments still named `tty_itoa`, renamed in v0.7.0.
+  These all ship verbatim in `dist/darshana.cyr`, so consumers read them.
+- **Both `cyrius lint` untracked-deferral notes cleared** by cross-referencing
+  rather than deleting: the 256-color background twin is a *live* deferral with a
+  named first consumer (kii's local `_emit_bg_256_buf`) and is now tracked in the
+  roadmap's "Out of scope" section under the extract-on-2nd-consumer rule; the
+  macOS termios note now points at CLAUDE.md's domain rule.
+
+### Tests
+
+- **199 → 217 assertions** (167 in `tests/darshana.tcyr`, 50 in `tests/pty.tcyr`).
+- New `_buf` negative-`pos` group: rejection for all seven composers, positive
+  controls, a no-write-below-base check that stays in bounds by composing at an
+  interior offset, and a chain-poisoning assertion. Against v0.9.2 source these
+  produce 10 failures, including the literal out-of-bounds bytes (ESC = 27 and
+  '4' = 52 landing below the buffer).
+- New deterministic `tty_open_signalfd` failure test in `tests/pty.tcyr`: squeezes
+  `RLIMIT_NOFILE` to force the failure, asserts the return is exactly `-1` and
+  that the thread signal mask is byte-identical to before the call. Against
+  v0.9.2 source it fails with `-24` and a leaked `0x08000000`.
+- `tests/darshana.tcyr`'s header no longer claims the TTY-bound surface is
+  untestable in-repo or that CI re-runs cyim's smoke — both false since v0.6.0.
+
 ## [0.9.2] — 2026-08-23
 
 Behavior fix on aarch64-Linux. No public-API change; x86_64 and agnos codegen
