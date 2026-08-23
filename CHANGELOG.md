@@ -107,15 +107,24 @@ contract true.
 - **README scope table** no longer advertises "`SIGWINCH` install + handler
   hook". No such API exists, and ADR 0002 rejects that shape outright; the row
   now names the `signalfd` path that actually shipped.
-- **Roadmap re-slotted and de-staled** (`docs/development/roadmap.md`). M1's and
-  M2's 12 unchecked boxes were closed (M2's with per-item resolutions, since
-  three shipped under different names and one was deliberately skipped). The
-  v0.8.0 doc/audit slot — displaced by the AGNOS parity work and reading as dead
-  history — was re-slotted as an explicit **v0.9.4** cut, now the sole remaining
-  v1.0 blocker. The M5 calendar gate, elapsed 2026-06-19, no longer reads as the
-  blocker. The soak-window constraint paragraph was retired, with a note that its
-  "refactors that don't touch the dist bundle bytes" clause was always vacuous —
-  `dist/darshana.cyr` *is* the concatenated source text.
+- **`docs/development/roadmap.md` is now forward-facing only** — 137 lines to
+  109, with the surviving content being almost entirely different. It had become
+  a second changelog: five closed milestones (M0–M4) with their gates, the
+  shipped soak-window cuts, and a v0.8.0 doc slot that AGNOS parity had displaced
+  and that therefore read as dead history. All of it duplicated the CHANGELOG,
+  and the duplication had gone stale — M1's and M2's 12 checkboxes still read
+  unchecked three months after both shipped, and the M5 calendar gate still read
+  as the v1.0 blocker two months after it elapsed. Closed milestones are now
+  **deleted** from the file rather than checked off in place, a convention the
+  header states explicitly. What remains is what is still open: the **v0.9.4**
+  cut (the sole v1.0 blocker), the v1.0.0 freeze and registry promotion, the
+  out-of-scope boundaries, and post-1.0 tracked items. Two anti-goals were
+  preserved from the deleted milestone text because they are forward-facing
+  decisions rather than history: `tty_frame_begin`/`tty_frame_end` will not ship,
+  and no `sigaction`-shaped handler-install API will ship. The soak-window
+  constraint paragraph was dropped along with its section; for the record its
+  "refactors that don't touch the dist bundle bytes are fine" clause was always
+  vacuous, since `dist/darshana.cyr` *is* the concatenated source text.
 - **Stale shipped comments corrected.** `src/ansi.cyr` claimed 256-color and
   truecolor "will land when a consumer asks" — both landed in that same file
   (v0.5.1 and v0.5.3, driven by anuenue); cited a "v0.6.0 candidate per state.md

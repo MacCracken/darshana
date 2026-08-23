@@ -1,4 +1,4 @@
-# darshana PTY harness — v0.6.0 (roadmap "soak-window cuts").
+# darshana PTY harness — shipped v0.6.0; see CHANGELOG [0.6.0].
 #
 # The pure-function surface (flag math, escape-byte emit, decimal
 # formatting via tty_dec_buf) is

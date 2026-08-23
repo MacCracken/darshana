@@ -247,7 +247,7 @@ at v0.9.0 too) — upstream-stdlib shaped, not a darshana defect.
     - v0.9.2 — aarch64-Linux `SYS_IOCTL` shadow fix ✓ shipped. Cleared the 0.9.1 carry-forward: ESYSXLAT verified as *not* renumbering 16→29, so the hardcoded x86_64 number was a real defect, not a harmless one.
     - v0.9.3 — **P-1 audit / refactor / hardening / security sweep** ✓ shipped (this release). signalfd failure-path fix, `_buf` negative-`pos` rejection, contract-doc repair on the freeze surface, duplication pass, smoke/CI guards. Two breaking-but-correct fixes taken deliberately pre-freeze.
     - **Still open before the freeze**: the **v0.9.4** doc/audit cut — `docs/examples/`, the final per-symbol API audit, `docs/architecture/` notes, and the CI syscall allowlist deferred out of v0.9.3.
-    - See [`roadmap.md`](roadmap.md) §Soak-window cuts for the full plan + per-cut checklist.
+    - Shipped-cut detail lives in [`CHANGELOG.md`](../../CHANGELOG.md); [`roadmap.md`](roadmap.md) carries only what is still open.
 - M5 (v1.0.0) — the ≥30-day consumer soak **elapsed 2026-06-19**; five consumers live and green. The sole remaining blocker is the v0.9.4 doc/audit cut, not the calendar.
 
-See [`roadmap.md`](roadmap.md) for the full milestone definitions.
+[`roadmap.md`](roadmap.md) is forward-facing only — it now carries just the v0.9.4 cut, the v1.0.0 freeze, the out-of-scope boundaries, and the post-1.0 tracked items. Closed-milestone definitions were retired there at v0.9.3; the arc above is the surviving summary, and [`CHANGELOG.md`](../../CHANGELOG.md) is the full record.

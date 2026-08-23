@@ -76,7 +76,7 @@ cyrius test                          # run [build].test + tests/*.tcyr
 - [`docs/guides/`](docs/guides/) — Task-oriented how-tos
 - [`docs/examples/`](docs/examples/) — Runnable examples
 - [`docs/development/state.md`](docs/development/state.md) — Live state snapshot
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — Milestones through v1.0
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — **Forward-facing only**: what is left to do through v1.0 and beyond. Closed milestones are deleted from it, not checked off — shipped work lives in the CHANGELOG, current state in `state.md`.
 
 ## Process
 
