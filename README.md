@@ -12,7 +12,7 @@ Donor: [`cyim/src/tty.cyr`](https://github.com/MacCracken/cyim) (~207 lines, Lin
 
 ## Status
 
-**v0.8.1 — pre-1.0 hardening.** The donor port and the chakshu/anuenue-driven extensions have landed; the surface is in its v1.0 pre-freeze hardening window (see [`docs/development/roadmap.md`](docs/development/roadmap.md)). The TTY surface works on Linux and, as of v0.8.0, on AGNOS — `tty_winsize` has a `#ifdef CYRIUS_TARGET_AGNOS` branch over the kernel's `winsize`#60 syscall (requires agnos ≥ 1.45.13), so consumers size to the real console on both targets.
+**v0.9.1 — pre-1.0 hardening.** The donor port and the chakshu/anuenue-driven extensions have landed; the surface is in its v1.0 pre-freeze hardening window (see [`docs/development/roadmap.md`](docs/development/roadmap.md)). The TTY surface works on Linux and, as of v0.9.0, fully on AGNOS — every syscall-touching entry point (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) has a `#ifdef CYRIUS_TARGET_AGNOS` peer over the kernel's own syscalls (requires agnos ≥ 1.45.13), so consumers stay platform-blind on both targets.
 
 Consume it via `cyrius deps` against the `dist/darshana.cyr` bundle — no need to copy `cyim/src/tty.cyr` anymore.
 

@@ -4,6 +4,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-08-23
+
+Toolchain-only release. No source or public-API changes.
+
+### Changed
+
+- **cyrius toolchain pin `6.2.36` → `6.5.35`** in `cyrius.cyml [package].cyrius`.
+  The manifest pin had drifted stale behind the installed wrapper again (already
+  on 6.5.35), so builds were emitting both the pin-drift warning and a
+  `./lib/ shadows version-pinned ...` warning listing nine bundled sibling libs
+  behind the snapshot. `cyrius update` re-vendored `lib/` from the 6.5.35
+  snapshot — 69 modules refreshed, 17 new ones added (`sys`, `ganita`,
+  `yantra`, `bayan`, `protobuf`, the per-platform `async_*` / `thread_*` /
+  `regression_agnos` splits, and the six `tls_native_*` shards the monolithic
+  `tls_native.cyr` was broken into). Bundled sibling-lib versions advanced:
+  mabda 3.0.1 → 4.1.0, vani 0.9.3 → 1.2.2, sigil 3.7.8 → 3.12.9, sandhi
+  1.4.10 → 1.9.10, sankoch 2.2.5 → 2.7.8, sakshi 2.2.10 → 2.4.11, patra
+  1.10.3 → 1.13.10, yukti 2.2.3 → 2.3.8, niyama 1.0.2 → 1.0.7. darshana's own
+  declared footprint is unchanged (`syscalls`, `alloc`, `io`, `assert`);
+  `dist/darshana.cyr` regenerated only to stamp the new `# Version:` header —
+  module bodies are byte-identical to 0.9.0. Build, lint, `scripts/smoke.sh`,
+  distlib-drift and DCE-parity all clean; 199 assertions green (152
+  `tests/darshana.tcyr` + 47 `tests/pty.tcyr`). Consumers (cyim, chakshu,
+  bannermanor, anuenue, kii) unaffected.
+
+### Added
+
+- **`dist/darshana.deps`** — a dep sidecar `cyrius distlib` began emitting at
+  the 6.5.35 toolchain. It records the four stdlib leaves the bundle needs in
+  scope (`syscalls`, `alloc`, `io`, `assert`) so a consumer's `cyrius deps` can
+  resolve them from the bundle instead of the consumer restating darshana's
+  footprint in its own manifest. Generated, not hand-maintained — `cyrius
+  distlib` rewrites it alongside `dist/darshana.cyr`.
+
 ## [0.9.0] — 2026-07-08
 
 AGNOS parity for the signalfd path. Completes the agnos branch so consumers
