@@ -5,6 +5,41 @@
 
 ## Version
 
+**1.0.1** — *open cycle*. **Toolchain + vendoring release; no source change.**
+Pin `6.5.35` → `6.6.0`, `lib/` re-vendored and pruned 111 modules → 20, and
+`vec` added to the declared stdlib footprint. `dist/darshana.cyr`'s module
+bodies are byte-identical to 1.0.0 — the only delta is the `# Version:` header
+— so the frozen surface (29 fns / 37 constants, ADR 0003) is untouched in
+name, arity, return contract, constant value and emitted bytes.
+
+The pin move was forced rather than routine: 6.5.35 had begun emitting a
+correctness advisory on every invocation (*"carries the v6.5.36 enum Critical
+— constants >= 2^62 read back as -1"*). darshana is **not exposed**, and
+structurally so: the defect corrupts `enum` constants and darshana declares no
+`enum` at all (all 37 frozen constants are top-level `var`s). The largest
+constant in the bundle is `TTY_SIGMASK_WINCH = 0x10000000`, ten orders of
+magnitude below 2^62. But the pin is what CI greps to choose an installer
+version. The twelve-release jump also
+spans 6.6.0's `Result` / `Option` / `Either` **value-form flip**, which deleted
+`payload()` and `tagged_new()` and forced source migration in eight sibling
+stdlibs; darshana needed **none**, because its whole surface is raw `i64`
+return codes and it uses no Result idiom or `?` operator anywhere. The v6.5.57
+P0 struct-pointer miscompile never reached it either — the pin predates that
+defect.
+
+`lib/` went 7.5 MB → 440 KB. The kept 20 are the transitive include-closure of
+the declared leaves; the ~90 removed are sibling libs darshana never includes,
+ten of which upstream had **deleted outright** — closing the standing
+carry-forward by deletion rather than by another note. `lib/` is *output*, not
+a curated directory: `rm -rf lib/ && cyrius deps` reproduces it from the
+manifest alone — Phase 1 copies the declared leaves from the pinned snapshot,
+Phase 3's transitive BFS pulls their includes. (`cyrius lib sync` is the
+narrower refresh tool — declared leaves and platform peers only, no transitive
+pass — and is not the definition of the footprint.) Declaring `vec` closed the
+long-standing `undefined function 'vec_get'` warning: **every native build is
+now warning-clean**, and `--agnos` drops from four warnings to one (a
+pre-existing `_agnos_getenv` that reproduces at v1.0.0). 217 assertions green.
+
 **0.9.2** — *open cycle*. aarch64-Linux ioctl fix. `src/termios.cyr`
 hardcoded `var SYS_IOCTL = 16` (the x86_64 number) inside the arch-blind
 `#ifdef CYRIUS_TARGET_LINUX` gate, shadowing the stdlib's arch-aware
@@ -220,34 +255,57 @@ TTY_SIGMASK_EXIT/WINCH, `tty_clear_to_eol/to_end`.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.5.35` (in `cyrius.cyml [package].cyrius`, via
-  `${file:VERSION}` indirection on the package version). Bumped from
-  `6.2.36` at v0.9.1 — the manifest pin had drifted stale behind the
-  installed wrapper again, and `lib/` was shadowing the pinned snapshot
-  with nine behind-version sibling libs. History: `6.2.22` → `6.2.36`
-  at v0.8.1; `6.1.24` → `6.2.22` at v0.7.1; `6.0.1` → `6.1.24` at
-  v0.5.4; `5.10.20` → `6.0.1` at v0.3.5.
-- `cyrius update` is the refresh procedure (additive — it re-vendors the
-  pin snapshot into `lib/` but does not prune). Ten modules upstream has
-  since dropped from the stdlib snapshot (`agnosys`, `base64`, `bigint`,
-  `csv`, `cyml`, `json`, `linalg`, `matrix`, `toml`, `u128`) still sit in
-  `lib/` from older snapshots; none is included by darshana's sources.
+- **Cyrius pin**: `6.6.0` (in `cyrius.cyml [package].cyrius`, via
+  `${file:VERSION}` indirection on the package version). Bumped from `6.5.35`
+  at v1.0.1 — not drift housekeeping this time: 6.5.35 emitted a correctness
+  advisory on every invocation (*"carries the v6.5.36 enum Critical —
+  constants >= 2^62 read back as -1"*). darshana is not exposed (largest bundle
+  declares no `enum`, which is the defect's only vector; largest bundle constant
+  is `TTY_SIGMASK_WINCH = 0x10000000`), but the pin is what CI greps to pick an
+  installer version.
+  History: `6.2.36` → `6.5.35` at v0.9.1; `6.2.22` → `6.2.36` at v0.8.1;
+  `6.1.24` → `6.2.22` at v0.7.1; `6.0.1` → `6.1.24` at v0.5.4; `5.10.20` →
+  `6.0.1` at v0.3.5.
+- **`[deps].stdlib` is the opt-in auto-prepend list, and the only place the
+  footprint is declared.** `lib/` is not hand-curated: it is *output*.
+  **`cyrius deps` is the resolver and the authority** — Phase 1 copies the
+  declared leaves from the pinned snapshot, Phase 2 resolves named deps, Phase 3
+  runs a transitive BFS that pulls each leaf's own includes. From an empty
+  `lib/` it produces the complete, correct set in one pass.
+- **`cyrius lib sync` is the narrower tool** — declared leaves plus their
+  platform peers only (14 files at the current footprint), with **no transitive
+  pass**. It is for *refreshing* what is already vendored, not for *defining*
+  the set. Do not mistake its file list for the footprint.
+- **Neither command prunes**, so the refresh procedure as of v1.0.1 is:
+
+      rm -rf lib/ && cyrius deps
+
+  What lands is by definition the proper set — reproducible from the manifest,
+  never hand-picked. At v1.0.1 that is **20 modules, 456 KB**, each
+  byte-identical to `~/.cyrius/versions/6.6.0/lib`. It had been 118 tracked
+  files and 7.8 MB, carrying ~90 sibling libs darshana never includes — ten of
+  them (`agnosys`, `base64`, `bigint`, `csv`, `cyml`, `json`, `linalg`,
+  `matrix`, `toml`, `u128`) deleted upstream and vendored here as dead bytes.
+  Verified by resolving into a clean tree and rebuilding: 217 assertions green
+  and `dist/darshana.cyr` byte-identical to the repo's.
 
 ## Source
 
 | File | Lines | Surface |
 |------|-------|---------|
-| `src/termios.cyr` | 463 | `TIO_*` flags, `tio_load32/store32`, `tty_raw`, `tty_cooked`, **v0.3.0:** `TIOCGWINSZ`, `TTY_SIGMASK_EXIT/WINCH`, `tty_winsize`, `tty_open_signalfd`. **v0.5.3:** `tty_isatty`. **v0.7.0:** `tty_cooked` is zero-arg (single-raw-fd model, `_tty_raw_fd`); `tty_apply_raw_flags` privatized → `_tty_apply_raw_flags`; `tty_close_signalfd` added; `SFD_CLOEXEC` on the signalfd. **v0.8.0–v0.9.0:** `#ifdef CYRIUS_TARGET_AGNOS` peers for all six syscall-touching entry points (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) + agnos-specific `TTY_SIGMASK_*` values. Linux arm gated via `#ifdef CYRIUS_TARGET_LINUX`. **v0.9.2:** local `var SYS_IOCTL = 16` dropped — the Linux gate is arch-blind, so it shadowed the stdlib's arch-aware value and issued the x86_64 number on aarch64; `TCGETS`/`TCSETS`/`TIOCGWINSZ` stay local (arch-stable). |
-| `src/ansi.cyr` | 352 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`, **v0.3.0:** `tty_clear_to_eol`, `tty_clear_to_eos` (renamed from `tty_clear_to_end` v0.7.0), **v0.3.5:** `tty_sgr`, `tty_sgr_reset`, 16 `TTY_FG_*` constants. **v0.4.0:** `tty_sgr` validates input range `[0, 999]`. **v0.5.1:** `tty_fg_rgb`, `tty_bg_rgb`, `tty_fg_rgb_buf`, `tty_bg_rgb_buf`, `tty_sgr_reset_buf`. **v0.5.3:** `tty_sgr_buf`, `tty_fg_256_buf`. Any vt100-compatible terminal. |
-| `src/cursor.cyr` | 107 | `tty_dec_buf` (decimal formatter — renamed from `tty_itoa`, returns new write position, v0.7.0), `tty_move` (with [1,65535] coord bounds + `buf[44]` v0.7.0), `tty_cursor_up/down`. Composes the CSI row;colH escape inline. |
-| `src/main.cyr` | 35 | Convenience entry — `include`s the three sub-modules; carries the authoritative surface pointer (→ `scripts/smoke.sh`) + naming/return conventions (v0.7.0). Not in the dist bundle. |
+| `src/termios.cyr` | 593 | `TIO_*` flags, `tio_load32/store32`, `tty_raw`, `tty_cooked`, **v0.3.0:** `TIOCGWINSZ`, `TTY_SIGMASK_EXIT/WINCH`, `tty_winsize`, `tty_open_signalfd`. **v0.5.3:** `tty_isatty`. **v0.7.0:** `tty_cooked` is zero-arg (single-raw-fd model, `_tty_raw_fd`); `tty_apply_raw_flags` privatized → `_tty_apply_raw_flags`; `tty_close_signalfd` added; `SFD_CLOEXEC` on the signalfd. **v0.8.0–v0.9.0:** `#ifdef CYRIUS_TARGET_AGNOS` peers for all six syscall-touching entry points (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) + agnos-specific `TTY_SIGMASK_*` values. Linux arm gated via `#ifdef CYRIUS_TARGET_LINUX`. **v0.9.2:** local `var SYS_IOCTL = 16` dropped — the Linux gate is arch-blind, so it shadowed the stdlib's arch-aware value and issued the x86_64 number on aarch64; `TCGETS`/`TCSETS`/`TIOCGWINSZ` stay local (arch-stable). |
+| `src/ansi.cyr` | 369 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`, **v0.3.0:** `tty_clear_to_eol`, `tty_clear_to_eos` (renamed from `tty_clear_to_end` v0.7.0), **v0.3.5:** `tty_sgr`, `tty_sgr_reset`, 16 `TTY_FG_*` constants. **v0.4.0:** `tty_sgr` validates input range `[0, 999]`. **v0.5.1:** `tty_fg_rgb`, `tty_bg_rgb`, `tty_fg_rgb_buf`, `tty_bg_rgb_buf`, `tty_sgr_reset_buf`. **v0.5.3:** `tty_sgr_buf`, `tty_fg_256_buf`. Any vt100-compatible terminal. |
+| `src/cursor.cyr` | 137 | `tty_dec_buf` (decimal formatter — renamed from `tty_itoa`, returns new write position, v0.7.0), `tty_move` (with [1,65535] coord bounds + `buf[44]` v0.7.0), `tty_cursor_up/down`. Composes the CSI row;colH escape inline. |
+| `src/main.cyr` | 27 | Convenience entry — `include`s the three sub-modules; carries the authoritative surface pointer (→ `scripts/smoke.sh`) + naming/return conventions (v0.7.0). Not in the dist bundle. |
 | `programs/smoke.cyr` | 17 | Compile-link smoke. |
-| `dist/darshana.cyr` | 922 | Bundled distribution — regenerate via `cyrius distlib`. What consumers `include "lib/darshana.cyr"`. (935 lines on disk; `distlib` reports module-body lines, excluding its 13-line generated header.) |
-| `dist/darshana.deps` | 6 | Generated stdlib-leaf sidecar — 4 entries (v0.9.1; `syscalls`, `alloc`, `io`, `assert`). Consumed by a consumer's `cyrius deps`. |
+| `dist/darshana.cyr` | 1,099 | Bundled distribution — regenerate via `cyrius distlib`. What consumers `include "lib/darshana.cyr"`. (1,112 lines on disk; `distlib` reports module-body lines, excluding its 13-line generated header.) |
+| `dist/darshana.deps` | 7 | Generated stdlib-leaf sidecar — **5 entries** (`syscalls`, `alloc`, `io`, `assert`, **`vec`** — the fifth added at v1.0.1, compile-verified by 6.6.0's `distlib`). Consumed by a consumer's `cyrius deps`. |
 
-Total source ≈ 922 lines across the three dist modules (grew from ~780
-at v0.7.0 with the v0.8.0–v0.9.0 agnos peers, and by the v0.9.2
-`SYS_IOCTL` comment block). Public fn surface is **29**
+Total source ≈ 1,099 lines across the three dist modules (grew from ~780
+at v0.7.0 with the v0.8.0–v0.9.0 agnos peers, and again through the v0.9.3
+refactor and the v0.9.4 docstring restoration). The line counts above were
+re-derived with `wc -l` at v1.0.1 — every row had been stale since v0.9.2, in a
+file whose own header says it is refreshed every release. Public fn surface is **29**
 unique names — 35 definitions in the bundle, six of which are agnos/Linux
 `#ifdef` peers of the same name (`scripts/smoke.sh` is authoritative and
 self-audits bidirectionally).
@@ -259,19 +317,38 @@ self-audits bidirectionally).
 | `tests/darshana.tcyr` | **167 assertions** (a couple live-fd-gated): pure-function coverage of `tio_load32/store32`, `_tty_apply_raw_flags` (every flag bit + idempotence), `tty_dec_buf` (zero / negative / 1–3 digits / new-position offset), `tty_move` rejection bounds (v0.7.0), `TIO_BUF_SIZE` drift guard (v0.7.0), the v0.3.0 constant set (`TTY_SIGMASK_*`, `TIOCGWINSZ` ABI), `tty_sgr` rejection, **v0.5.x** truecolor + 256 `_buf` exact-byte + bounds coverage, and **live-fd** tests for `tty_winsize` and `tty_open_signalfd` + `tty_close_signalfd` (v0.7.0). |
 | `tests/pty.tcyr` | **50 assertions (v0.6.0; hardened v0.7.0 and v0.9.3)** — the in-repo PTY harness. Opens a real pseudo-terminal (`/dev/ptmx` → `TIOCSPTLCK` → `TIOCGPTN` → `/dev/pts/N`) and drives darshana against the slave: `tty_isatty` on a known-live fd (+ deterministic `/dev/null` negative), `tty_winsize` set/get (24×80), the `tty_raw`→`tty_cooked()` state-restore (byte-for-byte), the single-raw-fd model (2nd fd refused), the cooked-vs-raw output round-trip (OPOST/ONLCR, fail-not-skip), and fd-1 escape-byte capture (via `dup2`) for `tty_alt_*`, `tty_clear`, `tty_clear_to_eol/eos`, `tty_cursor_*`, `tty_move`, `tty_sgr`, `tty_sgr_reset`, `tty_fg_rgb`/`tty_bg_rgb`. Wired into CI (v0.7.0) with `SKIP pty:` degradation tokens. Hang-proof (`O_NONBLOCK` master, bounded drains) and skip-clean (Linux-only). |
 
-**217 assertions total**, green at cyrius 6.5.35.
+**217 assertions total**, green at cyrius 6.6.0 (167 + 50; the PTY harness runs
+its full set with no `SKIP pty:` token).
 
 ## Dependencies
 
 Direct (declared in `cyrius.cyml`):
 
-- stdlib — `syscalls`, `alloc`, `io`, `assert`. Tightened from the init default (`string / fmt / alloc / io / vec / str / syscalls / assert`) — the donor surface uses none of `vec / str / fmt / string`.
+- stdlib — `syscalls`, `alloc`, `io`, `assert`, **`vec`** (five leaves as of
+  v1.0.1). Still tighter than the init default (`string / fmt / alloc / io /
+  vec / str / syscalls / assert`) — darshana's own sources use none of
+  `str / fmt / string / vec` directly.
 
-Known benign build warning: `undefined function 'vec_get'`. `io.cyr`
-pulls `fmt.cyr`, which calls `vec_get`, but `vec` is not in darshana's
-declared footprint. The call site is unreachable from darshana's
-surface, so the build emits and links clean. Pre-dates v0.9.1 (present
-at v0.9.0 too) — upstream-stdlib shaped, not a darshana defect.
+~~Known benign build warning: `undefined function 'vec_get'`~~ — **closed at
+v1.0.1.** `lib/assert.cyr:4` pulls `lib/fmt.cyr`, the only caller of `vec_get`
+outside `vec.cyr` itself, and `vec` was not in the declared footprint, so the
+call site linked against nothing. **The attribution above was wrong from v0.9.0
+until now**: this file blamed `io.cyr`, which includes only `syscalls`, `result`
+and `args_macos`. Corrected against the include graph. 6.6.0's
+`cyrius distlib` compile-verifies the sidecar it emits and flagged the missing
+leaf (*"re-added 1 leaf(s) the inference missed"*); declaring `vec` makes the
+manifest agree with `dist/darshana.deps`. **Every native build is now
+warning-clean** — smoke binary, both suites, the example, and `distlib`.
+`dist/darshana.cyr` is byte-identical with and without the declaration; the
+cost is 160 bytes in the DCE'd smoke binary (15,808 → 15,968). The earlier
+diagnosis was right that the call was unreachable and upstream-shaped, and
+wrong that nothing could be done about it locally.
+
+`cyrius deps` resolves those five leaves — via its Phase 3 transitive BFS — to
+the **20** modules vendored in `lib/`: `alloc` `alloc_agnos` `alloc_macos` `alloc_windows` `args_macos`
+`assert` `atomic` `fmt` `fnptr` `io` `result` `string` `syscalls`
+`syscalls_aarch64_linux` `syscalls_linux_common` `syscalls_macos`
+`syscalls_windows` `syscalls_x86_64_agnos` `syscalls_x86_64_linux` `vec`.
 
 ## Consumers
 
@@ -287,6 +364,23 @@ at v0.9.0 too) — upstream-stdlib shaped, not a darshana defect.
 
 - ADR 0001 records the `darshana` name choice (`drishya` and other observation-family alternatives considered). Closed; no re-litigation needed.
 - macOS support is deferred — see CLAUDE.md domain rules.
+- **`undefined function '_agnos_getenv'` on the `--agnos` cross-build.** The one
+  warning left anywhere in the tree after v1.0.1. Pre-existing and
+  upstream-agnos shaped — it reproduces identically at the v1.0.0 tag, and
+  darshana's own surface never calls it. Same class as the `vec_get` warning
+  v1.0.1 closed, so it may well be closable the same way (a declared leaf)
+  rather than being upstream's problem; nobody has checked.
+- **`--aarch64` is unverifiable on this host** — `cycc_aarch64` is not installed,
+  so `cyrius build --aarch64` fails before reaching darshana's source, at v1.0.0
+  and v1.0.1 alike. The aarch64 arm is therefore *unbuilt*, not *known-good*;
+  v0.9.2's `SYS_IOCTL` fix was verified by reading emitted machine code, not by
+  a cross-build. Worth wiring up before an aarch64 consumer appears.
+- **Inherited at v1.0.1: aarch64 `SYS_SIGNALFD4` moved `74` to `1074`** in the
+  vendored `lib/syscalls_aarch64_linux.cyr` (a private alias upstream now
+  translates via `ESYSXLAT 1074 -> 74`). darshana's Linux arm calls the stdlib
+  wrapper `sys_signalfd`, not a hardcoded number, so it picks this up for free —
+  which is the whole reason v0.9.2 dropped darshana's local `SYS_IOCTL`
+  constant. Untested here for want of an aarch64 cross-compiler (above).
 - ~~The displaced v0.8.0 doc/audit slot~~ — **closed at v0.9.4.** `docs/examples/` holds a runnable, CI-executed example; `docs/architecture/` holds notes 001 and 002; the per-symbol API audit returned zero gaps and is now enforced by `scripts/smoke.sh`.
 - ~~`cyrius lint` untracked-deferral notes in `src/ansi.cyr` / `src/termios.cyr`~~ — **closed at v0.9.3**: the bg-256 twin now cross-references roadmap.md §"Out of scope", the macOS termios note cross-references CLAUDE.md's domain rule. All four src modules are deferral-note clean; keep them that way.
 

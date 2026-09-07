@@ -4,6 +4,152 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-09-07
+
+Toolchain + vendoring release. **No source change** — `src/` is untouched and
+`dist/darshana.cyr`'s module bodies are byte-identical to 1.0.0. The frozen
+surface ([ADR 0003](docs/adr/0003-v1-api-freeze.md): 29 functions, 37 constants)
+is unchanged in name, arity, documented return contract, constant value and
+emitted bytes. The whole diff to the shipped bundle is one line: the
+`# Version:` header.
+
+### Changed
+
+- **cyrius toolchain pin `6.5.35` → `6.6.0`** in `cyrius.cyml [package].cyrius`.
+  Unlike the v0.7.1 / v0.8.1 / v0.9.1 catch-ups, this one was not drift
+  housekeeping: 6.5.35 had begun emitting a correctness advisory on *every*
+  invocation — *"pins 6.5.35, which carries the v6.5.36 enum Critical (constants
+  >= 2^62 read back as -1). Re-pin to 6.5.36 or later."*
+
+  darshana is **not exposed**, and the decisive reason is structural rather than
+  numeric: the defect corrupts **`enum`** constants, and darshana declares no
+  `enum` at all — `grep -cE '^enum ' src/*.cyr dist/darshana.cyr` returns zero on
+  every file. All 37 frozen constants are top-level `var`s. The numbers agree as
+  a second check: the largest constant in the bundle is `TTY_SIGMASK_WINCH =
+  0x10000000` (2.7e8, the AGNOS arm; `0x08000000` on Linux), about **ten** orders
+  of magnitude below 2^62. But the pin is what `.github/workflows/ci.yml` greps
+  to choose the installer version, so it had to move regardless.
+
+  The jump spans twelve upstream releases. Two of them matter more than the
+  advisory that prompted it, and darshana's exposure to both is nil for reasons
+  worth recording:
+
+  - **The P0 silent miscompile that shipped in v6.5.57 and was live for
+    seventeen releases.** `X = Y;` between two struct-*pointer* locals copied the
+    number of slots the *type* implies rather than the number the variables
+    occupy, overwriting neighbouring locals — compiling clean, corrupting a
+    neighbour, and surfacing somewhere else entirely. **darshana never built
+    under an affected compiler**: its pin has been 6.5.35 since v0.9.1, which
+    predates the defect's introduction in v6.5.57. The fix is
+    inherited, not needed retroactively. (It would not have bitten regardless —
+    darshana declares no struct-pointer locals; its only aggregates are the
+    `var buf[N]` byte arrays the termios codec reads through `tio_load32` /
+    `tio_store32`.)
+  - **`Result` / `Option` / `Either` became a zero-allocation value form**,
+    changing the arity of every payload-carrying value and **deleting `payload()`
+    and `tagged_new()` outright**. This is the ecosystem's largest break in a
+    year — eight sibling stdlibs needed source migration, two of them twice.
+    **darshana needed none.** Its entire surface is raw `i64` return codes
+    (`0` / `-1` / `-errno`), which is the return convention frozen at v1.0 and
+    documented at the head of the bundle. A sweep of `src/`, `tests/`,
+    `programs/` and `docs/examples/` finds zero occurrences of `payload(`,
+    `result_unwrap`, `tagged_new`, `is_err_result`, `ok_via` / `err_via`, or the
+    `?` operator. The vendored `lib/result.cyr` is the migrated 6.6.0 copy.
+
+- **`lib/` re-resolved from the manifest and cut from 118 tracked files to 20**
+  (7.8 MB → 456 KB). `[deps].stdlib` is cyrius's opt-in auto-prepend list and the
+  only place the footprint is declared; `lib/` is **output**, not a curated
+  directory. The whole change is therefore reproducible from the manifest alone:
+
+  ```sh
+  rm -rf lib/ && cyrius deps
+  ```
+
+  `cyrius deps` is the resolver and the authority — Phase 1 copies the declared
+  leaves from the pinned snapshot, Phase 2 resolves named deps, Phase 3 runs a
+  transitive BFS that pulls each leaf's own includes (`alloc` → `atomic` /
+  `fnptr`, `assert` → `string` / `fmt`, `io` → `result` / `args_macos`). Run
+  against an empty `lib/` it lands exactly 20 modules, every one byte-identical
+  to `~/.cyrius/versions/6.6.0/lib`. Verified by resolving into a clean tree
+  built from `git ls-files` and rebuilding there: smoke binary OK, 217 assertions
+  green, `dist/darshana.cyr` byte-identical to the repo's.
+
+  What went: roughly ninety sibling libraries darshana never includes (`mabda`,
+  `sigil`, `sandhi`, `sankoch`, `bayan`, `yukti`, `patra`, `niyama`, `vani`, the
+  six `tls_native_*` shards, and the rest), each frozen at whatever snapshot last
+  vendored it, plus `lib/unicode/`. Ten of them — `agnosys`, `base64`, `bigint`,
+  `csv`, `cyml`, `json`, `linalg`, `matrix`, `toml`, `u128` — **upstream has
+  deleted entirely**; they are absent from the 6.6.0 snapshot and had been
+  sitting in the tree as dead bytes since before v0.9.1. They were the standing
+  carry-forward in `state.md` ("*ten modules upstream has since dropped … still
+  sit in `lib/`*"), which this closes by deletion rather than by another note.
+
+  ⚠ **`cyrius lib sync` is not the definition of the footprint** and should not
+  be read as one. It copies the declared leaves plus their platform peers — 14
+  files here — with **no transitive pass**, so it is a refresh tool for what is
+  already vendored. Neither it nor `cyrius deps` prunes; deleting `lib/` first is
+  what makes the result reproducible rather than accumulated.
+
+- **`docs/development/state.md`'s Source table refreshed** — every row was stale.
+  `src/termios.cyr` 463 → **593**, `src/ansi.cyr` 352 → **369**,
+  `src/cursor.cyr` 107 → **137**, `src/main.cyr` 35 → **27**, and
+  `dist/darshana.cyr` 922/935 → **1,099 module-body lines / 1,112 on disk**. The
+  numbers had not been re-derived since v0.9.2, so the v0.9.3 refactor, the
+  v0.9.4 docstring restoration and the AGNOS peers all landed without the table
+  moving — in a file whose own header says it is refreshed every release. Counted
+  with `wc -l`, not carried forward.
+
+### Added
+
+- **`vec` added to `[deps].stdlib`**, taking the declared footprint from four
+  leaves to five. 6.6.0's `cyrius distlib` compile-verifies the sidecar it emits
+  and reported *"sidecar: re-added 1 leaf(s) the inference missed
+  (compile-verified)"*, so `dist/darshana.deps` now carries five entries.
+
+  That fifth leaf is the far end of the **`undefined function 'vec_get'` warning
+  `state.md` has carried as "known benign … upstream-stdlib shaped, not a
+  darshana defect" since before v0.9.0**: `lib/assert.cyr:4` pulls `lib/fmt.cyr`,
+  which is the only caller of `vec_get` outside `vec.cyr` itself, and `vec` was
+  not in darshana's declared footprint — so the call site linked against nothing.
+  (`state.md` had named `io.cyr` as the puller since before v0.9.0; that was
+  wrong. `io.cyr` includes only `syscalls`, `result` and `args_macos` — `assert`
+  is the one that pulls `fmt`, which is why the warning appears in the test
+  builds too.) Declaring `vec` makes the manifest agree with the
+  compile-verified sidecar, and **every native build is now warning-clean**:
+  smoke binary, both test suites, the example, and `cyrius distlib`. The
+  `--agnos` cross-build goes from four warnings to one, the survivor being a
+  pre-existing `undefined function '_agnos_getenv'` that is upstream-agnos
+  shaped and unrelated to this change (it reproduces identically at the v1.0.0
+  tag). `--win` builds clean. `--aarch64` cannot be built or judged here at all:
+  `cycc_aarch64` is not installed on this host, and it fails the same way at
+  v1.0.0. The
+  diagnosis was right that it was upstream-shaped and unreachable; it was wrong
+  that nothing could be done about it locally.
+
+  `dist/darshana.cyr` is byte-identical with and without the declaration — this
+  changes the build footprint, not the shipped bundle. The cost is 160 bytes in
+  the DCE'd smoke binary (15,808 → 15,968) and nothing in the frozen surface.
+
+### Verification
+
+- **217 assertions green** — 167 `tests/darshana.tcyr` + 50 `tests/pty.tcyr`,
+  the PTY harness running its full set with no `SKIP pty:` degradation token.
+- `scripts/smoke.sh` **PASS**: 29 `tty_*` / `tio_*` functions and 37
+  `TIO_*` / `TIOC*` / `TTY_*` constants present and **bidirectionally**
+  self-audited (no listed-but-missing, no shipped-but-unlisted); docstring audit
+  clean; platform gate positionally clean (Linux ioctl arm confined to
+  `src/termios.cyr` lines 193–452, agnos arm to 454–593).
+- `scripts/syscall-audit.sh` **PASS** — 5 distinct syscall targets, 3 stdlib
+  wrappers, all on the allowlist.
+- `cyrius lint` clean on all four `src/*.cyr`.
+- distlib drift clean; DCE parity OK (54,800 bytes eliminated, same
+  output); `docs/examples/raw_loop.cyr` builds and takes its no-TTY path.
+- `git diff dist/darshana.cyr` against 1.0.0 is **one line** — the `# Version:`
+  header. `dist/darshana.deps` gains the `vec` line. Consumers (chakshu, anuenue,
+  cyim, kii, bannermanor) need a dep bump for the sidecar; **no consumer code
+  change is required.**
+
+
 ## [1.0.0] — 2026-08-23
 
 **The API freeze.** No code change from v0.9.4 — the emitted bytes, the test

@@ -12,7 +12,9 @@ Donor: [`cyim/src/tty.cyr`](https://github.com/MacCracken/cyim) (~207 lines, Lin
 
 ## Status
 
-**v1.0.0 — stable. The API is frozen.** 29 functions and 37 constants, enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) and machine-checked on every CI run. Breaking any of them now requires a major bump; additive change (new symbols, new platform peers) stays a minor bump. Pin a `1.x` tag and take minor bumps without reading a diff.
+**v1.0.1 — stable. The API has been frozen since v1.0.0.** 29 functions and 37 constants, enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) and machine-checked on every CI run. Breaking any of them now requires a major bump; additive change (new symbols, new platform peers) stays a minor bump. Pin a `1.x` tag and take minor bumps without reading a diff.
+
+v1.0.1 is a toolchain + vendoring patch — cyrius pin `6.5.35` → `6.6.0`, `lib/` pruned to the 20-module dependency closure, and a fifth stdlib leaf (`vec`) declared. `dist/darshana.cyr`'s module bodies are byte-identical to v1.0.0; the only change to the shipped bundle is its `# Version:` header.
 
 The TTY surface works on Linux and, since v0.9.0, fully on AGNOS — every syscall-touching entry point (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) has an `#ifdef CYRIUS_TARGET_AGNOS` peer over the kernel's own syscalls (requires agnos ≥ 1.45.13), so consumers stay platform-blind on both targets. macOS/BSD is deliberately out of scope.
 

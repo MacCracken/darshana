@@ -54,7 +54,8 @@ jobs:
 
       - name: Resolve dependencies
         # darshana is a library; no external deps yet, just stdlib.
-        # Footprint is tight (syscalls/alloc/io/assert) — see cyrius.cyml.
+        # Footprint is tight — see cyrius.cyml [deps].stdlib for the
+        # authoritative list and why each leaf is there.
         run: cyrius deps
 
       - name: Build smoke binary

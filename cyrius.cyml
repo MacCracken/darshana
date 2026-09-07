@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "दर्शन — viewing/showing. Linux TTY/raw-mode primitives (termios, ANSI, cursor) for AGNOS first-party tools (cyim, chakshu, ...)."
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.5.35"
+cyrius = "6.6.0"
 
 [build]
 entry = "programs/smoke.cyr"
@@ -22,7 +22,16 @@ modules = ["src/termios.cyr", "src/ansi.cyr", "src/cursor.cyr"]
 [deps]
 # Footprint: tighter than the init default. termios + ANSI helpers
 # only need syscalls (ioctl + write) and the standard alloc/io path.
-# assert is for tests/darshana.tcyr. No vec/str/fmt/string yet — none
-# of the donor surface uses dynamic allocation or string formatting.
-stdlib = ["syscalls", "alloc", "io", "assert"]
+# assert is for tests/darshana.tcyr. `vec` (v1.0.1) is NOT called by
+# darshana's own surface: `assert` pulls `fmt`, and `fmt` is the only
+# caller of `vec_get`, so without the leaf declared that call site
+# linked against nothing and every build warned. 6.6.0's `distlib`
+# compile-verifies the sidecar and flagged it. Still no str/fmt/string
+# as declared leaves — the surface does no dynamic allocation or
+# string formatting of its own.
+#
+# `lib/` is OUTPUT, not curated: `rm -rf lib/ && cyrius deps` rebuilds
+# it from this list (Phase 3's transitive BFS pulls each leaf's own
+# includes). Do not hand-edit or hand-prune lib/.
+stdlib = ["syscalls", "alloc", "io", "assert", "vec"]
 ---

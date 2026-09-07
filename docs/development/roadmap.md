@@ -31,6 +31,9 @@ maintenance and consumer-driven growth, not a march to a milestone.
       bannermanor is furthest behind; **kii additionally has a pin mismatch** to
       reconcile (manifest `tag = "0.8.2"` while its vendored bundle reads 0.9.0,
       because it resolves via `path = "../darshana"`).
+      Since v1.0.1 the target is a **`1.0.1`** tag, not `1.0.0`: the sidecar
+      `dist/darshana.deps` gained a fifth leaf (`vec`), so a consumer's `cyrius
+      deps` resolves one more stdlib module. Still no consumer *code* change.
 
 ## Out of scope
 
