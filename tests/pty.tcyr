@@ -202,6 +202,63 @@ fn main() {
                     assert_eq(cols, 80, "tty_winsize read back cols = 80");
                 }
 
+                # ----- u16 HIGH-BYTE decode (v1.0.2) -----------------
+                # 24x80 fits in one byte per field, so the geometry
+                # above exercises only `load8(&ws + 0)` and
+                # `load8(&ws + 2)` — the `| (load8(&ws + 1) << 8)` and
+                # `| (load8(&ws + 3) << 8)` halves of the decode were
+                # never run by any test. A dropped shift, a wrong
+                # offset, or a swapped rows/cols pair would all have
+                # shipped green. Pick values whose high AND low bytes
+                # are both non-zero and DIFFERENT from each other, so
+                # a byte-order or field-swap error cannot coincide
+                # with the expected answer.
+                #   rows = 0x0123 =  291   cols = 0x0456 = 1110
+                var wsbig[8];
+                var wbi = 0;
+                while (wbi < 8) { store8(&wsbig + wbi, 0); wbi = wbi + 1; }
+                store8(&wsbig + 0, 0x23);   # row low
+                store8(&wsbig + 1, 0x01);   # row high
+                store8(&wsbig + 2, 0x56);   # col low
+                store8(&wsbig + 3, 0x04);   # col high
+                # Non-zero pixel fields too: tty_winsize must ignore
+                # them, not fold them into the counts.
+                store8(&wsbig + 4, 0xFF);
+                store8(&wsbig + 5, 0xFF);
+                store8(&wsbig + 6, 0xFF);
+                store8(&wsbig + 7, 0xFF);
+                var wsrc2 = syscall(PTY_SYS_IOCTL, slave, PTY_TIOCSWINSZ, &wsbig);
+                if (wsrc2 >= 0) {
+                    var brows = 0;
+                    var bcols = 0;
+                    assert_eq(tty_winsize(slave, &brows, &bcols), 0,
+                        "tty_winsize succeeds on a multi-byte geometry");
+                    assert_eq(brows, 291,  "u16 high byte decoded for rows (0x0123)");
+                    assert_eq(bcols, 1110, "u16 high byte decoded for cols (0x0456)");
+                    # Restore the sane geometry for anything downstream.
+                    syscall(PTY_SYS_IOCTL, slave, PTY_TIOCSWINSZ, &wsset);
+                }
+
+                # ----- tty_winsize / tty_isatty failure path ---------
+                # v1.0.2. Both are documented to fail on a non-TTY fd,
+                # and neither had a test for it: tty_winsize's -1 return
+                # was asserted nowhere, and tty_isatty's 0 verdict was
+                # only checked against /dev/null in the group above.
+                # Use a freshly opened /dev/null — a definitively
+                # non-TTY, definitively OPEN descriptor, so this
+                # distinguishes "not a terminal" from "bad fd".
+                test_group("pty.tcyr — tty_winsize on a non-TTY (v1.0.2)");
+                var dn2 = sys_open("/dev/null", PTY_O_RDWR, 0);
+                if (dn2 >= 0) {
+                    var nrows = 12345;
+                    var ncols = 54321;
+                    assert_eq(tty_winsize(dn2, &nrows, &ncols), 0 - 1,
+                        "tty_winsize returns -1 on a live non-TTY fd");
+                    assert_eq(nrows, 12345, "tty_winsize leaves out_rows untouched on failure");
+                    assert_eq(ncols, 54321, "tty_winsize leaves out_cols untouched on failure");
+                    file_close(dn2);
+                }
+
                 # ----- state-restore round-trip ----------------------
                 # The ADR-0002 guarantee: tty_raw must save cooked-mode
                 # termios and tty_cooked must put it back byte-for-byte.

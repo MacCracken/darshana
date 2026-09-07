@@ -164,13 +164,27 @@ fn tty_sgr_reset() {
 # negative on success). Same fail-before-emit discipline as
 # `tty_sgr`'s `[0, 999]` guard added in v0.4.0.
 
-# Encode `val` (caller-asserted in `[0, 255]`) as 1–3 ASCII decimal
-# digits into `buf` at `pos`. Returns new `pos`. Private helper —
-# the `_ansi_` prefix marks it as not part of darshana's public
-# surface. Inlined-and-conditional rather than forward-referencing
-# cursor.cyr's `tty_dec_buf`: the `cyrius distlib` bundle order is
-# termios → ansi → cursor, so `tty_dec_buf` isn't yet defined at this
-# point in the compilation unit.
+# Encode `val` as 1–3 ASCII decimal digits into `buf` at `pos`.
+# Returns new `pos`, or -1 if `pos` is negative. Private helper — the
+# `_ansi_` prefix marks it as not part of darshana's public surface.
+#
+# Domain is `[0, 999]`, not `[0, 255]` as this said through v1.0.1:
+# `tty_sgr_buf` feeds it codes up to 999 (its own frozen envelope), and
+# the three-digit arm handles them correctly. The `_u8` in the name is
+# historical — it predates the SGR composer — and is kept because
+# renaming a symbol that five call sites reference buys nothing. Every
+# caller validates its own range and rejects `pos < 0` before calling,
+# so `val < 0` is unreachable; it is not defended against here.
+#
+# NOTE for a future refactor: this duplicates `tty_dec_buf`
+# (cursor.cyr) over the whole reachable envelope. The reason recorded
+# here through v1.0.1 — that the `cyrius distlib` bundle order
+# (termios → ansi → cursor) leaves `tty_dec_buf` undefined at this
+# point — is FALSE, and was verified so against cyrius 6.6.0: forward
+# references resolve across includes and within a file, and the module
+# set builds byte-identically in exactly that arrangement. Collapsing
+# the two is an internal refactor with identical output, which ADR 0003
+# prices as a MINOR bump, so it is not taken in this patch.
 fn _ansi_emit_u8(buf, pos, val) {
     if (pos < 0) { return 0 - 1; }
     if (val >= 100) {
@@ -186,16 +200,6 @@ fn _ansi_emit_u8(buf, pos, val) {
     return pos;
 }
 
-# Append `CSI 38;2;R;G;Bm` to `buf` at `pos`. Returns new `pos` on
-# success, -1 if any channel is out of `[0, 255]`. The buffer-
-# targeting primitive — composes into a caller buffer without
-# touching fd 1, so a consumer can build a frame of N escape-prefixed
-# bytes and issue one write(2) at frame end.
-#
-# Bounds rejection is per-channel: the first out-of-range channel
-# short-circuits, no partial write occurs. A negative incoming `pos`
-# is rejected the same way (v0.9.3). Byte budget: up to 19 — see the
-# section header above.
 # Shared body for the fg/bg 24-bit composers. `layer` is the ASCII
 # digit selecting the plane: 51 ('3') = foreground, 52 ('4') =
 # background. Everything else about the two escapes is identical, so
@@ -244,8 +248,6 @@ fn tty_fg_rgb_buf(buf, pos, r, g, b) {
     return _ansi_rgb_buf(buf, pos, 51, r, g, b);      # '3' = foreground
 }
 
-# Append `CSI 48;2;R;G;Bm` to `buf` at `pos`. Background twin of
-# `tty_fg_rgb_buf`; same contract, same 19-byte budget.
 # Append `CSI 48;2;R;G;Bm` to `buf` at `pos` — the BACKGROUND twin of
 # `tty_fg_rgb_buf`. Same contract, same 19-byte budget: returns the new
 # write position, or -1 on an out-of-range channel or negative `pos`.

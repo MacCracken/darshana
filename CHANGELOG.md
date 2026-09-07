@@ -4,6 +4,269 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-09-07
+
+**P-1 audit / refactor / hardening / optimization / security sweep** — the
+first such cut since v0.9.3, and the first under the freeze. Seven audit
+lenses over the whole surface, every finding put through a three-way
+adversarial refutation pass with a distinct angle each (does it reproduce; is
+the semver classification honest; is the severity honest): **32 raised, 28
+survived, folded into 14 work items.**
+
+Everything here is a **patch** under [ADR 0003](docs/adr/0003-v1-api-freeze.md):
+a fix that makes behaviour match its existing documentation, a test, or a
+gate. **No frozen byte moved** — verified exhaustively rather than asserted
+(see *Verification*). Two confirmed findings were deliberately **not** taken
+because they price as minor; they are named at the bottom rather than quietly
+carried.
+
+### Fixed
+
+- ⛔ **`tty_open_signalfd`'s failure rollback unblocked signals it did not
+  block, silently disarming a consumer's exit path.** On the `signalfd(2)`
+  failure path the rollback issued `SIG_UNBLOCK` over the **whole requested
+  mask** instead of restoring the mask in force on entry — and the `SIG_BLOCK`
+  passed `oldset = 0`, so the prior mask was never captured and could not be
+  restored.
+
+  When a signal in the mask was **already blocked** — most importantly by an
+  earlier, still-open darshana signalfd, which is the documented
+  multi-signalfd pattern (chakshu holds an EXIT fd and a WINCH fd) — the failed
+  open unblocked it, and the first signalfd **went deaf**. For the flagship
+  mask that is the "terminal left unrecoverable" outcome in full: a consumer
+  whose second `tty_open_signalfd` fails on the documented degrade-gracefully
+  path (EMFILE/ENFILE/ENOMEM) has SIGHUP/SIGINT/SIGTERM returned to default
+  disposition, so the next Ctrl-C kills the process outright instead of waking
+  the poll loop — `tty_cooked()`, `tty_alt_leave()` and `tty_cursor_show()`
+  never run, and the user lands back in a shell that is still raw, still on the
+  alt-screen, with the cursor hidden.
+
+  This is **not** the v0.9.3 leak; v0.9.3 *added* this rollback, fixing the
+  case where none happened at all. The residual defect is that the rollback it
+  added was an unblock rather than a restore, and it contradicted the
+  function's own frozen docstring ("A failed open leaves NO residue"). The -1
+  path did leave residue — negative residue, removing a block the caller
+  installed.
+
+  Reproduced under `RLIMIT_NOFILE=3` with a live SIGWINCH signalfd (SIGWINCH
+  because its default action is *ignore*, so the demonstration is safe to run;
+  with `TTY_SIGMASK_EXIT` the same sequence terminates the process).
+
+  The fix captures the entry mask via `oldset` and unblocks **only the bits
+  this call added** — `sigmask & ~prev`. Deliberately not `SIG_SETMASK` of the
+  captured mask: `how` 0 and 1 are the only two values **both** kernels
+  implement by name (agnos/mirshi's `sigprocmask#17` handles 0 and 1
+  explicitly and would treat 2 as an unnamed store-verbatim fall-through), and
+  unblock-what-you-blocked is the doctrine `tty_close_signalfd` already
+  follows. Both arms fixed; mirshi honours a non-NULL `oldset_ptr`, verified
+  in the agnos kernel source rather than assumed.
+
+- **`tty_close_signalfd` returned a raw `-errno` where its docstring promised
+  `-1`.** v0.9.3 normalized `tty_open_signalfd`'s sentinel and missed the
+  teardown twin added alongside it, which went on returning
+  `sys_sigprocmask`'s bare syscall result. So the two peers disagreed on a
+  contract both claimed to share — the AGNOS one normalizes because mirshi
+  does it for them, the Linux one did not. Latent rather than live
+  (`rt_sigprocmask(SIG_UNBLOCK, <valid stack ptr>, NULL, 8)` has no reachable
+  failure mode here), but ADR 0003 names exactly this case as patch-shaped.
+  The AGNOS peer gained the same explicit clamp — redundant today, written so
+  the two arms cannot diverge again if mirshi changes.
+
+- ⛔ **`docs/examples/raw_loop.cyr` ended with a hardcoded `syscall(60, ...)`
+  outside both platform gates.** 60 is `exit` only on x86_64 Linux — it is 93
+  on aarch64 Linux, and on AGNOS it is `winsize`, the very syscall
+  `src/termios.cyr` uses for `tty_winsize`. The shipped example whose header
+  says it is the one to copy from therefore compiled to a stray console-grid
+  query on agnos and exited via the implicit epilogue, with **no diagnostic**:
+  the toolchain's "syscall not routed" warning is Mach-O-only, exactly as the
+  v0.9.2 `SYS_IOCTL` fix records. `programs/smoke.cyr` two directories away had
+  it right. Now `syscall(SYS_EXIT, ...)`, verified at the instruction level —
+  the agnos build's tail is `xor %eax,%eax` (agnos exit = 0) where the literal
+  emitted `mov $0x3c,%eax`. The example's copy-paste consumer manifest also
+  still pinned `tag = "0.9.4"`, three releases stale and pre-freeze.
+
+- **Four stale docstring blocks shipped in `dist/darshana.cyr`**, two of them
+  on public frozen symbols. v0.9.3 extracted `_ansi_rgb_buf` and `_cursor_rel`
+  as shared bodies and v0.9.4 restored the docstrings its extraction had
+  destroyed — but left the originals stranded on the new private helpers, so
+  the bundle carried **two** descriptions for `tty_bg_rgb_buf` and
+  `tty_cursor_down`, and put a public function's frozen return contract on top
+  of a private helper that does something else. v0.9.4's docstring audit is
+  structurally blind to this: it checks a comment block is *present*, not that
+  there is only one. All four removed.
+
+### Changed — gate hardening
+
+Every gate below had stopped being able to catch the thing it names. Each fix
+is **mutation-proven**, and two of the gates now carry a `--self-test` that
+re-proves it on every CI run, because a gate that cannot fail proves nothing.
+
+- **`scripts/syscall-audit.sh` was bypassed by three ordinary Cyrius
+  constructs**, and it is the only syscall gate in both `smoke.sh` and CI:
+  a non-identifier first argument (`syscall((59), path, 0, 0)` did not match
+  the regex at all — invisible rather than rejected), a line-wrapped call
+  (grep is line-based), and any stdlib syscall wrapper outside the
+  `sys_*` / `file_*` prefixes (`xopen`, `xunlink`, `xmkdir`, `getenv`, `panic`
+  — filesystem sinks are precisely the class the script says it exists to
+  catch). Fixed by normalizing before matching (comments stripped, string
+  literals blanked, statements rejoined) and by making the callee scan a true
+  allowlist: every called identifier must be a darshana-defined fn, a language
+  builtin, or an explicitly listed wrapper. It now also scans
+  **`docs/examples/`** — which is how the `syscall(60)` above was found, and
+  which the old `SRC_DIR="${1:-src}"` default never looked at.
+- **`scripts/platform-gate.sh` (new)** — the platform-gate check, extracted so
+  `smoke.sh` and the CI security job share one implementation instead of two
+  copies of the same awk. v0.9.3 fixed this check's *substring vs positional*
+  half but left its **file scope**: it hard-coded `src/termios.cyr` as both the
+  gate source and the search corpus, so identical ungated Linux ioctl code in
+  `src/ansi.cyr`, `src/cursor.cyr`, or any new `[lib].modules` entry was never
+  examined and would ship outside any `#ifdef` with every gate green. Now
+  corpus-driven over every `src/*.cyr`, with a vacuity guard so a gutted tree
+  cannot pass by containing no tokens at all.
+- **The docstring audit exempted the entire AGNOS arm.** Its `!seen[name]++` /
+  `!cseen[cname]++` de-dup meant only the first definition of each name was
+  ever checked — and the bundle defines six public fns and two public
+  constants twice (Linux peer, then AGNOS peer). The de-dup is gone. It found
+  three real gaps immediately: AGNOS `tty_winsize` had shipped since v0.8.0
+  with **no docstring at all**, and the AGNOS `tty_isatty` / `tty_cooked`
+  peers never stated their return contract. All three written.
+- **`dist/darshana.deps` had no drift gate.** Both drift checks diffed only
+  `darshana.cyr` — and the `cyrius distlib` call they make to produce the
+  comparison rewrites the sidecar *first*, so a stale committed sidecar was
+  destroyed in the runner before anything could compare it. It is what tells a
+  consumer's `cyrius deps` which stdlib leaves to resolve; v1.0.1 shipped
+  precisely because that file was wrong. Both artifacts are now snapshotted,
+  diffed, and restored on failure.
+
+### Added
+
+- **`tests/agnos.tcyr` — the AGNOS arm had zero coverage of any kind.** Six
+  public functions, two ADR-0003-frozen constants and four mirshi syscall
+  numbers were checked by nothing: no test touched them, and no CI job
+  cross-built them. Both frozen AGNOS sigmask constants could be corrupted to
+  their Linux values and `cyrius build`, `cyrius lint`, both suites,
+  `scripts/smoke.sh`, `scripts/syscall-audit.sh` and even
+  `cyrius build --agnos` all stayed green — confirmed by doing it. That
+  mattered because the AGNOS values differ from Linux by design and cannot be
+  inferred (mirshi encodes a signal set as `1 << sig`; Linux sigset_t uses
+  `1 << (sig - 1)`).
+
+  15 assertions, and the non-obvious part is that they **run on an ordinary
+  Linux host**: `--agnos` emits an x86_64 ELF and `write(2)` is 1 on both
+  targets, so the stdlib assert harness works unmodified. The file documents
+  loudly what must **not** be called there — AGNOS `tty_isatty` / `tty_winsize`
+  issue `syscall(60, ...)`, which on Linux is `exit`, so calling them would
+  terminate the harness with status 0 and fake a pass. Its own exit likewise
+  uses the **host** number, not `SYS_EXIT`: building for agnos and running on
+  Linux made `SYS_EXIT` resolve to 0, which Linux reads as `read(2)`, so the
+  process fell through, re-entered `main()`, printed the suite twice and
+  segfaulted. That is written down in the file, because it will bite again.
+
+- **A CI step that cross-builds and runs the AGNOS arm.** Nothing in CI
+  compiled `#ifdef CYRIUS_TARGET_AGNOS` before: 6 of 29 frozen functions and 2
+  of 37 frozen constants were never even parsed, so structural breakage there
+  shipped.
+
+- **Tests: 217 → 295 assertions** (`darshana.tcyr` 167 → 224, `pty.tcyr`
+  50 → 56, `agnos.tcyr` 15 new). The additions target gaps the sweep proved
+  were real, not coverage for its own sake:
+  - **Frozen constant VALUES.** Only 4 of the 37 had their value asserted
+    anywhere; `smoke.sh` checks each name is *present*, never what it equals,
+    so a typo'd `TIO_ECHO` would have shipped green and raw-moded the wrong
+    bit. All 37 now pinned to their kernel-ABI literals, written out rather
+    than derived from the constant under test.
+  - **`_tty_apply_raw_flags` preserves what it does not name.** Every existing
+    raw-flag assertion checks a bit went to 0 or 1, so all 21 of them would
+    still pass against an implementation that simply **zeroed all four flag
+    words** — the half of the contract that matters on a real terminal was
+    unasserted. Now sets unrelated bits in each word plus a non-VMIN/VTIME
+    `c_cc` slot and requires them to survive, and requires the struct's tail
+    padding to stay untouched.
+  - **`tty_winsize`'s u16 high-byte decode.** The only geometry ever tested
+    was 24×80 — both single-byte — so the `| (load8(...) << 8)` half of the
+    decode was never executed. Now round-trips 0x0123 × 0x0456 through a real
+    PTY, with distinct non-zero high and low bytes so a byte-order or
+    field-swap error cannot coincide with the expected answer, and with
+    non-zero pixel fields to prove they are ignored rather than folded in.
+    Mutation-proven both ways.
+  - **Accepted boundary inputs.** Every existing bounds assertion tested a
+    *rejected* input, so an off-by-one that narrowed a frozen envelope would
+    have passed. The inclusive edges are now asserted, including
+    `tty_fg_rgb_buf(255,255,255)` landing exactly on its documented 19-byte
+    budget.
+  - **`tty_winsize` / `tty_isatty` on a live non-TTY fd**, distinguishing "not
+    a terminal" from "bad fd", and asserting the out-pointers are left
+    untouched on failure.
+  - **A regression test for the signalfd rollback**, which fails with exactly
+    the right message when the fix is reverted.
+
+### Documentation
+
+- **The frozen return-conventions table claimed all 29 public fns fell in one
+  of four buckets; three fell in none** — `tio_load32`, `tio_store32` and
+  `tty_close_signalfd`. A fifth bucket now covers the termios field codec, and
+  `tty_close_signalfd` joins the fd-opener bucket alongside its twin.
+- **`tty_winsize`'s docstring claimed it was "the only darshana primitive that
+  writes a FIXED-WIDTH value through caller-supplied pointers".** `tio_store32`
+  does exactly that. Reworded to the true distinction: it is the only one
+  writing through an *out-parameter*.
+- **`_ansi_emit_u8`'s docstring was wrong twice.** It declared a `[0, 255]`
+  domain while `tty_sgr_buf` feeds it codes up to 999 (its own frozen
+  envelope, handled correctly by the three-digit arm); and it justified
+  duplicating `tty_dec_buf` with a language claim — that the
+  termios → ansi → cursor bundle order leaves `tty_dec_buf` undefined at that
+  point — which is **false** for cyrius 6.6.0, verified by building the module
+  set in exactly that arrangement. Both corrected, with the real constraint
+  recorded so the duplication is not re-created on a false premise.
+- Buffer-sizing comments in `cursor.cyr` corrected: `tty_move`'s counted 20
+  decimal digits per coordinate where `tty_dec_buf` emits at most 19 (so
+  `buf[44]` is 2 bytes of headroom, not exactly the worst case), and
+  `_cursor_rel`'s summed to 22 by luck — its middle term was written "(1)"
+  where it meant 19.
+
+### Verification
+
+- **Emitted-byte identity, proven exhaustively.** ADR 0003 freezes emitted
+  bytes, so a purpose-built harness drives every `_buf` composer across its
+  full input envelope — `tty_dec_buf` over −5…10000 plus every decade boundary
+  and i64 max, `tty_sgr_buf` over −3…1002, `tty_fg_256_buf` and all three RGB
+  channels over −3…258 each, plus cube corners, a diagonal, negative-`pos`
+  rejection and 20 start offsets per composer — recording both the produced
+  bytes **and** the returned position, with its own decimal emitter so a change
+  in `tty_dec_buf` cannot mask itself. **13,518 records / 178,199 bytes,
+  `sha256:6dcd7228…`, byte-identical before and after every change in this
+  release** (~3× the v0.9.3 precedent's 55,798 bytes).
+- **295 assertions green** — 224 + 56 + 15. Every new gate mutation-proven:
+  corrupting either AGNOS sigmask reddens `agnos.tcyr` (6 failures); dropping
+  the winsize high-byte shift or swapping the row/col offsets reddens
+  `pty.tcyr`; reverting the signalfd rollback reddens `darshana.tcyr`; an
+  ungated ioctl token in `src/ansi.cyr` reddens the platform gate; a stale
+  sidecar reddens the drift check; and each of the five syscall-audit bypasses
+  is asserted rejected by its own self-test.
+- `cyrius lint` clean; `scripts/smoke.sh` PASS with the frozen 29 fns / 37
+  constants bidirectionally audited; DCE parity OK; the example builds and
+  runs on both targets. **Native builds emit zero warnings**; `--win` zero;
+  `--agnos` retains only the pre-existing upstream `_agnos_getenv` warning.
+- `--aarch64` remains **unverifiable on this host** — `cycc_aarch64` is not
+  installed, so `cyrius build --aarch64` fails before reaching darshana's
+  source, at v1.0.1 and v1.0.2 alike. That arm is *unbuilt*, not *known-good*;
+  tracked in `state.md`.
+
+### Confirmed but deliberately not taken
+
+Both price as **minor** under ADR 0003, not patch, and are recorded rather
+than silently carried:
+
+- **Collapsing `_ansi_emit_u8` into `tty_dec_buf`.** They are the same function
+  over every input any caller can deliver, and the replacement was proven
+  byte-identical over an exhaustive sweep. ADR 0003 prices "internal refactors
+  with identical output" as minor, so it waits for 1.1.0. The false rationale
+  that would have prevented anyone from trying is corrected now.
+- **A measured ~30% byte-identical speedup in the RGB composers.** Same
+  reasoning. (The audit also established that the divide-elimination one
+  reaches for first makes it *slower* — worth recording before someone tries.)
+
+
 ## [1.0.1] — 2026-09-07
 
 Toolchain + vendoring release. **No source change** — `src/` is untouched and

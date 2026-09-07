@@ -520,6 +520,176 @@ fn main() {
     # is at its fd ceiling. Consumer integration (chakshu's M2
     # signalfd-driven exit + SIGWINCH loop) covers the success path.
 
+
+    # ================================================================
+    # v1.0.2 — frozen constant VALUES (ADR 0003)
+    # ================================================================
+    # Through v1.0.1 only 4 of the 37 frozen constants had their VALUE
+    # asserted anywhere (TTY_SIGMASK_EXIT/WINCH, TIOCGWINSZ, TIO_BUF_SIZE);
+    # the rest were pinned by nothing. `scripts/smoke.sh` checks that each
+    # name is PRESENT in the bundle, never what it equals — so a typo'd
+    # TIO_ECHO would ship green and silently raw-mode the wrong bit.
+    # ADR 0003 freezes "constant values", so this is the gate for that
+    # clause. Every literal below is the kernel ABI value from
+    # asm-generic/termbits.h, written out rather than derived from the
+    # constant it checks (a self-referential assertion proves nothing).
+    test_group("v1.0.2 — frozen constant values (ADR 0003)");
+    assert_eq(TCGETS,   0x5401, "TCGETS kernel ABI value");
+    assert_eq(TCSETS,   0x5402, "TCSETS kernel ABI value");
+    assert_eq(TIO_ISIG,   0x001, "TIO_ISIG");
+    assert_eq(TIO_ICANON, 0x002, "TIO_ICANON");
+    assert_eq(TIO_ECHO,   0x008, "TIO_ECHO");
+    assert_eq(TIO_IEXTEN, 0x8000, "TIO_IEXTEN");
+    assert_eq(TIO_ICRNL,  0x100, "TIO_ICRNL");
+    assert_eq(TIO_IXON,   0x400, "TIO_IXON");
+    assert_eq(TIO_OPOST,  0x001, "TIO_OPOST");
+    assert_eq(TIO_CSIZE,  0x030, "TIO_CSIZE");
+    assert_eq(TIO_CS8,    0x030, "TIO_CS8");
+    assert_eq(TIO_BRKINT, 0x002, "TIO_BRKINT");
+    assert_eq(TIO_INPCK,  0x010, "TIO_INPCK");
+    assert_eq(TIO_ISTRIP, 0x020, "TIO_ISTRIP");
+    assert_eq(TIO_CC_BASE, 17, "TIO_CC_BASE — c_cc starts at struct offset 17");
+    assert_eq(TIO_VTIME,    5, "TIO_VTIME index into c_cc");
+    assert_eq(TIO_VMIN,     6, "TIO_VMIN index into c_cc");
+    assert_eq(TIO_BUF_SIZE, 60, "TIO_BUF_SIZE");
+    # The 16 SGR foreground codes: 30-37 base, 90-97 bright.
+    assert_eq(TTY_FG_BLACK,   30, "TTY_FG_BLACK");
+    assert_eq(TTY_FG_RED,     31, "TTY_FG_RED");
+    assert_eq(TTY_FG_GREEN,   32, "TTY_FG_GREEN");
+    assert_eq(TTY_FG_YELLOW,  33, "TTY_FG_YELLOW");
+    assert_eq(TTY_FG_BLUE,    34, "TTY_FG_BLUE");
+    assert_eq(TTY_FG_MAGENTA, 35, "TTY_FG_MAGENTA");
+    assert_eq(TTY_FG_CYAN,    36, "TTY_FG_CYAN");
+    assert_eq(TTY_FG_WHITE,   37, "TTY_FG_WHITE");
+    assert_eq(TTY_FG_BRIGHT_BLACK,   90, "TTY_FG_BRIGHT_BLACK");
+    assert_eq(TTY_FG_BRIGHT_RED,     91, "TTY_FG_BRIGHT_RED");
+    assert_eq(TTY_FG_BRIGHT_GREEN,   92, "TTY_FG_BRIGHT_GREEN");
+    assert_eq(TTY_FG_BRIGHT_YELLOW,  93, "TTY_FG_BRIGHT_YELLOW");
+    assert_eq(TTY_FG_BRIGHT_BLUE,    94, "TTY_FG_BRIGHT_BLUE");
+    assert_eq(TTY_FG_BRIGHT_MAGENTA, 95, "TTY_FG_BRIGHT_MAGENTA");
+    assert_eq(TTY_FG_BRIGHT_CYAN,    96, "TTY_FG_BRIGHT_CYAN");
+    assert_eq(TTY_FG_BRIGHT_WHITE,   97, "TTY_FG_BRIGHT_WHITE");
+    # CS8 and CSIZE share a value on Linux; assert the relationship the
+    # raw mask depends on rather than letting it be a coincidence.
+    assert_eq(TIO_CS8 & TIO_CSIZE, TIO_CS8, "CS8 lies inside the CSIZE field");
+
+    # ================================================================
+    # v1.0.2 — _tty_apply_raw_flags PRESERVES unrelated bits
+    # ================================================================
+    # The existing raw-flag assertions above all check that a bit went to
+    # 0 or 1. Every one of them would still pass against an implementation
+    # that simply zeroed all four flag words — so the half of the contract
+    # that matters for a REAL terminal (leave everything darshana does not
+    # name alone, because tty_cooked restores from the saved copy and the
+    # kernel keeps the rest) was unasserted. Set the bits darshana must
+    # not touch, apply the mask, and require them to survive.
+    test_group("v1.0.2 — _tty_apply_raw_flags preserves unrelated bits");
+    var pbuf[60];
+    var pi = 0;
+    while (pi < 60) { store8(&pbuf + pi, 0); pi = pi + 1; }
+    # Bits in each word that darshana's mask never names.
+    #   iflag 0x0800 = IUTF8, oflag 0x0004 = ONLCR-adjacent, cflag
+    #   0x0080 = CREAD-adjacent, lflag 0x0100 = ECHOK-adjacent.
+    tio_store32(&pbuf, 0,  0x0800);
+    tio_store32(&pbuf, 4,  0x0004);
+    tio_store32(&pbuf, 8,  0x0080);
+    tio_store32(&pbuf, 12, 0x0100);
+    # A c_cc slot that is neither VMIN nor VTIME (VINTR is index 0).
+    store8(&pbuf + TIO_CC_BASE + 0, 3);
+    _tty_apply_raw_flags(&pbuf);
+    assert_eq(tio_load32(&pbuf, 0)  & 0x0800, 0x0800, "iflag: unnamed bit preserved");
+    assert_eq(tio_load32(&pbuf, 4)  & 0x0004, 0x0004, "oflag: unnamed bit preserved");
+    assert_eq(tio_load32(&pbuf, 8)  & 0x0080, 0x0080, "cflag: unnamed bit preserved");
+    assert_eq(tio_load32(&pbuf, 12) & 0x0100, 0x0100, "lflag: unnamed bit preserved");
+    assert_eq(load8(&pbuf + TIO_CC_BASE + 0), 3, "c_cc[VINTR] untouched (only VMIN/VTIME are set)");
+    # And the bytes past the 36 active ones stay zero — the mask must not
+    # scribble into the struct's tail padding.
+    var tailsum = 0;
+    var ti = 36;
+    while (ti < 60) { tailsum = tailsum + load8(&pbuf + ti); ti = ti + 1; }
+    assert_eq(tailsum, 0, "termios tail padding untouched");
+
+    # ================================================================
+    # v1.0.2 — _buf composers at their inclusive boundaries
+    # ================================================================
+    # Every existing bounds assertion tests a REJECTED input. The accepted
+    # edges — the largest value each guard admits — were untested, so an
+    # off-by-one that narrowed a frozen envelope would have shipped green.
+    test_group("v1.0.2 — accepted boundary inputs");
+    var bbuf[64];
+    assert_eq(tty_sgr_buf(&bbuf, 0, 0),   4, "tty_sgr_buf accepts code 0 (low edge: ESC [ 0 m)");
+    assert_eq(tty_sgr_buf(&bbuf, 0, 999), 6, "tty_sgr_buf accepts code 999 (high edge: the 6-byte budget)");
+    assert_eq(tty_fg_256_buf(&bbuf, 0, 0),   9,  "tty_fg_256_buf accepts n=0");
+    assert_eq(tty_fg_256_buf(&bbuf, 0, 255), 11, "tty_fg_256_buf accepts n=255 (11-byte budget)");
+    assert_eq(tty_fg_rgb_buf(&bbuf, 0, 255, 255, 255), 19,
+        "tty_fg_rgb_buf accepts 255,255,255 — exactly the documented 19-byte budget");
+    assert_eq(tty_bg_rgb_buf(&bbuf, 0, 255, 255, 255), 19,
+        "tty_bg_rgb_buf same 19-byte worst case");
+    assert_eq(tty_fg_rgb_buf(&bbuf, 0, 0, 0, 0), 13, "tty_fg_rgb_buf minimum emit");
+    # tty_dec_buf across the tty_move envelope: 65535 is 5 digits.
+    assert_eq(tty_dec_buf(&bbuf, 0, 65535), 5, "tty_dec_buf: 65535 is 5 digits");
+    assert_eq(tty_dec_buf(&bbuf, 0, 1), 1, "tty_dec_buf: 1 is 1 digit");
+    # pos = 0 is the boundary between accepted and rejected.
+    assert_eq(tty_sgr_reset_buf(&bbuf, 0), 4, "pos 0 is accepted (only negative rejects)");
+
+    # ================================================================
+    # v1.0.2 — tty_open_signalfd failure rollback is EXACT
+    # ================================================================
+    # REGRESSION TEST for the defect this release fixes. Through v1.0.1 a
+    # failed open rolled back with SIG_UNBLOCK over the WHOLE requested
+    # mask instead of restoring the entry mask, so it unblocked signals
+    # the caller had already blocked — including ones owned by an earlier,
+    # still-live darshana signalfd. That is the documented multi-signalfd
+    # pattern (chakshu holds an EXIT fd and a WINCH fd), and the first fd
+    # went deaf: with TTY_SIGMASK_EXIT the next Ctrl-C would kill the
+    # process outright instead of waking the poll loop, so the consumer's
+    # teardown never ran and the user landed in a raw, alt-screened shell.
+    #
+    # SIGWINCH is used deliberately: its default action is "ignore", so
+    # raising it to observe the effect is safe. With TTY_SIGMASK_EXIT the
+    # same sequence would terminate this process.
+    test_group("v1.0.2 — signalfd failure rollback preserves a live block");
+    var rb_fd1 = tty_open_signalfd(TTY_SIGMASK_WINCH);
+    if (rb_fd1 >= 0) {
+        var rb_m[8];
+        store64(&rb_m, 0);
+        syscall(14, 0, 0, &rb_m, 8);              # rt_sigprocmask read-back
+        assert_eq(load64(&rb_m) & TTY_SIGMASK_WINCH, TTY_SIGMASK_WINCH,
+            "SIGWINCH blocked while fd1 is open");
+
+        # Squeeze RLIMIT_NOFILE so a second open must fail — the same
+        # technique the pty harness uses for its forced-failure test.
+        var rb_old[16]; store64(&rb_old, 0); store64(&rb_old + 8, 0);
+        if (syscall(302, 0, 7, 0, &rb_old) == 0) {          # prlimit64 get
+            var rb_new[16];
+            store64(&rb_new, 3);
+            store64(&rb_new + 8, load64(&rb_old + 8));
+            if (syscall(302, 0, 7, &rb_new, 0) == 0) {      # prlimit64 set
+                var rb_fd2 = tty_open_signalfd(TTY_SIGMASK_WINCH | TTY_SIGMASK_EXIT);
+                syscall(302, 0, 7, &rb_old, 0);             # restore limit
+                if (rb_fd2 < 0) {
+                    assert_eq(rb_fd2, 0 - 1, "second open failed with exactly -1");
+                    store64(&rb_m, 0);
+                    syscall(14, 0, 0, &rb_m, 8);
+                    # THE FIX: the block fd1 owns must survive the failure.
+                    assert_eq(load64(&rb_m) & TTY_SIGMASK_WINCH, TTY_SIGMASK_WINCH,
+                        "failed open leaves fd1's SIGWINCH block INTACT");
+                    # And the bit the failed call itself added must be gone.
+                    assert_eq(load64(&rb_m) & TTY_SIGMASK_EXIT, 0,
+                        "failed open unblocks only what it added (EXIT rolled back)");
+                } else {
+                    tty_close_signalfd(rb_fd2, TTY_SIGMASK_WINCH | TTY_SIGMASK_EXIT);
+                }
+            }
+        }
+        assert_eq(tty_close_signalfd(rb_fd1, TTY_SIGMASK_WINCH), 0,
+            "tty_close_signalfd returns exactly 0 on success");
+        store64(&rb_m, 0);
+        syscall(14, 0, 0, &rb_m, 8);
+        assert_eq(load64(&rb_m) & TTY_SIGMASK_WINCH, 0,
+            "close unblocks the mask it was given");
+    }
+
     return assert_summary();
 }
 

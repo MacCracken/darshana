@@ -20,7 +20,7 @@
 #
 #     [deps.darshana]
 #     git     = "https://github.com/MacCracken/darshana.git"
-#     tag     = "0.9.4"
+#     tag     = "1.0.2"
 #     modules = ["dist/darshana.cyr"]
 #
 # and then writes `include "lib/darshana.cyr"` after `cyrius deps`.
@@ -243,4 +243,13 @@ fn main() {
 #endif
 
 var ex_code = main();
-syscall(60, ex_code);
+# SYS_EXIT, not a literal 60. This line sits OUTSIDE both platform
+# gates, so it compiles for every target -- and 60 is `exit` only on
+# x86_64 Linux. It is 93 on aarch64 Linux, and on AGNOS 60 is
+# `winsize`, the very syscall src/termios.cyr uses for tty_winsize.
+# The literal therefore emitted a stray console-grid query on agnos
+# and let the implicit epilogue end the process, with no diagnostic:
+# the compiler's "syscall not routed" warning is Mach-O-only. Same
+# trap darshana already paid for in v0.9.2 (SYS_IOCTL). Fixed in
+# v1.0.2; programs/smoke.cyr had it right all along.
+syscall(SYS_EXIT, ex_code);

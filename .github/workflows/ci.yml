@@ -137,6 +137,27 @@ jobs:
           done
           [ $fail -eq 0 ] || { echo "examples: build/run failures above"; exit 1; }
 
+      - name: Cross-build + test the AGNOS arm
+        # v1.0.2. Nothing in CI compiled the `#ifdef CYRIUS_TARGET_AGNOS`
+        # arm before this: 6 of the 29 frozen functions and 2 of the 37
+        # frozen constants were never even PARSED here, so structural
+        # breakage in that arm shipped. Both AGNOS sigmask constants could
+        # be corrupted to their Linux values and every other job stayed
+        # green — verified by doing exactly that.
+        #
+        # `--agnos` emits an x86_64 ELF, so the test binary RUNS on this
+        # ubuntu runner. See the header of tests/agnos.tcyr for what it may
+        # and may not call: AGNOS `tty_isatty` / `tty_winsize` issue
+        # syscall 60, which is `exit` on Linux, so executing them here would
+        # terminate the harness with status 0 and fake a pass.
+        #
+        # The known `undefined function '_agnos_getenv'` warning is
+        # upstream-agnos shaped and not fatal.
+        run: |
+          cyrius build --agnos programs/smoke.cyr build/darshana-smoke-agnos
+          cyrius build --agnos tests/agnos.tcyr build/agnos-tests
+          ./build/agnos-tests
+
       - name: Project smoke (scripts/smoke.sh)
         run: bash scripts/smoke.sh
 
@@ -148,10 +169,19 @@ jobs:
         # this dist file), not src/. Drift here = consumers shipping
         # stale code.
         run: |
-          cp dist/darshana.cyr /tmp/dist-checked-in.cyr
+          cp dist/darshana.cyr  /tmp/dist-checked-in.cyr
+          cp dist/darshana.deps /tmp/deps-checked-in.deps
           cyrius distlib > /dev/null
           diff -q /tmp/dist-checked-in.cyr dist/darshana.cyr \
             || { echo "FAIL: dist/darshana.cyr is stale. Run 'cyrius distlib' and commit."; exit 1; }
+          # The sidecar too (v1.0.2). `cyrius distlib` writes BOTH artifacts,
+          # but through v1.0.1 only the bundle was diffed — and the distlib
+          # call that produces the comparison rewrites the sidecar first, so
+          # a stale committed dist/darshana.deps was destroyed in the runner
+          # before anything could notice. It is what tells a consumer's
+          # `cyrius deps` which stdlib leaves to resolve.
+          diff -q /tmp/deps-checked-in.deps dist/darshana.deps \
+            || { echo "FAIL: dist/darshana.deps is stale. Run 'cyrius distlib' and commit."; exit 1; }
 
       - name: DCE parity check
         # Release builds set CYRIUS_DCE=1. The DCE'd smoke binary
@@ -199,45 +229,22 @@ jobs:
             FAIL=1
           fi
 
-          # Linux-syscall arm must remain gated. termios.cyr's
-          # SYS_IOCTL / TCGETS / TCSETS path uses Linux-specific magic
-          # numbers; macOS/BSD termios layout differs, and agnos has no
-          # ioctl at all.
+          # Platform gates — one implementation, shared with
+          # scripts/smoke.sh, so the local and CI verdicts cannot drift
+          # apart. Through v1.0.1 this job carried its own copy of the awk,
+          # which is exactly how two checks of the same rule diverge.
           #
-          # v0.9.3: POSITIONAL, not substring-presence. The previous
-          # `grep -q '#ifdef CYRIUS_TARGET_LINUX'` had no relationship
-          # to where the ioctl code actually sat — hoisting the entire
-          # arm outside the gate left this step green, and nothing else
-          # in CI would catch it (build-and-test is ubuntu-x86_64 only,
-          # and cyrius does not error on a duplicate definition).
-          # Mirrors the same check in scripts/smoke.sh so local and CI
-          # agree.
-          lin=$(awk '/^#ifdef CYRIUS_TARGET_LINUX/{s=NR;next} s&&/^#endif/{print s, NR; exit}' src/termios.cyr)
-          agn=$(awk '/^#ifdef CYRIUS_TARGET_AGNOS/{s=NR;next} s&&/^#endif/{print s, NR; exit}' src/termios.cyr)
-          if [ -z "$lin" ] || [ -z "$agn" ]; then
-            echo "FAIL: src/termios.cyr missing a CYRIUS_TARGET_LINUX / _AGNOS gate"
-            echo "  The ioctl/TCGETS/TCSETS arm is Linux-specific; macOS BSD"
-            echo "  termios layout differs. Don't drop the gate without an"
-            echo "  ADR documenting cross-platform termios handling."
-            FAIL=1
-          else
-            stray_lin=$(grep -nE '(SYS_IOCTL|TCGETS|TCSETS|TIOCGWINSZ)' src/termios.cyr \
-                        | grep -vE '^[0-9]+: *#' \
-                        | awk -F: -v s="${lin% *}" -v e="${lin#* }" '$1 < s || $1 > e')
-            if [ -n "$stray_lin" ]; then
-              echo "FAIL: Linux ioctl tokens outside the CYRIUS_TARGET_LINUX gate (lines $lin):"
-              echo "$stray_lin"
-              FAIL=1
-            fi
-            stray_agn=$(grep -nE '_AGNOS_SYS_[A-Z]+|_AGNOS_SFD_' src/termios.cyr \
-                        | grep -vE '^[0-9]+: *#' \
-                        | awk -F: -v s="${agn% *}" -v e="${agn#* }" '$1 < s || $1 > e')
-            if [ -n "$stray_agn" ]; then
-              echo "FAIL: agnos syscall tokens outside the CYRIUS_TARGET_AGNOS gate (lines $agn):"
-              echo "$stray_agn"
-              FAIL=1
-            fi
-          fi
+          # v1.0.2 also made it CORPUS-DRIVEN: the v0.9.3 form hard-coded
+          # src/termios.cyr as both the gate source and the search corpus,
+          # so the identical ungated ioctl code in any other module was
+          # never examined at all.
+          bash scripts/platform-gate.sh || FAIL=1
+
+          # Both gates are mutation-proven on every run: a gate that cannot
+          # fail proves nothing, and both of these have silently stopped
+          # checking their rule at least once in this project's history.
+          bash scripts/platform-gate.sh --self-test || FAIL=1
+          bash scripts/syscall-audit.sh --self-test || FAIL=1
 
           # Syscall ALLOWLIST (v0.9.4 — replaces the exec-sink denylist).
           # darshana's entire surface is raw `syscall(...)`, so a denylist

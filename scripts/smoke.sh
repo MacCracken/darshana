@@ -39,17 +39,38 @@ echo "[smoke] dist drift"
 if [ ! -f dist/darshana.cyr ]; then
     fail "dist/darshana.cyr missing — run 'cyrius distlib'"
 fi
+if [ ! -f dist/darshana.deps ]; then
+    fail "dist/darshana.deps missing — run 'cyrius distlib'"
+fi
 
 # Snapshot what's checked in; regenerate; diff.
+#
+# BOTH artifacts, as of v1.0.2. `cyrius distlib` writes darshana.cyr AND
+# darshana.deps, but through v1.0.1 this check snapshotted and diffed only
+# the former — and the `cyrius distlib` call it makes to produce the
+# comparison rewrites the sidecar first. So a stale committed sidecar was
+# destroyed in the working tree before anything could compare it, and could
+# sit wrong in the repo indefinitely with every gate green. It is not a
+# cosmetic file: it is what tells a consumer's `cyrius deps` which stdlib
+# leaves to resolve, which is exactly the failure v1.0.1 hit when the `vec`
+# leaf was missing and every consumer build warned.
 TMPSNAP="${TMPDIR:-/tmp}/darshana-dist-snap-$$.cyr"
-trap 'rm -f "$TMPSNAP"' EXIT INT TERM
-cp dist/darshana.cyr "$TMPSNAP"
+TMPSNAPD="${TMPDIR:-/tmp}/darshana-deps-snap-$$.deps"
+trap 'rm -f "$TMPSNAP" "$TMPSNAPD"' EXIT INT TERM
+cp dist/darshana.cyr  "$TMPSNAP"
+cp dist/darshana.deps "$TMPSNAPD"
 cyrius distlib > /dev/null
 if ! diff -q "$TMPSNAP" dist/darshana.cyr > /dev/null; then
-    cp "$TMPSNAP" dist/darshana.cyr   # restore committed bytes
+    cp "$TMPSNAP"  dist/darshana.cyr    # restore committed bytes
+    cp "$TMPSNAPD" dist/darshana.deps
     fail "dist/darshana.cyr is stale. Run 'cyrius distlib' and commit."
 fi
-pass "dist/darshana.cyr matches src/ — no drift"
+if ! diff -q "$TMPSNAPD" dist/darshana.deps > /dev/null; then
+    cp "$TMPSNAP"  dist/darshana.cyr
+    cp "$TMPSNAPD" dist/darshana.deps   # restore committed bytes
+    fail "dist/darshana.deps is stale. Run 'cyrius distlib' and commit."
+fi
+pass "dist/darshana.cyr and dist/darshana.deps match src/ — no drift"
 
 # ============================================================
 # Public API surface — confirm the donor's `tty_*` and `TIO_*`
@@ -131,23 +152,38 @@ bash scripts/syscall-audit.sh || fail "syscall allowlist violation (see above)"
 # ============================================================
 echo "[smoke] docstring audit"
 
+#   5. EVERY definition is audited, not just the first with a given name
+#      (v1.0.2). Through v1.0.1 the fn check was guarded by `!seen[name]++`
+#      and the constant check by `!cseen[cname]++`. dist/darshana.cyr
+#      defines six public fns twice (tty_raw, tty_cooked, tty_winsize,
+#      tty_isatty, tty_open_signalfd, tty_close_signalfd — Linux peer then
+#      AGNOS peer) and two public constants twice (TTY_SIGMASK_EXIT /
+#      _WINCH), so the de-dup exempted the ENTIRE AGNOS half of the frozen
+#      surface from the docstring rule. That is the worst possible place
+#      for the exemption: the AGNOS docstrings are the only text explaining
+#      why TTY_SIGMASK_EXIT is 0x8006 there and 0x4003 on Linux (agnos
+#      `1<<sig` vs Linux `1<<(sig-1)`), which ADR 0003 freezes and a
+#      consumer cannot infer. It was not hypothetical — AGNOS tty_winsize
+#      shipped from v0.8.0 with no adjacent docstring at all, and this gate
+#      never saw it. Nothing in the rules is order-dependent, so the
+#      de-dup is simply gone.
 doc_gaps=$(awk '
 /^#/                  { if (reset) { blk=""; reset=0 } blk = blk "\n" $0; prev="c"; next }
 /^[[:space:]]*$/      { reset=1; prev="b"; next }
 /^fn (tty_|tio_)[a-z0-9_]+\(/ {
     name=$2; sub(/\(.*/, "", name)
-    if (!seen[name]++) {
-        if (reset || blk == "")                    print "  no docstring:      " name
-        else {
-            if (blk !~ /[Rr]eturn/)                print "  return not stated: " name
-            if (name ~ /_buf$/ && blk !~ /budget/) print "  no byte budget:    " name
-        }
+    occ[name]++
+    tag = (occ[name] > 1) ? name " (peer #" occ[name] ")" : name
+    if (reset || blk == "")                    print "  no docstring:      " tag
+    else {
+        if (blk !~ /[Rr]eturn/)                print "  return not stated: " tag
+        if (name ~ /_buf$/ && blk !~ /budget/) print "  no byte budget:    " tag
     }
     blk=""; reset=0; prev="f"; next
 }
 /^var [A-Z]/ {
     cname=$2
-    if (!cseen[cname]++ && (reset || blk == "") && prev != "v") print "  no doc group:      " cname
+    if ((reset || blk == "") && prev != "v") print "  no doc group:      " cname
     blk=""; reset=0; prev="v"; next
 }
 { blk=""; reset=0; prev="o" }
@@ -172,37 +208,21 @@ pass "every public fn documents its return; every _buf states its byte budget"
 # ============================================================
 echo "[smoke] platform gate"
 
-gate_bounds() {   # $1 = #ifdef token -> echoes "start end"
-    awk -v tok="$1" '
-        $0 ~ "^#ifdef " tok { s = NR; next }
-        s && /^#endif/ { print s, NR; exit }
-    ' src/termios.cyr
-}
-
-lin_bounds=$(gate_bounds CYRIUS_TARGET_LINUX)
-agn_bounds=$(gate_bounds CYRIUS_TARGET_AGNOS)
-[ -n "$lin_bounds" ] || fail "src/termios.cyr: CYRIUS_TARGET_LINUX gate not found (Linux-syscall arm must stay gated)"
-[ -n "$agn_bounds" ] || fail "src/termios.cyr: CYRIUS_TARGET_AGNOS gate not found"
-
-# Every Linux-only ioctl token must sit inside the Linux gate, and
-# every agnos syscall constant inside the agnos gate. Comment lines are
-# excluded — the gates' own docstrings legitimately name these tokens.
-lin_start=${lin_bounds% *}; lin_end=${lin_bounds#* }
-agn_start=${agn_bounds% *}; agn_end=${agn_bounds#* }
-
-stray_lin=$(grep -nE '(SYS_IOCTL|TCGETS|TCSETS|TIOCGWINSZ)' src/termios.cyr \
-            | grep -vE '^[0-9]+: *#' \
-            | awk -F: -v s="$lin_start" -v e="$lin_end" '$1 < s || $1 > e')
-[ -z "$stray_lin" ] || fail "src/termios.cyr: Linux ioctl tokens outside the CYRIUS_TARGET_LINUX gate (lines $lin_start-$lin_end):
-$stray_lin"
-
-stray_agn=$(grep -nE '_AGNOS_SYS_[A-Z]+|_AGNOS_SFD_' src/termios.cyr \
-            | grep -vE '^[0-9]+: *#' \
-            | awk -F: -v s="$agn_start" -v e="$agn_end" '$1 < s || $1 > e')
-[ -z "$stray_agn" ] || fail "src/termios.cyr: agnos syscall tokens outside the CYRIUS_TARGET_AGNOS gate (lines $agn_start-$agn_end):
-$stray_agn"
-
-pass "Linux ioctl arm confined to lines $lin_start-$lin_end; agnos arm to $agn_start-$agn_end"
+#
+# v1.0.2: CORPUS-DRIVEN, not file-driven. Through v1.0.1 both this check
+# and its CI twin hard-coded `src/termios.cyr` as the gate source AND the
+# search corpus, so the identical Linux-only ioctl code placed in
+# src/ansi.cyr, src/cursor.cyr or any new module added to [lib].modules
+# was never examined — it would ship into dist/darshana.cyr outside any
+# `#ifdef` with every gate green. That is precisely the hole v0.9.3 closed
+# ("the check had no relationship to what it claimed to verify"), moved by
+# one file. The syscall allowlist does not backstop it either: SYS_IOCTL /
+# TCGETS / TCSETS are permitted there *because* this gate was supposed to
+# confine them.
+# One implementation, shared with the CI security job, so the local and
+# CI verdicts cannot drift apart (v1.0.2 — through v1.0.1 ci.yml carried
+# its own copy of this awk).
+bash scripts/platform-gate.sh || fail "platform gate violation (see above)"
 
 echo
 echo "smoke: PASS ($BIN)"

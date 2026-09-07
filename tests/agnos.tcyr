@@ -1,0 +1,120 @@
+# darshana AGNOS-arm test suite — v1.0.2.
+#
+# The `#ifdef CYRIUS_TARGET_AGNOS` arm of src/termios.cyr shipped from
+# v0.8.0 with ZERO coverage of any kind. Six public functions
+# (tty_winsize, tty_isatty, tty_raw, tty_cooked, tty_open_signalfd,
+# tty_close_signalfd), two ADR-0003-FROZEN constants and four internal
+# syscall numbers were checked by nothing: no test file touched them, and
+# no CI job cross-built them. Both frozen AGNOS constants could be
+# corrupted to their Linux values and `cyrius build`, `cyrius lint`, both
+# test suites, `scripts/smoke.sh`, `scripts/syscall-audit.sh` and even
+# `cyrius build --agnos` all stayed green.
+#
+# That mattered because the AGNOS values DIFFER from the Linux ones by
+# design and cannot be inferred: mirshi represents a signal set as
+# `1 << sig`, where Linux sigset_t uses `1 << (sig - 1)`. Copying the
+# Linux values here would silently watch the wrong signals — which is
+# exactly what src/termios.cyr's own comment warns about, and what ADR
+# 0003 pins ("TTY_SIGMASK_EXIT is 0x4003 on Linux and 0x8006 on AGNOS,
+# and stays so").
+#
+# Build it for the AGNOS target and run the result:
+#
+#     cyrius build --agnos tests/agnos.tcyr build/agnos-tests
+#     ./build/agnos-tests
+#
+# That works on an ordinary x86_64 Linux host (and in CI): `--agnos`
+# emits an x86_64 ELF, and write(2)=1 / exit(2) are reachable either way,
+# so the stdlib assert harness runs unmodified.
+#
+# ⛔ WHAT MUST NOT BE CALLED HERE, AND WHY.
+# Only the constants plus `tty_raw` and `tty_cooked` are safe to EXECUTE
+# on a Linux host, because they issue no syscall. The other four AGNOS
+# peers issue `syscall(60, ...)` (_AGNOS_SYS_WINSIZE) or the mirshi
+# signalfd pair — and on x86_64 Linux syscall 60 is `exit`. Calling
+# `tty_isatty` or `tty_winsize` from this harness would terminate the
+# process with status 0 mid-run: a green result that proved nothing,
+# which is worse than no test. They get COMPILE coverage from the
+# `--agnos` build of programs/smoke.cyr instead. Do not "improve" this
+# file by calling them.
+
+include "src/main.cyr"
+
+fn main() {
+    alloc_init();
+
+    # ---- frozen constant values (ADR 0003) -------------------------
+    # These are the two constants whose AGNOS values differ from Linux.
+    # mirshi's set layout is `1 << sig`, not Linux's `1 << (sig - 1)`.
+    test_group("AGNOS arm — frozen constant values (ADR 0003)");
+    assert_eq(TTY_SIGMASK_EXIT, 0x8006,
+        "AGNOS EXIT mask = 1<<1 | 1<<2 | 1<<15 (HUP|INT|TERM), not Linux 0x4003");
+    assert_eq(TTY_SIGMASK_WINCH, 0x10000000,
+        "AGNOS WINCH mask = 1<<28 (SIGWINCH), not Linux 0x08000000");
+    assert_eq(TTY_SIGMASK_EXIT & TTY_SIGMASK_WINCH, 0,
+        "AGNOS EXIT and WINCH masks are disjoint");
+    # Spell the bit positions out independently of the hex literals, so a
+    # typo'd constant cannot agree with a typo'd expectation.
+    assert_eq(TTY_SIGMASK_EXIT, (1 << 1) | (1 << 2) | (1 << 15),
+        "EXIT mask is exactly SIGHUP(1), SIGINT(2), SIGTERM(15) under 1<<sig");
+    assert_eq(TTY_SIGMASK_WINCH, 1 << 28,
+        "WINCH mask is exactly SIGWINCH(28) under 1<<sig");
+
+    # ---- internal syscall numbers (mirshi ABI) ---------------------
+    # `_`-prefixed, so not frozen by ADR 0003 — but they are the mirshi
+    # ABI, and a silent drift here is the v0.9.2 SYS_IOCTL class of bug
+    # with no diagnostic on this target either.
+    test_group("AGNOS arm — internal syscall numbers (mirshi ABI)");
+    assert_eq(_AGNOS_SYS_WINSIZE, 60, "framebuffer console grid is winsize#60");
+    assert_eq(_AGNOS_SYS_SIGPROCMASK, 17, "sigprocmask is #17");
+    assert_eq(_AGNOS_SYS_SIGNALFD, 18, "signalfd is #18");
+    assert_eq(_AGNOS_SFD_CLOEXEC, 0x80000, "SFD_CLOEXEC value carried for intent parity");
+
+    # ---- the no-termios contract -----------------------------------
+    # agnos has no TCGETS/TCSETS, so there is no raw/cooked toggle. The
+    # honest verdict is -1 from tty_raw, so consumers take their designed
+    # fallback (chakshu/thoth drop to a line REPL); tty_cooked is an
+    # idempotent no-op success, matching the Linux "no-op when not raw".
+    # Neither issues a syscall, so both are safe to execute here.
+    test_group("AGNOS arm — no-termios contract");
+    assert_eq(tty_raw(0), 0 - 1, "tty_raw always -1 on AGNOS (no termios)");
+    assert_eq(tty_raw(1), 0 - 1, "tty_raw is fd-independent on AGNOS");
+    assert_eq(tty_cooked(), 0, "tty_cooked is an idempotent no-op success");
+    assert_eq(tty_cooked(), 0, "tty_cooked stays 0 when called again");
+
+    # ---- Linux constants must NOT leak into this arm ---------------
+    # A copy-paste of the Linux block would define TCGETS/TCSETS here.
+    # There is no direct way to assert absence, but the AGNOS masks
+    # differing from the Linux ones is the observable proxy, and the
+    # positional platform gate (scripts/platform-gate.sh) enforces the
+    # structural half.
+    test_group("AGNOS arm — Linux values did not leak");
+    assert_eq(TTY_SIGMASK_EXIT == 0x4003, 0, "EXIT is not the Linux value");
+    assert_eq(TTY_SIGMASK_WINCH == 0x08000000, 0, "WINCH is not the Linux value");
+
+    return assert_summary();
+}
+
+# ⛔ THE EXIT NUMBER HERE IS THE HOST'S, NOT THE TARGET'S — read this
+# before "fixing" it to SYS_EXIT.
+#
+# This file is CROSS-BUILT for AGNOS (`cyrius build --agnos`) but EXECUTED
+# on the x86_64 Linux CI host. The emitted binary is an x86_64 ELF, so
+# every syscall it issues is interpreted by the LINUX kernel — the target
+# only decided which numbers the compiler baked in. `SYS_EXIT` resolves to
+# the AGNOS value 0, and syscall 0 on Linux is `read`, not `exit`.
+#
+# That is not theoretical: using SYS_EXIT here made the process fall
+# through the exit, re-enter `main()` (the top-level `var x = main();`
+# form runs once at global-init and once at entry, and normally the exit
+# in between prevents the second), print the whole suite twice, and then
+# SIGSEGV. The run reported "30 passed" and exited 139.
+#
+# So process exit must use the HOST kernel's number. Everything above this
+# line is target code and must stay target-correct; this one line is host
+# code. `write(2)` is 1 on both, which is why the assert harness itself
+# needs no special handling.
+var HOST_SYS_EXIT = 60;      # Linux x86_64 exit(2) — the runner's kernel
+
+var exit_code = main();
+syscall(HOST_SYS_EXIT, exit_code);
