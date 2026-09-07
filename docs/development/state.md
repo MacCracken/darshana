@@ -5,6 +5,43 @@
 
 ## Version
 
+**Unreleased (working tree)** — **roadmap restructured around semver cost,
+and a stale-information sweep over every doc the last five releases outran.**
+Not assigned a version. No executable line changed — the `src/` and
+`dist/darshana.cyr` diffs are comment-only, so emitted bytes are unchanged by
+construction rather than by measurement.
+
+`roadmap.md` had kept the shape of a pre-1.0 milestone list while the library
+has been frozen and in maintenance for five releases. It now buckets everything
+by the bump it would cost — `1.1.x` / `1.x.0` / `2.0.0` — with the patch bucket
+explicitly **empty** (every carry-forward the v1.0.x sweeps opened is closed),
+and a new `2.0.0` section recording the two imperfections ADR 0003 knowingly
+froze in. Its single open item is flagged as **downstream, not darshana work**.
+
+`CLAUDE.md` had six stale rules, which matters because it is the durable-rules
+file: the Quick Start named two suites where there are three (two of them
+cross-target and unreachable by `cyrius test`); "do not modify `lib/`"
+understated that `lib/` is *output*; the platform-gate rule still pointed at
+`smoke.sh` checking positionally, which moved to `scripts/platform-gate.sh` and
+went corpus-wide at v1.0.2; the roadmap was described as running "through v1.0
+and beyond"; and step 6 said to sync the version into `cyrius.cyml`, which
+carries `${file:VERSION}`. A new hard rule was added for the arch-blind syscall
+class that has bitten three times.
+
+Also fixed: `state.md` contradicted itself on the registry promotion (the
+v1.0.0 entry and the CHANGELOG both record it landing with the tag, while the
+milestone summary still listed it open); the sidecar row was 7 lines / 5 entries
+when it has been 8 / 6 since `args` landed; `getting-started.md` never learned
+about `tests/agnos.tcyr`, `scripts/platform-gate.sh` or the aarch64 runs; and
+`docs/architecture/002` described the arch-syscall trap as a single v0.9.1
+event rather than the three-time recurrence it is.
+
+⚠ **Two `src/` comments pointed at a roadmap section that does not exist**
+(`§"Out of scope (for v1.0)"`; the heading has been plain `## Out of scope`
+since the milestone closed). Those ship inside `dist/darshana.cyr`, which is
+the API reference consumers read, so a dangling cross-reference there is a
+shipped defect rather than a private note.
+
 **1.1.1** — *open cycle*. **aarch64 goes into CI — and wiring it found that
 four assertions, including v1.0.2's signalfd security regression test, had
 never actually run there.** Patch-shaped: **no `src/` file changed** and
@@ -443,7 +480,7 @@ TTY_SIGMASK_EXIT/WINCH, `tty_clear_to_eol/to_end`.
 | `src/main.cyr` | 27 | Convenience entry — `include`s the three sub-modules; carries the authoritative surface pointer (→ `scripts/smoke.sh`) + naming/return conventions (v0.7.0). Not in the dist bundle. |
 | `programs/smoke.cyr` | 17 | Compile-link smoke. |
 | `dist/darshana.cyr` | 1,254 | Bundled distribution — regenerate via `cyrius distlib`. What consumers `include "lib/darshana.cyr"`. (1,267 lines on disk; `distlib` reports module-body lines, excluding its 13-line generated header.) |
-| `dist/darshana.deps` | 7 | Generated stdlib-leaf sidecar — **5 entries** (`syscalls`, `alloc`, `io`, `assert`, **`vec`** — the fifth added at v1.0.1, compile-verified by 6.6.0's `distlib`). Consumed by a consumer's `cyrius deps`. |
+| `dist/darshana.deps` | 8 | Generated stdlib-leaf sidecar — **6 entries** (`syscalls`, `alloc`, `io`, `assert`, **`vec`** — the fifth added at v1.0.1, compile-verified by 6.6.0's `distlib`). Consumed by a consumer's `cyrius deps`. |
 
 Total source ≈ 1,254 lines across the three dist modules (grew from ~780
 at v0.7.0 with the v0.8.0–v0.9.0 agnos peers, and again through the v0.9.3
@@ -594,6 +631,6 @@ the **20** modules vendored in `lib/`: `alloc` `alloc_agnos` `alloc_macos` `allo
     - v0.9.4 — **pre-freeze documentation + audit cut** ✓ shipped. `docs/examples/raw_loop.cyr`, `docs/architecture/` 001+002, the per-symbol API audit (0 gaps), the syscall allowlist, and the fix for the conventions block that never shipped.
     - **Nothing is open before the freeze.** All five v1.0 criteria are met; v1.0.0 needs the consumer dep bumps, the freeze itself, and the registry promotion.
     - Shipped-cut detail lives in [`CHANGELOG.md`](../../CHANGELOG.md); [`roadmap.md`](roadmap.md) carries only what is still open.
-- M5 (v1.0.0) — ✅ **shipped 2026-08-23.** All five v1.0 criteria met; the surface is frozen per ADR 0003. Still open, and tracked in [`roadmap.md`](roadmap.md): the five consumer dep bumps to a `1.x` tag, and the shared-crates registry promotion.
+- M5 (v1.0.0) — ✅ **shipped 2026-08-23.** All five v1.0 criteria met; the surface is frozen per ADR 0003. The shared-crates registry promotion landed **with the tag** (see the v1.0.0 entry above and CHANGELOG). The one thing still open, and tracked in [`roadmap.md`](roadmap.md), is the five consumer dep bumps to a `1.x` tag — downstream work, not darshana work.
 
-[`roadmap.md`](roadmap.md) is forward-facing only — it now carries just the v0.9.4 cut, the v1.0.0 freeze, the out-of-scope boundaries, and the post-1.0 tracked items. Closed-milestone definitions were retired there at v0.9.3; the arc above is the surviving summary, and [`CHANGELOG.md`](../../CHANGELOG.md) is the full record.
+[`roadmap.md`](roadmap.md) is forward-facing only. Restructured at v1.1.1: it now carries the one open downstream item (the consumer dep bumps) and buckets everything else by the semver bump it would cost — `1.1.x` patch, `1.x.0` minor, `2.0.0` major — plus the out-of-scope charter boundaries. Nothing about the shipped surface is outstanding. The arc above is the surviving milestone summary, and [`CHANGELOG.md`](../../CHANGELOG.md) is the full record.

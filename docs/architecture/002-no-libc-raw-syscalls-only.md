@@ -29,15 +29,23 @@ compile time. They are correct for x86_64 and aarch64 Linux, which share the
 reason macOS support is a port rather than a flag.
 
 **Syscall numbers are architecture-specific, and getting one wrong fails
-silently.** darshana carried exactly this bug through v0.9.1: `src/termios.cyr`
-defined `var SYS_IOCTL = 16` — the x86_64 number — inside a
-`#ifdef CYRIUS_TARGET_LINUX` gate, which is architecture-*blind*. On aarch64
-Linux `ioctl` is 29, and 16 is `fremovexattr`. The local definition shadowed the
-stdlib's arch-aware one, the compiler emitted a "last definition wins" warning
-that nothing gated on, and every `tty_raw` / `tty_cooked` / `tty_winsize` on
-aarch64 would have called the wrong syscall. Fixed in v0.9.2 by deleting the
-local definition; `scripts/smoke.sh` and CI now enforce **positionally** that
-Linux ioctl tokens stay inside the Linux gate.
+silently.** This is the single most recurrent defect in the project's
+history — it has landed **three separate times**, each time invisibly, because
+the compiler's "syscall not routed" diagnostic is Mach-O-only:
+
+| | Where | What it did |
+|---|---|---|
+| through v0.9.1 | `src/termios.cyr` defined `var SYS_IOCTL = 16` inside an arch-*blind* `#ifdef CYRIUS_TARGET_LINUX` gate | shadowed the stdlib's arch-aware value; on aarch64 every `tty_raw` / `tty_cooked` / `tty_winsize` would have called `fremovexattr` (16), not `ioctl` (29) |
+| through v1.0.1 | `docs/examples/raw_loop.cyr` ended with `syscall(60, ...)` for exit, outside both platform gates | a stray `winsize` on AGNOS, where 60 is the console-grid call |
+| through v1.1.0 | both test suites hardcoded ioctl / nanosleep / dup / dup2 / openat / close / prlimit64 / rt_sigprocmask | `tests/pty.tcyr` failed 15 of 53 assertions the first time it ran on real aarch64; four `tests/darshana.tcyr` assertions — including the v1.0.2 signalfd security regression test — silently never ran there while *looking* like a deliberate skip |
+
+Two gates now enforce it, and both carry a `--self-test` because a gate that
+cannot fail proves nothing. `scripts/platform-gate.sh` checks **positionally**
+(by line number) and **corpus-wide** (every `src/*.cyr`, not one file) that
+Linux ioctl tokens stay inside the Linux gate and agnos tokens inside theirs.
+`scripts/syscall-audit.sh` additionally refuses any syscall number written as a
+bare integer, anywhere in `src/`, `tests/`, `programs/` or `docs/examples/` —
+`syscall(1, ...)` excepted.
 
 The general shape: take arch-varying numbers from the stdlib, which knows the
 target. Define locally only what is arch-*stable* — the ioctl request codes
@@ -68,5 +76,9 @@ for anyone who wants one checked write per frame instead of many unchecked ones.
 `sys_signalfd` / `file_close` wrappers on the Linux arm. Those are still
 syscalls — the wrappers are thin — but note that `sys_signalfd` is a bare
 passthrough that returns `-errno`, not `-1`. darshana normalizes it at its own
-boundary (v0.9.3) so its documented contract holds. When adding a stdlib `sys_*`
-call, check which convention it returns before assuming `-1`.
+boundary so its documented contract holds — `tty_open_signalfd` at v0.9.3, and
+`tty_close_signalfd` at v1.0.2, which is the point: v0.9.3 normalized the open
+path and missed its teardown twin for three releases, leaving the Linux and
+AGNOS peers disagreeing on a contract both claimed to share. When adding a
+stdlib `sys_*` call, check which convention it returns before assuming `-1`, and
+check the peer on the other arm at the same time.

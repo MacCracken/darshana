@@ -4,6 +4,105 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Roadmap restructured around the semver cost of each open item, and a
+stale-information sweep over every doc the last five releases outran. **No
+executable line changed** — the `src/` diff is comment-only, and so is the
+regenerated `dist/darshana.cyr`, so emitted bytes are unchanged by construction
+rather than by measurement.
+
+**Not assigned a version.** These are working-tree changes; the release they
+belong to is the owner's call.
+
+### Changed
+
+- **`docs/development/roadmap.md` restructured.** It had accumulated the shape
+  of a pre-1.0 milestone list while the library has been frozen and in
+  maintenance for five releases. Now:
+  - **"Where things stand"** stops restating counts that live in `state.md`,
+    and says the honest thing: nothing about the shipped surface is
+    outstanding.
+  - **"Open now"** holds exactly one item, and flags that it is **not darshana
+    work** — the five consumer dep bumps are downstream. It gains the two
+    concrete reasons a consumer would bump beyond staying current: anuenue can
+    delete a 48,960-byte pre-baked escape table that v1.1.0's composers are now
+    *faster* than (34.8 ns vs 39.3 ns), and chakshu holds two live signalfds,
+    which is exactly the shape v1.0.2's rollback fix was written for.
+  - **"Next, by bucket"** replaces the old flat "Tracked, additive" list with
+    `1.1.x` / `1.x.0` / `2.0.0` sections, so a candidate lands in the right
+    bucket instead of being argued about. The patch bucket is explicitly
+    *empty* — every carry-forward the v1.0.x sweeps opened is closed.
+  - **`2.0.0`** is a new section, listing the two imperfections ADR 0003
+    knowingly froze in. Neither is planned; they are written down because a
+    frozen imperfection nobody records gets rediscovered as a surprise. It also
+    notes that *adding* `tty_forget()` would be a **minor**, not a major — only
+    changing the existing model breaks.
+  - **"Out of scope"** keeps its charter decisions verbatim, plus a note that
+    `--win` builds succeed incidentally and the toolchain's syscall-routing
+    advisory there is expected.
+
+- **`CLAUDE.md` — six stale rules corrected.** It is the durable-rules file, so
+  a wrong rule there propagates:
+  - The Quick Start ran `cyrius test` with no argument and named two suites.
+    There are **three**, and two are cross-target — `tests/agnos.tcyr` and the
+    aarch64 runs must be *built for their target and executed*, which
+    `cyrius test` cannot do. Both spelled out.
+  - "Do not modify `lib/` files" understated it. `lib/` is **output**:
+    `[deps].stdlib` is the only declaration, `rm -rf lib/ && cyrius deps`
+    rebuilds it, and `cyrius lib sync` does **not** close the transitive graph —
+    its file list is not the footprint.
+  - The platform-gate rule still pointed at `scripts/smoke.sh` checking
+    "positionally, by line number". That moved to `scripts/platform-gate.sh` at
+    v1.0.2 and became corpus-wide (every `src/*.cyr`, not just `termios.cyr`).
+  - **New rule: never write a syscall number as a bare integer.** The class has
+    bitten three times; it is now mechanically gated, and the rule belongs
+    beside the allowlist rule rather than only in a script comment.
+  - The roadmap was described as "what is left to do through v1.0 and beyond" —
+    v1.0 shipped four releases ago.
+  - Process step 6 said to sync the version into `cyrius.cyml`. It carries
+    `version = "${file:VERSION}"`; CI asserts that indirection is still there
+    rather than a literal. Replaced, and a step 7 added for regenerating
+    **both** dist artifacts.
+
+- **`docs/guides/getting-started.md`** never learned about `tests/agnos.tcyr`
+  (v1.0.2), `scripts/platform-gate.sh` (v1.0.2), or the aarch64 runs. Its
+  "Adding a feature" recipe told a contributor to run two suites on one
+  architecture; it now runs all of them on all targets, with the note that the
+  aarch64 run is what has caught **every** arch-blind syscall number this
+  project has shipped.
+
+- **`docs/architecture/002`** described the arch-specific-syscall trap as
+  something that happened once, through v0.9.1. It has happened **three times**;
+  the note now carries the table, names both gates that enforce it, and records
+  that each carries a `--self-test`. Its sentinel-normalization paragraph
+  credited v0.9.3 alone — that release normalized `tty_open_signalfd` and missed
+  its teardown twin for three releases, which is the more useful lesson and is
+  now the one written down.
+
+### Fixed
+
+- **`state.md` contradicted itself about the registry promotion.** The v1.0.0
+  entry and the CHANGELOG both record it as landing *with the tag*; the
+  milestone summary at the bottom of the same file still listed it as open.
+- **`state.md`'s sidecar row** said `dist/darshana.deps` was 7 lines / 5
+  entries. It has been 8 / 6 since v1.1.1 added the `args` leaf.
+- **Two `src/` comments referenced a roadmap section that does not exist** —
+  `§"Out of scope (for v1.0)"`, where the heading has been plain
+  `## Out of scope` since the v1.0 milestone closed. `src/ansi.cyr` now points
+  at the `1.x.0` bucket where `tty_bg_256_buf` actually lives, and
+  `src/termios.cyr` at the real heading. These ship in `dist/darshana.cyr`,
+  which is the API reference consumers read, so a dangling cross-reference
+  there is a shipped defect rather than a private note.
+
+### Verification
+
+- **Comment-only, proven not assumed**: `git diff src/` and
+  `git diff dist/darshana.cyr` contain no non-comment line. No executable byte
+  moved, so the ADR-0003 frozen surface is untouched by construction.
+- 309 assertions on x86_64 (238 + 56 + 15) and 294 on aarch64 (238 + 56) under
+  `qemu-aarch64`; `scripts/smoke.sh` PASS; both gate self-tests pass;
+  `cyrius lint` clean; the example builds and runs.
+
+
 ## [1.1.1] — 2026-09-07
 
 **aarch64 goes into CI — and doing that found that four assertions, including

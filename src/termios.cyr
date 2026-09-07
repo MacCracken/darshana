@@ -78,8 +78,8 @@
 #   off 17  c_cc[19]   u8   special chars (VTIME @ 22, VMIN @ 23)
 #
 # macOS (BSD) termios is a different struct and is deliberately out of
-# scope for v1.0 (CLAUDE.md domain rules; roadmap.md §"Out of scope
-# (for v1.0)") — add it when a real consumer needs it, not before.
+# scope (CLAUDE.md domain rules; roadmap.md §"Out of scope") — add it
+# when a real consumer needs it, not before.
 # The ioctl wrappers below gate to CYRIUS_TARGET_LINUX. ANSI / cursor
 # helpers (in ansi.cyr / cursor.cyr) work on any vt100-compatible
 # terminal, so the platform gate sits at the syscall boundary, not at

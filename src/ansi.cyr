@@ -358,7 +358,7 @@ fn tty_sgr_buf(buf, pos, code) {
 # builder. Byte budget: up to 11.
 #
 # The background twin (`tty_bg_256_buf`) is deferred — see roadmap.md
-# §"Out of scope (for v1.0)" and CHANGELOG v0.5.3 — under the same
+# §"Next, by bucket" (1.x.0) and CHANGELOG v0.5.3 — under the same
 # extract-on-2nd-consumer discipline as v0.5.1's bg/fg split. kii
 # carries a local `_emit_bg_256_buf` as consumer #1; lift it here
 # when a second consumer needs it.

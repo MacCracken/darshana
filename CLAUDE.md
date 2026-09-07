@@ -36,10 +36,25 @@ Project was scaffolded with `cyrius init` (greenfield) or `cyrius port` (Rust �
 ## Quick Start
 
 ```sh
-cyrius deps                          # resolve sibling deps
+cyrius deps                                          # resolve the stdlib footprint
 cyrius build programs/smoke.cyr build/darshana-smoke
-cyrius test                          # run [build].test + tests/*.tcyr
+cyrius test tests/darshana.tcyr                      # pure surface
+cyrius test tests/pty.tcyr                           # real pseudo-terminal
+bash scripts/smoke.sh                                # dist drift + frozen surface + gates
 ```
+
+Two suites are **not** reachable by `cyrius test` — they are cross-target and
+must be built for their target and then executed:
+
+```sh
+cyrius build --agnos   tests/agnos.tcyr    build/agnos-tests && ./build/agnos-tests
+cyrius build --aarch64 tests/darshana.tcyr build/a64-unit    && qemu-aarch64 build/a64-unit
+```
+
+Both emit x86_64-runnable or qemu-runnable ELFs, so they work on an ordinary
+Linux host. CI runs all of them. See [`state.md`](docs/development/state.md)
+§"Release Process" for the aarch64 recipe on a machine whose toolchain install
+lacks `cycc_aarch64`.
 
 ## Key Principles
 
@@ -59,16 +74,17 @@ cyrius test                          # run [build].test + tests/*.tcyr
 - Do not skip tests before claiming changes work
 - Do not use `sys_system()` with unsanitized input — command injection
 - Do not trust external data (file / network / args) without validation
-- Do not modify `lib/` files (vendored stdlib / dep symlinks)
+- **`lib/` is OUTPUT, not a curated directory.** Never hand-edit or hand-prune it. `[deps].stdlib` in `cyrius.cyml` is the only place the footprint is declared; `rm -rf lib/ && cyrius deps` rebuilds it (Phase 1 copies the declared leaves from the pinned snapshot, Phase 3's transitive BFS pulls their includes). `cyrius lib sync` refreshes what is already vendored and does **not** close the graph — its file list is not the footprint
 - Do not hardcode toolchain versions in CI YAML — `cyrius = "X.Y.Z"` in `cyrius.cyml` is the source of truth
 - **The public API is FROZEN as of v1.0.0.** Breaking any of the 29 functions or 37 constants enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) — name, arity, documented return contract, emitted bytes, or constant value — requires a **major** bump and its own ADR. Additive change (new symbols, new platform peers, internal refactors with identical output) stays a minor bump. `_`-prefixed symbols are not frozen. This replaces the pre-v1.0 posture under which breaking the surface was encouraged; that latitude is spent.
 - **Do not add a public symbol without adding it to `scripts/smoke.sh`** (`required_syms` / `required_flags`). The surface check is bidirectional — a public name in dist that the list omits fails CI. Internal helpers take a `_` prefix instead.
 - **Do not add a syscall without adding it to `scripts/syscall-audit.sh`.** That rule is an allowlist, not a denylist: anything unlisted fails, whether or not it looks dangerous.
+- **Never write a syscall number as a bare integer.** It is correct for exactly one architecture, and darshana targets Linux on x86_64 **and** aarch64 (ioctl 16 vs 29, exit 60 vs 93, openat 257 vs 56). Use the stdlib's arch-aware constant, or declare your own inside an explicit `#ifdef CYRIUS_ARCH_X86` / `CYRIUS_ARCH_AARCH64` gate. `syscall(1, ...)` — `write(2)` — is the sole literal exception. This class has bitten three times and is now mechanically gated by `scripts/syscall-audit.sh`; the toolchain's "syscall not routed" diagnostic is Mach-O-only, so nothing else catches it.
 
 ## Domain rules (darshana-specific)
 
 - **Don't grow into a TUI framework.** Widgets, render loops, event/input dispatch belong in the consumer. darshana is the primitive layer.
-- **Linux + AGNOS; macOS/BSD is out of scope.** Every syscall-touching entry point has had an `#ifdef CYRIUS_TARGET_AGNOS` peer since v0.9.0, so consumers stay platform-blind across both. Termios layout differs on macOS (BSD) — add that arm only when a real consumer needs it. Gate platform-specific code via `#ifdef CYRIUS_TARGET_LINUX` / `#ifdef CYRIUS_TARGET_AGNOS`, and keep the tokens *inside* their gate: `scripts/smoke.sh` and CI check this positionally, by line number.
+- **Linux + AGNOS; macOS/BSD is out of scope.** Every syscall-touching entry point has had an `#ifdef CYRIUS_TARGET_AGNOS` peer since v0.9.0, so consumers stay platform-blind across both. Termios layout differs on macOS (BSD) — add that arm only when a real consumer needs it. Gate platform-specific code via `#ifdef CYRIUS_TARGET_LINUX` / `#ifdef CYRIUS_TARGET_AGNOS`, and keep the tokens *inside* their gate. `scripts/platform-gate.sh` enforces this **positionally** (by line number, not substring presence) and **corpus-wide** (every `src/*.cyr`, not just `termios.cyr`); `scripts/smoke.sh` and the CI security job both call that one script, so their verdicts cannot drift.
 - **No FFI / libc / ncurses.** Same sovereign-stack rule as chakshu / cyim. termios is `syscall(SYS_IOCTL, fd, TCGETS|TCSETS, &buf)`; ANSI is `syscall(SYS_WRITE, 1, "\e[...", n)`. No `tcgetattr(3)`, no `tputs(3)`.
 - **Consumers drive the API.** Don't add knobs cyim/chakshu haven't asked for. The whole point of extracting cyim's tty.cyr was that chakshu's needs would shape the seams — listen to those needs, don't anticipate hypothetical ones.
 
@@ -79,7 +95,7 @@ cyrius test                          # run [build].test + tests/*.tcyr
 - [`docs/guides/`](docs/guides/) — Task-oriented how-tos
 - [`docs/examples/`](docs/examples/) — Runnable examples
 - [`docs/development/state.md`](docs/development/state.md) — Live state snapshot
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — **Forward-facing only**: what is left to do through v1.0 and beyond. Closed milestones are deleted from it, not checked off — shipped work lives in the CHANGELOG, current state in `state.md`.
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — **Forward-facing only**: what is left to do, bucketed by the semver bump it would cost (`1.1.x` patch / `1.x.0` minor / `2.0.0` major). Closed items are deleted from it, not checked off — shipped work lives in the CHANGELOG, current state in `state.md`.
 
 ## Process
 
@@ -88,5 +104,6 @@ cyrius test                          # run [build].test + tests/*.tcyr
 3. **Test + benchmark additions** for new code
 4. **Internal review** — performance, memory, correctness, edge cases
 5. **Documentation** — update CHANGELOG, `docs/development/state.md`, any ADR the change earned
-6. **Version sync** — `VERSION`, `cyrius.cyml`, CHANGELOG header
+6. **Version sync** — bump `VERSION` and add the matching `## [X.Y.Z]` CHANGELOG header. `cyrius.cyml` needs no edit: it carries `version = "${file:VERSION}"`, and CI asserts that indirection is still in place rather than a literal
+7. **Regenerate `dist/`** — `cyrius distlib` writes **both** `dist/darshana.cyr` and `dist/darshana.deps`; both are drift-gated
 
