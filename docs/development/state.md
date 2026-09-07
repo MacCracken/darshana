@@ -5,6 +5,47 @@
 
 ## Version
 
+**1.1.1** — *open cycle*. **aarch64 goes into CI — and wiring it found that
+four assertions, including v1.0.2's signalfd security regression test, had
+never actually run there.** Patch-shaped: **no `src/` file changed** and
+`dist/darshana.cyr`'s module bodies are byte-identical to the v1.1.0 tag, so
+the frozen surface provably cannot have moved. The only shipped delta is one
+line in `dist/darshana.deps`.
+
+⭐ **The CI blocker v1.1.0 recorded did not exist.** That release said a step
+would first need `cycc_aarch64` built or fetched, "because the standard
+installer does not place it". Wrong: the published
+`cyrius-<v>-x86_64-linux.tar.gz` ships `bin/cycc_aarch64` — the local 6.6.0
+install simply predated it. CI's existing install step provides the
+cross-compiler; the job only adds `qemu-user-static`. qemu-user passes
+syscalls to the host kernel, so even the PTY harness gets full coverage.
+
+⛔ **The find**: `tests/darshana.tcyr` guarded its `RLIMIT_NOFILE` squeeze with
+the bare x86_64 `prlimit64` number 302 — 261 on aarch64 — so the guard failed,
+the block skipped, and the suite reported 234/238 on ARM in a way that read as
+deliberate degradation. It was a wrong syscall number, and the four assertions
+it hid include the regression test for the v1.0.2 signalfd defect that could
+strand a user's terminal. Now gated per-arch: **aarch64 runs 238/238, full
+parity.** Three more arch-blind numbers in the same file (`openat` 257,
+`close` 3, exit `60`) now use the stdlib's arch-aware wrappers.
+
+That class — a syscall number as a bare integer — has now bitten three times
+(v0.9.2 `SYS_IOCTL`, v1.0.2 `raw_loop.cyr`, v1.1.0 both test suites), always
+invisibly, because the toolchain's "syscall not routed" diagnostic is
+Mach-O-only. It is now **mechanically gated**: `audit_no_literals` in
+`scripts/syscall-audit.sh` requires every syscall number to be a NAMED
+constant — the stdlib's, or one declared inside an explicit
+`#ifdef CYRIUS_ARCH_*` gate — across `src/`, `tests/`, `programs/` and
+`docs/examples/`. `syscall(1, ...)` is the sole exception. Its `--self-test`
+proves it rejects a literal `ioctl(16)` and `exit(60)` *and* still accepts
+`write(1)`, so it can become neither useless nor over-strict.
+
+⭐ **The last `undefined function` warning in the tree is gone.**
+`_agnos_getenv` had been carried since before v1.0.0 as "upstream-shaped;
+nobody has checked". Checked: `lib/io.cyr` delegates to it, `lib/args_agnos.cyr`
+defines it, and it was simply not in the declared footprint — the exact shape
+v1.0.1's `vec` fix closed. Declaring the `args` leaf pulls it in.
+
 **1.1.0** — *open cycle*. **The two refactors v1.0.2 deferred — which turned
 out to contradict each other — plus the first verification of darshana on real
 aarch64 hardware.** Minor, not patch: ADR 0003 prices "internal refactors with
@@ -421,7 +462,8 @@ self-audits bidirectionally).
 | `tests/pty.tcyr` | **50 assertions (v0.6.0; hardened v0.7.0 and v0.9.3)** — the in-repo PTY harness. Opens a real pseudo-terminal (`/dev/ptmx` → `TIOCSPTLCK` → `TIOCGPTN` → `/dev/pts/N`) and drives darshana against the slave: `tty_isatty` on a known-live fd (+ deterministic `/dev/null` negative), `tty_winsize` set/get (24×80), the `tty_raw`→`tty_cooked()` state-restore (byte-for-byte), the single-raw-fd model (2nd fd refused), the cooked-vs-raw output round-trip (OPOST/ONLCR, fail-not-skip), and fd-1 escape-byte capture (via `dup2`) for `tty_alt_*`, `tty_clear`, `tty_clear_to_eol/eos`, `tty_cursor_*`, `tty_move`, `tty_sgr`, `tty_sgr_reset`, `tty_fg_rgb`/`tty_bg_rgb`. Wired into CI (v0.7.0) with `SKIP pty:` degradation tokens. Hang-proof (`O_NONBLOCK` master, bounded drains) and skip-clean (Linux-only). |
 
 **309 assertions total** (238 + 56 + 15), green at cyrius 6.6.0 on x86_64 —
-and **234 + 56 + 15 on real aarch64** (a Raspberry Pi 4; the four
+and **294 on real aarch64** (238 + 56; the AGNOS suite is x86_64-hosted by
+construction). Full unit parity since v1.1.1 (a Raspberry Pi 4; the four
 `prlimit64`-gated unit assertions skip there by design); the PTY
 harness runs its full set with no `SKIP pty:` token. Grew from 217 at v1.0.2's
 sweep — the additions target proven gaps, not coverage for its own sake: all
@@ -479,12 +521,17 @@ the **20** modules vendored in `lib/`: `alloc` `alloc_agnos` `alloc_macos` `allo
 
 - ADR 0001 records the `darshana` name choice (`drishya` and other observation-family alternatives considered). Closed; no re-litigation needed.
 - macOS support is deferred — see CLAUDE.md domain rules.
-- **`undefined function '_agnos_getenv'` on the `--agnos` cross-build.** The one
-  warning left anywhere in the tree after v1.0.1. Pre-existing and
-  upstream-agnos shaped — it reproduces identically at the v1.0.0 tag, and
-  darshana's own surface never calls it. Same class as the `vec_get` warning
-  v1.0.1 closed, so it may well be closable the same way (a declared leaf)
-  rather than being upstream's problem; nobody has checked.
+- ~~**`undefined function '_agnos_getenv'` on the `--agnos` cross-build**~~ —
+  **closed at v1.1.1**, and it was closable the same way `vec_get` was: it is
+  `lib/io.cyr` delegating to `_agnos_getenv`, which `lib/args_agnos.cyr`
+  defines and which was simply not in darshana's declared footprint. Declaring
+  the `args` leaf pulls it in. **No target now emits an `undefined function`
+  warning** — native, `--agnos` and `--aarch64` are completely silent, and
+  `--win` emits only the toolchain's generic "which syscall numbers route on
+  Windows" advisory, which is informational, is not darshana-specific, and
+  concerns a target the roadmap puts out of scope. `dist/darshana.cyr` is
+  byte-identical with and without the declaration, so this changes the build
+  footprint and nothing that ships.
 - ~~**`--aarch64` is unverifiable on this host**~~ — **closed at v1.1.0.** The
   installed toolchain still ships no `cycc_aarch64`, but the cyrius repo builds
   one at `build/cycc_aarch64`, and pointing `CYRIUS_HOME` at a **sandboxed copy**
@@ -493,15 +540,25 @@ the **20** modules vendored in `lib/`: `alloc` `alloc_agnos` `alloc_macos` `allo
   ELFs. Those run under `qemu-aarch64` and on the `pi` host (Raspberry Pi 4,
   Linux 6.8). The arm is now *known-good*, not merely *unbuilt*: smoke ok,
   234/234 assertions, exhaustive composer checksum identical to x86_64.
-  **Not yet wired into CI** — the standard installer does not place
-  `cycc_aarch64`, so a CI step would need the compiler built or fetched first.
-  That is the remaining piece.
+  **Wired into CI at v1.1.1**, and the blocker turned out not to exist: the
+  published `cyrius-<v>-x86_64-linux.tar.gz` **does** ship `bin/cycc_aarch64`
+  (an x86-hosted cross-compiler), so the install step CI already runs provides
+  it — the local 6.6.0 tree simply predated it. CI installs `qemu-user-static`
+  and runs the emitted aarch64 ELFs; qemu-user passes syscalls to the host
+  kernel, so even the PTY harness gets full coverage there. The sandboxed
+  `CYRIUS_HOME` recipe below remains the way to reproduce it by hand on a
+  machine whose install is missing the compiler.
 - **Inherited at v1.0.1: aarch64 `SYS_SIGNALFD4` moved `74` to `1074`** in the
   vendored `lib/syscalls_aarch64_linux.cyr` (a private alias upstream now
   translates via `ESYSXLAT 1074 -> 74`). darshana's Linux arm calls the stdlib
   wrapper `sys_signalfd`, not a hardcoded number, so it picks this up for free —
   which is the whole reason v0.9.2 dropped darshana's local `SYS_IOCTL`
-  constant. Untested here for want of an aarch64 cross-compiler (above).
+  constant. ~~Untested here for want of an aarch64 cross-compiler~~ —
+  **verified at v1.1.1**: the signalfd open/close/rollback assertions now run
+  on aarch64 (under qemu and on the Pi) and pass, so the renumbered alias
+  reaches the real `signalfd4`. They had NOT been running before v1.1.1 even
+  once aarch64 was buildable — the `prlimit64` guard around them used the
+  x86_64 number, so the block silently skipped and looked deliberate.
 - ~~The displaced v0.8.0 doc/audit slot~~ — **closed at v0.9.4.** `docs/examples/` holds a runnable, CI-executed example; `docs/architecture/` holds notes 001 and 002; the per-symbol API audit returned zero gaps and is now enforced by `scripts/smoke.sh`.
 - ~~`cyrius lint` untracked-deferral notes in `src/ansi.cyr` / `src/termios.cyr`~~ — **closed at v0.9.3**: the bg-256 twin now cross-references roadmap.md §"Out of scope", the macOS termios note cross-references CLAUDE.md's domain rule. All four src modules are deferral-note clean; keep them that way.
 
@@ -513,7 +570,7 @@ the **20** modules vendored in `lib/`: `alloc` `alloc_agnos` `alloc_macos` `allo
 | Release on semver tag | `.github/workflows/release.yml` — gates on ci.yml via `workflow_call`, version-verify against tag, regenerates dist + ships `darshana-X.Y.Z.cyr` standalone + `darshana-X.Y.Z.tar.gz` package + source tarball + SHA256SUMS, GH release with body extracted from CHANGELOG section |
 | Syscall allowlist | `scripts/syscall-audit.sh` (v0.9.4, hardened v1.0.2) — the permitted syscall targets and stdlib wrappers, each with its rationale. One implementation, invoked by both `scripts/smoke.sh` and the CI security job so the two cannot drift. Replaced the exec-sink denylist, which could only catch anticipated sinks. **v1.0.2** closed three bypasses that all compiled, ran and audited green — a parenthesized first argument (`syscall((59), …)` did not match the regex at all), a line-wrapped call, and any stdlib wrapper outside the `sys_*`/`file_*` prefixes (`xopen`, `getenv`, `panic`, …) — by normalizing before matching (comments stripped, string literals blanked, statements rejoined) and making the callee scan a true allowlist. It now also scans **`docs/examples/`**, which is how the ungated `syscall(60)` there was found. `--self-test` asserts each bypass is rejected. |
 | Platform gate | `scripts/platform-gate.sh` (v1.0.2) — extracted so `smoke.sh` and the CI security job share one implementation instead of two copies of the same awk. **Corpus-driven**: every `src/*.cyr` is checked against its own gates. v0.9.3 fixed this check's substring-vs-positional half but left it hard-coded to `src/termios.cyr` as both gate source and search corpus, so identical ungated Linux ioctl code in any other module was never examined and would ship outside any `#ifdef` with every gate green. Carries a vacuity guard (a gutted tree with no tokens cannot pass) and a `--self-test`. |
-| aarch64 verification | Not in CI (the installer places no `cycc_aarch64`). Reproduce by hand — v1.1.0: copy the toolchain tree to a scratch dir, drop the compiler the cyrius repo builds into it, and point `CYRIUS_HOME` at the copy. **Never at the live tree.**<br>`cp -a ~/.cyrius/versions $S/cyhome/versions && ln -sfn $S/cyhome/versions/6.6.0/bin $S/cyhome/bin` (same for `lib`)<br>`cp ~/Repos/cyrius/build/cycc_aarch64 $S/cyhome/versions/6.6.0/bin/`<br>`CYRIUS_HOME=$S/cyhome cyrius build --aarch64 tests/darshana.tcyr build/a64-tests`<br>Run under `qemu-aarch64 build/a64-tests`, and on real hardware via `ssh pi` (Raspberry Pi 4, Linux 6.8) — `scp` the binary to `/tmp` and execute. Expect 234/234 unit and 56/56 pty (the four `prlimit64`-gated unit assertions skip). |
+| aarch64 verification | **In CI since v1.1.1** — the `x86_64-linux` release tarball ships `bin/cycc_aarch64`, so the existing install step provides it; the job adds `qemu-user-static` and runs the emitted aarch64 ELFs (smoke + both suites). Reproduce by hand on a machine whose install lacks the compiler — copy the toolchain tree to a scratch dir, drop the compiler the cyrius repo builds into it, and point `CYRIUS_HOME` at the copy. **Never at the live tree.**<br>`cp -a ~/.cyrius/versions $S/cyhome/versions && ln -sfn $S/cyhome/versions/6.6.0/bin $S/cyhome/bin` (same for `lib`)<br>`cp ~/Repos/cyrius/build/cycc_aarch64 $S/cyhome/versions/6.6.0/bin/`<br>`CYRIUS_HOME=$S/cyhome cyrius build --aarch64 tests/darshana.tcyr build/a64-tests`<br>Run under `qemu-aarch64 build/a64-tests`, and on real hardware via `ssh pi` (Raspberry Pi 4, Linux 6.8) — `scp` the binary to `/tmp` and execute. Expect **238/238 unit and 56/56 pty** — full parity with x86_64 as of v1.1.1, when the `prlimit64` number was gated per-arch. |
 | Emitted-byte identity | Two harnesses, both kept out of the repo (scratch tooling, regenerate as needed). A **streaming** one dumps every composer's bytes + return over its full envelope for `diff`/`sha256` (13,518 records / 178,199 bytes; `sha256:6dcd7228…` since v1.0.1). An **exhaustive** one folds the return plus all 48 bytes of a `0xAA`-poisoned canvas, composing at `pos = 3`, over the complete `[0,255]³` RGB cube (16.7M triples × 2 composers) plus every rejection edge and start position; it printed `CHECKSUM 2666313271416689717` identically on x86_64, qemu-aarch64 and a real Pi 4, before and after v1.1.0's refactor. Folding the whole canvas rather than the escape is what proves a wide store leaves no stray byte. |
 | Examples | `docs/examples/*.cyr` — CI builds **and runs** each one. Every example checks `tty_isatty` first and degrades cleanly, so executing it in CI is meaningful. |
 | Smoke test | `scripts/smoke.sh` — runs smoke binary, verifies dist drift, asserts the public contract surface (29 `tty_*` / `tio_*` fn symbols + 37 `TIO_* / TIOC* / TTY_*` constants present in dist) with a **bidirectional self-audit** covering both fns (v0.7.0) and constants (v0.9.3) — it fails if dist exports a public name the checklist omits, in either direction. The platform-gate check is **positional** as of v0.9.3: Linux ioctl tokens must sit inside the `CYRIUS_TARGET_LINUX` gate and agnos syscall tokens inside `CYRIUS_TARGET_AGNOS`, by line number rather than by substring presence. A **docstring audit** (v0.9.4) additionally fails the build if any public fn lacks a docstring or a stated return contract, if any `_buf` composer omits its byte budget, or if a public constant is undocumented. **v1.0.2**: the platform-gate check moved out to `scripts/platform-gate.sh` (shared with CI); the dist-drift check now covers **`dist/darshana.deps`** as well as the bundle, restoring both on failure — previously the sidecar was silently regenerated before anything could compare it; and the docstring audit's `!seen[name]++` de-dup was removed, which had exempted **every duplicated symbol — i.e. the whole AGNOS peer arm** — and whose removal immediately found AGNOS `tty_winsize` shipping with no docstring at all since v0.8.0 |

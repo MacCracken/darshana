@@ -4,6 +4,114 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-09-07
+
+**aarch64 goes into CI — and doing that found that four assertions, including
+v1.0.2's signalfd security regression test, had never actually run there.**
+
+Patch-shaped: **no `src/` file changed**, and `dist/darshana.cyr` is
+byte-identical to the v1.1.0 tag. The only shipped delta is one line in
+`dist/darshana.deps`. Everything else is CI, tests, gates and docs. (Same shape
+and same semver call as v1.0.1, which added the `vec` leaf.)
+
+### Added
+
+- **aarch64 is now verified on every CI run** — smoke plus both suites,
+  cross-built and executed. darshana targets Linux on x86_64 **and** aarch64,
+  and until v1.1.0 nothing had ever built the aarch64 arm, let alone run it;
+  v0.9.2's `SYS_IOCTL` fix was verified by reading emitted machine code.
+
+  ⭐ **The blocker v1.1.0 recorded turned out not to exist.** That release said
+  a CI step "would need the compiler built or fetched first, because the
+  standard installer does not place `cycc_aarch64`". Wrong: the published
+  `cyrius-<v>-x86_64-linux.tar.gz` **does** contain `bin/cycc_aarch64`, an
+  x86-hosted cross-compiler — the local 6.6.0 install simply predated it. So
+  the install step CI already runs provides the compiler for free; the job just
+  adds `qemu-user-static`. qemu-user passes syscalls through to the host
+  kernel, so even the PTY harness gets **full** coverage there — it opens a
+  real `/dev/ptmx` and drives a real pseudo-terminal. The step fails loudly if
+  a future release stops shipping the compiler, rather than quietly becoming a
+  no-op.
+
+- **A gate for the arch-blindness class itself** (`audit_no_literals` in
+  `scripts/syscall-audit.sh`). A syscall number written as a bare integer is
+  correct for exactly one architecture, and this defect has now bitten the
+  project **three times**, each time invisible because the toolchain's "syscall
+  not routed" diagnostic is Mach-O-only:
+
+  | | where | consequence |
+  |---|---|---|
+  | v0.9.2 | `src/termios.cyr` `SYS_IOCTL = 16` in an arch-blind gate | every ioctl in the library wrong on aarch64 (16 is `fremovexattr`) |
+  | v1.0.2 | `docs/examples/raw_loop.cyr` `syscall(60, …)` for exit | a stray `winsize` on AGNOS |
+  | v1.1.0 | `tests/pty.tcyr` + `tests/darshana.tcyr` | 15 of 53 pty assertions failed on ARM; four unit assertions silently never ran |
+
+  The rule is now mechanical: a syscall number must be a **named** constant —
+  the stdlib's (arch-aware by construction) or one declared inside an explicit
+  `#ifdef CYRIUS_ARCH_*` gate. `syscall(1, …)` is the sole literal exception
+  (`write(2)` is 1 on every Linux arch and on AGNOS, and every ANSI emitter
+  uses it). It scans `src/`, `tests/`, `programs/` and `docs/examples/` —
+  `tests/` is where this class hid longest. `--self-test` proves it rejects a
+  literal `ioctl(16)` and a literal `exit(60)` **and** still accepts
+  `syscall(1, …)`, so it cannot silently become either useless or over-strict.
+
+### Fixed
+
+- ⛔ **Four assertions — including the v1.0.2 signalfd rollback security
+  regression test — had never run on aarch64, and looked like a deliberate
+  skip.** `tests/darshana.tcyr` guarded them behind an `RLIMIT_NOFILE` squeeze
+  using the bare x86_64 `prlimit64` number 302; on aarch64 that is 261, so the
+  guard's `== 0` check simply failed and the whole block was skipped. The suite
+  reported 234/238 there and read like intentional degradation. It was a wrong
+  syscall number. Now gated per-arch — **aarch64 runs 238/238, full parity with
+  x86_64.** So the fix v1.0.2 shipped for a signal-handling defect that could
+  strand a user's terminal is, as of this release, actually verified on both
+  architectures rather than one.
+
+- **Three more arch-blind numbers in the same file**: `openat` 257 and `close`
+  3 (56 and 57 on aarch64) now use the stdlib's `sys_open` / `file_close`, and
+  the process exit uses `SYS_EXIT` rather than the literal 60. The exit code
+  happened to propagate correctly on aarch64 anyway — verified across several
+  codes — because the compiler's implicit epilogue carries it, but relying on
+  that is luck rather than contract, and CI's pass/fail signal depends on it.
+
+- ⭐ **The last `undefined function` warning in the tree is gone.**
+  `_agnos_getenv` on the `--agnos` cross-build had been carried since before
+  v1.0.0 as "pre-existing and upstream-shaped; nobody has checked". Checked: it
+  is `lib/io.cyr` delegating to `_agnos_getenv`, which `lib/args_agnos.cyr`
+  defines and which was simply not in darshana's declared footprint — the exact
+  shape v1.0.1's `vec` / `vec_get` fix closed. Declaring the `args` leaf pulls
+  it in. **No target now emits an `undefined function` warning**: native,
+  `--agnos` and `--aarch64` are completely silent, and `--win` emits only the
+  toolchain's generic syscall-routing advisory, which is informational, not
+  darshana-specific, and concerns a target the roadmap puts out of scope.
+  `dist/darshana.cyr` is byte-identical with and without the declaration.
+
+### Carry-forwards closed
+
+- **aarch64 in CI** — opened v1.0.2, half-closed v1.1.0 (verified by hand),
+  fully closed here.
+- **The inherited aarch64 `SYS_SIGNALFD4` renumber** (`74` → `1074`, a private
+  alias upstream translates via `ESYSXLAT`) — recorded at v1.0.1 as "untested
+  here for want of an aarch64 cross-compiler". Now verified: the signalfd
+  open / close / rollback assertions run on aarch64 and pass, so the alias
+  reaches the real `signalfd4`. They were not running even after v1.1.0 made
+  aarch64 buildable — the `prlimit64` bug above was hiding them.
+
+### Verification
+
+- **Nothing that ships changed.** `git diff 1.1.0 -- src/` is empty and
+  `git diff 1.1.0 -- dist/darshana.cyr` is empty, so the frozen 29 functions
+  and 37 constants cannot have moved — a stronger statement than re-running the
+  byte harness, because the source that produces those bytes is untouched.
+  `dist/darshana.deps` gains exactly one line.
+- **309 assertions on x86_64** (238 + 56 + 15) and **294 on aarch64**
+  (238 + 56; the AGNOS suite is x86_64-hosted by construction), under
+  `qemu-aarch64` and on a **Raspberry Pi 4** (Linux 6.8).
+- `scripts/smoke.sh` PASS; both gate self-tests pass, now including the two new
+  arch-blindness probes and the write(1) anti-over-strictness control;
+  `cyrius lint` clean; DCE parity OK; AGNOS suite 15/15; examples build and run.
+
+
 ## [1.1.0] — 2026-09-07
 
 **The two refactors v1.0.2 deferred, plus the first verification of darshana on

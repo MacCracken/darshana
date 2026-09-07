@@ -33,5 +33,5 @@ modules = ["src/termios.cyr", "src/ansi.cyr", "src/cursor.cyr"]
 # `lib/` is OUTPUT, not curated: `rm -rf lib/ && cyrius deps` rebuilds
 # it from this list (Phase 3's transitive BFS pulls each leaf's own
 # includes). Do not hand-edit or hand-prune lib/.
-stdlib = ["syscalls", "alloc", "io", "assert", "vec"]
+stdlib = ["syscalls", "alloc", "io", "assert", "vec", "args"]
 ---

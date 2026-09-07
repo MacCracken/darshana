@@ -158,6 +158,55 @@ jobs:
           cyrius build --agnos tests/agnos.tcyr build/agnos-tests
           ./build/agnos-tests
 
+      - name: Cross-build + test the aarch64 arm
+        # v1.1.0. darshana targets Linux on BOTH x86_64 and aarch64, but
+        # until v1.1.0 nothing had ever built the aarch64 arm, let alone run
+        # it — v0.9.2's SYS_IOCTL fix was verified by reading emitted machine
+        # code. The first real run found two defects x86_64 could not see:
+        # tests/darshana.tcyr and tests/pty.tcyr both hardcoded x86_64 syscall
+        # numbers inside an arch-BLIND `#ifdef CYRIUS_TARGET_LINUX` gate, and
+        # the pty harness failed 15 of 53 assertions on ARM (syscall 16 is
+        # `fremovexattr` there, not `ioctl`). That class of bug is invisible
+        # to every other job in this file, which is why this step exists.
+        #
+        # The x86_64-linux release tarball ships bin/cycc_aarch64 (an
+        # x86-hosted cross-compiler), so the install step above already
+        # provides it — no extra toolchain fetch. qemu-user-static then runs
+        # the emitted aarch64 ELFs on this x86_64 runner. qemu-user passes
+        # syscalls through to the host kernel, so even the PTY harness works:
+        # it opens a real /dev/ptmx and drives a real pseudo-terminal.
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static
+
+          # Fail loudly rather than silently skipping if a future release
+          # stops shipping the cross-compiler — a check that quietly turns
+          # into a no-op is worse than no check.
+          test -x "$HOME/.cyrius/bin/cycc_aarch64" \
+            || { echo "::error::cycc_aarch64 missing from the toolchain install — the aarch64 arm is unverified"; exit 1; }
+
+          cyrius build --aarch64 programs/smoke.cyr build/darshana-smoke-a64
+          cyrius build --aarch64 tests/darshana.tcyr build/a64-unit
+          cyrius build --aarch64 tests/pty.tcyr       build/a64-pty
+
+          echo "--- smoke (aarch64) ---"
+          out=$(qemu-aarch64-static build/darshana-smoke-a64)
+          test "$out" = "darshana smoke ok" || { echo "aarch64 smoke mismatch: $out"; exit 1; }
+          echo "$out"
+
+          echo "--- tests/darshana.tcyr (aarch64) ---"
+          qemu-aarch64-static build/a64-unit
+
+          echo "--- tests/pty.tcyr (aarch64) ---"
+          # Same skip-clean discipline as the native pty step: a SKIP token
+          # means the runner degraded, which is a warning, not a failure.
+          out=$(qemu-aarch64-static build/a64-pty)
+          echo "$out"
+          if echo "$out" | grep -q 'SKIP pty:'; then
+            echo "::warning::aarch64 pty.tcyr ran degraded (SKIP token present)"
+          fi
+
       - name: Project smoke (scripts/smoke.sh)
         run: bash scripts/smoke.sh
 

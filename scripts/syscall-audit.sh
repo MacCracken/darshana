@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# darshana syscall allowlist — v0.9.4, hardened v1.0.2.
+# darshana syscall allowlist — v0.9.4, hardened v1.0.2 and v1.1.1.
 #
 # darshana's entire surface is raw `syscall(...)`, so a DENYLIST can only
 # ever catch the sinks someone thought to write down. Through v0.9.2 the
@@ -32,9 +32,14 @@
 # an explicitly listed wrapper — instead of a `sys_*`/`file_*` prefix
 # filter that only ever looked where it already expected to find trouble.
 #
+# v1.1.1 added a separate rule for the ARCH-BLINDNESS class — a syscall
+# number written as a bare integer is correct for exactly one architecture.
+# See `audit_no_literals` below for the three times that has bitten.
+#
 # `--self-test` proves the gate can actually fail, by planting each of the
-# bypasses above plus a plain fork+exec and asserting all are REJECTED. A
-# gate that cannot fail proves nothing.
+# bypasses above plus a plain fork+exec and asserting all are REJECTED — and
+# that `syscall(1, ...)` is still ACCEPTED, so the arch rule is not merely
+# over-strict. A gate that cannot fail proves nothing.
 #
 # Run standalone, or via scripts/smoke.sh / the CI security job.
 
@@ -153,6 +158,64 @@ audit_dir() {
 }
 
 # ------------------------------------------------------------------
+# NO NUMERIC-LITERAL SYSCALL NUMBERS (v1.1.1).
+# ------------------------------------------------------------------
+# A syscall number written as a bare integer is only correct for one
+# architecture, and darshana targets Linux on BOTH x86_64 and aarch64.
+# This exact defect has now bitten the project THREE times, each time
+# invisible because the compiler's "syscall not routed" diagnostic is
+# Mach-O-only:
+#
+#   v0.9.2  src/termios.cyr defined `SYS_IOCTL = 16` inside an
+#           arch-BLIND `#ifdef CYRIUS_TARGET_LINUX` gate. On aarch64,
+#           16 is `fremovexattr`. Every ioctl in the library was wrong.
+#   v1.0.2  docs/examples/raw_loop.cyr ended with `syscall(60, ...)`
+#           for exit, outside both platform gates. On AGNOS 60 is
+#           `winsize`.
+#   v1.1.0  tests/pty.tcyr hardcoded ioctl/nanosleep/dup/dup2/
+#           prlimit64/rt_sigprocmask and failed 15 of 53 assertions the
+#           first time it ran on real aarch64; tests/darshana.tcyr
+#           hardcoded openat/close/prlimit64/rt_sigprocmask, which made
+#           four assertions — including the v1.0.2 signalfd security
+#           regression test — silently never run on ARM while looking
+#           like a deliberate skip.
+#
+# The rule: a syscall number must be a NAMED constant. Either the
+# stdlib's (arch-aware by construction) or one the file declares inside
+# an explicit `#ifdef CYRIUS_ARCH_*` gate. `1` is the sole exception —
+# write(2) is 1 on every Linux arch and on AGNOS, and every ANSI
+# emitter in the library uses it.
+#
+# Comments are stripped before matching, so the prose above (and the
+# rationale comments in src/termios.cyr and tests/agnos.tcyr, which
+# legitimately discuss syscall 60) does not trip it.
+audit_no_literals() {
+    _any=0
+    for _d in "$@"; do
+        set -- "$_d"/*.cyr
+        [ -e "$1" ] || continue
+        for _f in "$@"; do
+            _hits=$(normalize "$_f" \
+                    | grep -oE 'syscall[[:space:]]*\([[:space:]]*\(*[[:space:]]*[0-9]+' \
+                    | grep -oE '[0-9]+$' | grep -vx '1' | sort -u || true)
+            for _lit in $_hits; do
+                note "FAIL: $_f issues syscall($_lit) as a NUMERIC LITERAL."
+                note "  Syscall numbers differ per architecture — darshana targets"
+                note "  Linux on x86_64 AND aarch64, where e.g. ioctl is 16 vs 29,"
+                note "  exit 60 vs 93, openat 257 vs 56. Use the stdlib's arch-aware"
+                note "  constant (SYS_IOCTL, SYS_EXIT, ...) or declare your own"
+                note "  inside an explicit #ifdef CYRIUS_ARCH_X86 / _AARCH64 gate."
+                note "  Only syscall(1, ...) — write(2) — may be a literal."
+                fail=1
+                _any=1
+            done
+        done
+    done
+    [ $_any -eq 0 ] && echo "  ok: no numeric-literal syscall numbers (arch-blind class gated)"
+    return 0
+}
+
+# ------------------------------------------------------------------
 # --self-test: prove each closed bypass is actually rejected.
 # ------------------------------------------------------------------
 if [ "${1:-}" = "--self-test" ]; then
@@ -175,6 +238,19 @@ if [ "${1:-}" = "--self-test" ]; then
     probe "bare fork+exec numbers"                       'fn f() { syscall(57); syscall(59, 0, 0, 0); return 0; }'
     probe "non-sys_/file_ stdlib sink (xopen)"           'fn f() { return xopen(0, 0, 0); }'
     probe "unlisted sys_ wrapper"                        'fn f() { return sys_execve(0, 0, 0); }'
+    # The arch-blind class (v1.1.1). SYS_IOCTL is on the allowlist by
+    # NAME, so this probe proves the literal is rejected even when the
+    # same syscall would be permitted spelled properly.
+    probe "numeric-literal ioctl  syscall(16, ...)"     'fn f() { return syscall(16, 0, 0, 0); }'
+    probe "numeric-literal exit    syscall(60, ...)"    'fn f() { syscall(60, 0); return 0; }'
+    # ...and that write(1) is still allowed, or every emitter would fail.
+    printf '%s\n' 'fn f() { syscall(1, 1, "x", 1); return 0; }' > "$tmp/src/probe.cyr"
+    if ( "$0" "$tmp/src" >/dev/null 2>&1 ); then
+        echo "  ok: accepted — syscall(1, ...) write literal (not over-strict)"
+    else
+        echo "  SELF-TEST FAIL: syscall(1, ...) was rejected" >&2
+        st_fail=1
+    fi
     # And a negative control: the real source must still pass.
     if ( "$0" src >/dev/null 2>&1 ); then
         echo "  ok: real src/ still passes (not vacuous)"
@@ -198,6 +274,9 @@ else
     audit_dir "src" "$ALLOWED_SYSCALLS" "$ALLOWED_WRAPPERS"
     _extra_defs="src/*.cyr"
     audit_dir "docs/examples" "$ALLOWED_SYSCALLS_EXAMPLES" "$ALLOWED_WRAPPERS_EXAMPLES"
+    # The arch-blindness gate runs over EVERY tree that compiles, tests
+    # included — tests/ is where this class hid longest.
+    audit_no_literals src tests programs docs/examples
 fi
 
 exit $fail

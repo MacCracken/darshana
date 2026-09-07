@@ -13,6 +13,18 @@
 
 include "src/main.cyr"
 
+# prlimit64 has no stdlib constant on either arch, so it is gated by
+# hand (v1.1.1). Through v1.1.0 this file used the bare x86_64 number
+# 302, so on aarch64 the RLIMIT_NOFILE squeeze silently failed and the
+# four assertions behind it never ran — the suite reported 234/238 there
+# and looked like a deliberate skip. It was a wrong syscall number.
+#ifdef CYRIUS_ARCH_X86
+var TCYR_SYS_PRLIMIT64 = 302;
+#endif
+#ifdef CYRIUS_ARCH_AARCH64
+var TCYR_SYS_PRLIMIT64 = 261;
+#endif
+
 fn main() {
     alloc_init();
 
@@ -420,11 +432,14 @@ fn main() {
     # tty_isatty against fd that's definitely not a TTY: open
     # /dev/null and check. -1 from open shouldn't happen on Linux
     # but skip-clean if it does (paranoid sandbox).
-    # SYS_OPENAT = 257, AT_FDCWD = -100, O_RDONLY = 0.
-    var devnull = syscall(257, 0 - 100, "/dev/null", 0, 0);
+    # v1.1.0 used the raw x86_64 numbers here (openat 257, close 3),
+    # which are 56 and 57 on aarch64 — the same arch-blind class that
+    # made the pty harness fail 15 assertions on ARM. Use the stdlib
+    # wrappers, which resolve per-arch.
+    var devnull = sys_open("/dev/null", 0, 0);        # O_RDONLY
     if (devnull >= 0) {
         assert_eq(tty_isatty(devnull), 0, "/dev/null is not a TTY");
-        syscall(3, devnull);
+        file_close(devnull);
     }
 
     # ----- v0.5.0 — live-fd coverage (skip-when-not-a-TTY) -----------
@@ -693,13 +708,13 @@ fn main() {
         # Squeeze RLIMIT_NOFILE so a second open must fail — the same
         # technique the pty harness uses for its forced-failure test.
         var rb_old[16]; store64(&rb_old, 0); store64(&rb_old + 8, 0);
-        if (syscall(302, 0, 7, 0, &rb_old) == 0) {          # prlimit64 get
+        if (syscall(TCYR_SYS_PRLIMIT64, 0, 7, 0, &rb_old) == 0) {   # prlimit64 get
             var rb_new[16];
             store64(&rb_new, 3);
             store64(&rb_new + 8, load64(&rb_old + 8));
-            if (syscall(302, 0, 7, &rb_new, 0) == 0) {      # prlimit64 set
+            if (syscall(TCYR_SYS_PRLIMIT64, 0, 7, &rb_new, 0) == 0) {  # prlimit64 set
                 var rb_fd2 = tty_open_signalfd(TTY_SIGMASK_WINCH | TTY_SIGMASK_EXIT);
-                syscall(302, 0, 7, &rb_old, 0);             # restore limit
+                syscall(TCYR_SYS_PRLIMIT64, 0, 7, &rb_old, 0);          # restore limit
                 if (rb_fd2 < 0) {
                     assert_eq(rb_fd2, 0 - 1, "second open failed with exactly -1");
                     store64(&rb_m, 0);
@@ -727,4 +742,7 @@ fn main() {
 }
 
 var exit_code = main();
-syscall(60, exit_code);
+# SYS_EXIT, not the literal 60 — 60 is `exit` only on x86_64 (93 on
+# aarch64). The exit code happened to propagate anyway via the compiler's
+# implicit epilogue, verified, but relying on that is luck, not contract.
+syscall(SYS_EXIT, exit_code);

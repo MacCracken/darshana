@@ -576,4 +576,5 @@ fn main() {
 }
 
 var pty_exit = main();
-syscall(60, pty_exit);
+# SYS_EXIT, not the literal 60 — see tests/darshana.tcyr's note.
+syscall(SYS_EXIT, pty_exit);

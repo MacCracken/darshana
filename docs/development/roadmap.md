@@ -31,9 +31,19 @@ maintenance and consumer-driven growth, not a march to a milestone.
       bannermanor is furthest behind; **kii additionally has a pin mismatch** to
       reconcile (manifest `tag = "0.8.2"` while its vendored bundle reads 0.9.0,
       because it resolves via `path = "../darshana"`).
-      Since v1.0.1 the target is a **`1.0.1`** tag, not `1.0.0`: the sidecar
-      `dist/darshana.deps` gained a fifth leaf (`vec`), so a consumer's `cyrius
-      deps` resolves one more stdlib module. Still no consumer *code* change.
+      **The target is now a `1.1.1` tag.** The sidecar `dist/darshana.deps` has
+      gained two leaves since v1.0.0 — `vec` at v1.0.1 and `args` at v1.1.1 —
+      so a consumer's `cyrius deps` resolves two more stdlib modules than it
+      did at the freeze. Still **no consumer code change**: the frozen 29
+      functions and 37 constants have not moved, and v1.1.0's composer rewrite
+      was proven byte-identical over the complete RGB cube.
+
+      Two consumers have a concrete reason to bump beyond staying current:
+      **anuenue** can delete its 48 KB pre-baked escape table — v1.1.0's
+      composers are now faster than that cache (34.8 ns vs the 39.3 ns replica
+      measured in the v1.0.2 audit) — and **chakshu**, which holds two live
+      signalfds, is the consumer the v1.0.2 signalfd rollback fix was written
+      for: without it a failed second open silently disarms its exit path.
 
 ## Out of scope
 
