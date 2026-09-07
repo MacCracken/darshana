@@ -5,6 +5,56 @@
 
 ## Version
 
+**1.1.0** — *open cycle*. **The two refactors v1.0.2 deferred — which turned
+out to contradict each other — plus the first verification of darshana on real
+aarch64 hardware.** Minor, not patch: ADR 0003 prices "internal refactors with
+identical output" that way, and identical output is what this is.
+
+v1.0.2 recorded two byte-identical improvements for the next minor: collapse
+the duplicate decimal emitter `_ansi_emit_u8` into `tty_dec_buf`, and a ~30%
+RGB-composer speedup whose main ingredient is *inlining* those same digit
+emissions. One says share a function; the other says stop calling one. **Doing
+the first as written is byte-identical and 32-45% SLOWER** (`tty_dec_buf` is a
+general i64 formatter that reverses digits through a 24-byte scratch array;
+these composers only ever emit 1-3 digits). The two findings came from
+different audit lenses and neither measured the other's direction.
+
+Resolved by **elimination rather than delegation**: the 1-3 digit sequence is
+inline at each of the five call sites and `_ansi_emit_u8` is deleted. That is
+what the dedup finding actually wanted — no second decimal-emitter *function* —
+while getting faster instead of slower. 20M calls, median of 7:
+`tty_fg_rgb_buf` 990 → **696 ms** (-30%), `tty_fg_256_buf` 458 → **303 ms**
+(-34%), `tty_sgr_buf` 353 → **289 ms** (-18%). The 7-byte fixed prefixes became
+single wide stores; `tty_sgr_reset_buf`'s four became one `store32`.
+
+⭐ **darshana ran on real aarch64 for the first time**, closing v1.0.2's
+carry-forward. The installed toolchain ships no `cycc_aarch64`, but the cyrius
+repo builds one and a sandboxed `CYRIUS_HOME` (never the live tree) produces
+working aarch64 ELFs. Verified under `qemu-aarch64` and then on a **Raspberry
+Pi 4 (Linux 6.8)**: smoke ok, 234/234 unit + 56/56 pty, and the exhaustive
+equivalence checksum identical to x86_64 before and after the refactor. **That
+is what licensed the unaligned wide stores** — measured on real ARM, not an
+argument about `SCTLR.A`.
+
+Running on aarch64 immediately found TWO real defects, both the v0.9.2
+`SYS_IOCTL` class living in the suites meant to catch it.
+`tests/darshana.tcyr` read the signal mask with a hardcoded `syscall(14, ...)`
+(`rt_sigprocmask` on x86_64, **135** on aarch64). Worse, **`tests/pty.tcyr` was
+silently x86_64-only and failed 15 of 53 assertions there**: its ABI block
+hardcoded the ioctl / nanosleep / dup / dup2 / prlimit64 / rt_sigprocmask
+numbers inside an arch-BLIND `CYRIUS_TARGET_LINUX` gate, so on aarch64 every
+`TCGETS` / `TIOCGWINSZ` probe called syscall 16 — `fremovexattr` — and the
+failures were blamed on darshana rather than on the test. Both now take
+arch-aware constants and wrappers from the stdlib, with explicit
+`CYRIUS_ARCH_X86` / `CYRIUS_ARCH_AARCH64` gates for the two the stdlib does not
+define and a local helper for `dup2` (aarch64 has only `dup3`). **56/56 on both
+architectures.**
+
+Tests **295 → 309**. Two audit conclusions are recorded at the source so they
+are not re-litigated: reciprocal multiplication for the divides is **slower**
+(measured), and the cost was the CALL, not the arithmetic (cycc spills five
+callee-saved registers even in a leaf).
+
 **1.0.2** — *open cycle*. **P-1 audit / refactor / hardening / optimization /
 security sweep** — the first since v0.9.3 and the first under the freeze.
 Seven lenses over the whole surface, every finding through a three-way
@@ -346,15 +396,15 @@ TTY_SIGMASK_EXIT/WINCH, `tty_clear_to_eol/to_end`.
 
 | File | Lines | Surface |
 |------|-------|---------|
-| `src/termios.cyr` | 694 | `TIO_*` flags, `tio_load32/store32`, `tty_raw`, `tty_cooked`, **v0.3.0:** `TIOCGWINSZ`, `TTY_SIGMASK_EXIT/WINCH`, `tty_winsize`, `tty_open_signalfd`. **v0.5.3:** `tty_isatty`. **v0.7.0:** `tty_cooked` is zero-arg (single-raw-fd model, `_tty_raw_fd`); `tty_apply_raw_flags` privatized → `_tty_apply_raw_flags`; `tty_close_signalfd` added; `SFD_CLOEXEC` on the signalfd. **v0.8.0–v0.9.0:** `#ifdef CYRIUS_TARGET_AGNOS` peers for all six syscall-touching entry points (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) + agnos-specific `TTY_SIGMASK_*` values. Linux arm gated via `#ifdef CYRIUS_TARGET_LINUX`. **v0.9.2:** local `var SYS_IOCTL = 16` dropped — the Linux gate is arch-blind, so it shadowed the stdlib's arch-aware value and issued the x86_64 number on aarch64; `TCGETS`/`TCSETS`/`TIOCGWINSZ` stay local (arch-stable). |
-| `src/ansi.cyr` | 371 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`, **v0.3.0:** `tty_clear_to_eol`, `tty_clear_to_eos` (renamed from `tty_clear_to_end` v0.7.0), **v0.3.5:** `tty_sgr`, `tty_sgr_reset`, 16 `TTY_FG_*` constants. **v0.4.0:** `tty_sgr` validates input range `[0, 999]`. **v0.5.1:** `tty_fg_rgb`, `tty_bg_rgb`, `tty_fg_rgb_buf`, `tty_bg_rgb_buf`, `tty_sgr_reset_buf`. **v0.5.3:** `tty_sgr_buf`, `tty_fg_256_buf`. Any vt100-compatible terminal. |
+| `src/termios.cyr` | 693 | `TIO_*` flags, `tio_load32/store32`, `tty_raw`, `tty_cooked`, **v0.3.0:** `TIOCGWINSZ`, `TTY_SIGMASK_EXIT/WINCH`, `tty_winsize`, `tty_open_signalfd`. **v0.5.3:** `tty_isatty`. **v0.7.0:** `tty_cooked` is zero-arg (single-raw-fd model, `_tty_raw_fd`); `tty_apply_raw_flags` privatized → `_tty_apply_raw_flags`; `tty_close_signalfd` added; `SFD_CLOEXEC` on the signalfd. **v0.8.0–v0.9.0:** `#ifdef CYRIUS_TARGET_AGNOS` peers for all six syscall-touching entry points (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) + agnos-specific `TTY_SIGMASK_*` values. Linux arm gated via `#ifdef CYRIUS_TARGET_LINUX`. **v0.9.2:** local `var SYS_IOCTL = 16` dropped — the Linux gate is arch-blind, so it shadowed the stdlib's arch-aware value and issued the x86_64 number on aarch64; `TCGETS`/`TCSETS`/`TIOCGWINSZ` stay local (arch-stable). |
+| `src/ansi.cyr` | 426 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`, **v0.3.0:** `tty_clear_to_eol`, `tty_clear_to_eos` (renamed from `tty_clear_to_end` v0.7.0), **v0.3.5:** `tty_sgr`, `tty_sgr_reset`, 16 `TTY_FG_*` constants. **v0.4.0:** `tty_sgr` validates input range `[0, 999]`. **v0.5.1:** `tty_fg_rgb`, `tty_bg_rgb`, `tty_fg_rgb_buf`, `tty_bg_rgb_buf`, `tty_sgr_reset_buf`. **v0.5.3:** `tty_sgr_buf`, `tty_fg_256_buf`. Any vt100-compatible terminal. |
 | `src/cursor.cyr` | 135 | `tty_dec_buf` (decimal formatter — renamed from `tty_itoa`, returns new write position, v0.7.0), `tty_move` (with [1,65535] coord bounds + `buf[44]` v0.7.0), `tty_cursor_up/down`. Composes the CSI row;colH escape inline. |
 | `src/main.cyr` | 27 | Convenience entry — `include`s the three sub-modules; carries the authoritative surface pointer (→ `scripts/smoke.sh`) + naming/return conventions (v0.7.0). Not in the dist bundle. |
 | `programs/smoke.cyr` | 17 | Compile-link smoke. |
-| `dist/darshana.cyr` | 1,200 | Bundled distribution — regenerate via `cyrius distlib`. What consumers `include "lib/darshana.cyr"`. (1,213 lines on disk; `distlib` reports module-body lines, excluding its 13-line generated header.) |
+| `dist/darshana.cyr` | 1,254 | Bundled distribution — regenerate via `cyrius distlib`. What consumers `include "lib/darshana.cyr"`. (1,267 lines on disk; `distlib` reports module-body lines, excluding its 13-line generated header.) |
 | `dist/darshana.deps` | 7 | Generated stdlib-leaf sidecar — **5 entries** (`syscalls`, `alloc`, `io`, `assert`, **`vec`** — the fifth added at v1.0.1, compile-verified by 6.6.0's `distlib`). Consumed by a consumer's `cyrius deps`. |
 
-Total source ≈ 1,200 lines across the three dist modules (grew from ~780
+Total source ≈ 1,254 lines across the three dist modules (grew from ~780
 at v0.7.0 with the v0.8.0–v0.9.0 agnos peers, and again through the v0.9.3
 refactor and the v0.9.4 docstring restoration). The line counts above were
 re-derived with `wc -l` at v1.0.1 — every row had been stale since v0.9.2, in a
@@ -370,7 +420,9 @@ self-audits bidirectionally).
 | `tests/darshana.tcyr` | **167 assertions** (a couple live-fd-gated): pure-function coverage of `tio_load32/store32`, `_tty_apply_raw_flags` (every flag bit + idempotence), `tty_dec_buf` (zero / negative / 1–3 digits / new-position offset), `tty_move` rejection bounds (v0.7.0), `TIO_BUF_SIZE` drift guard (v0.7.0), the v0.3.0 constant set (`TTY_SIGMASK_*`, `TIOCGWINSZ` ABI), `tty_sgr` rejection, **v0.5.x** truecolor + 256 `_buf` exact-byte + bounds coverage, and **live-fd** tests for `tty_winsize` and `tty_open_signalfd` + `tty_close_signalfd` (v0.7.0). |
 | `tests/pty.tcyr` | **50 assertions (v0.6.0; hardened v0.7.0 and v0.9.3)** — the in-repo PTY harness. Opens a real pseudo-terminal (`/dev/ptmx` → `TIOCSPTLCK` → `TIOCGPTN` → `/dev/pts/N`) and drives darshana against the slave: `tty_isatty` on a known-live fd (+ deterministic `/dev/null` negative), `tty_winsize` set/get (24×80), the `tty_raw`→`tty_cooked()` state-restore (byte-for-byte), the single-raw-fd model (2nd fd refused), the cooked-vs-raw output round-trip (OPOST/ONLCR, fail-not-skip), and fd-1 escape-byte capture (via `dup2`) for `tty_alt_*`, `tty_clear`, `tty_clear_to_eol/eos`, `tty_cursor_*`, `tty_move`, `tty_sgr`, `tty_sgr_reset`, `tty_fg_rgb`/`tty_bg_rgb`. Wired into CI (v0.7.0) with `SKIP pty:` degradation tokens. Hang-proof (`O_NONBLOCK` master, bounded drains) and skip-clean (Linux-only). |
 
-**295 assertions total** (224 + 56 + 15), green at cyrius 6.6.0; the PTY
+**309 assertions total** (238 + 56 + 15), green at cyrius 6.6.0 on x86_64 —
+and **234 + 56 + 15 on real aarch64** (a Raspberry Pi 4; the four
+`prlimit64`-gated unit assertions skip there by design); the PTY
 harness runs its full set with no `SKIP pty:` token. Grew from 217 at v1.0.2's
 sweep — the additions target proven gaps, not coverage for its own sake: all
 37 frozen constant VALUES (only 4 were pinned before; `smoke.sh` checks names,
@@ -433,11 +485,17 @@ the **20** modules vendored in `lib/`: `alloc` `alloc_agnos` `alloc_macos` `allo
   darshana's own surface never calls it. Same class as the `vec_get` warning
   v1.0.1 closed, so it may well be closable the same way (a declared leaf)
   rather than being upstream's problem; nobody has checked.
-- **`--aarch64` is unverifiable on this host** — `cycc_aarch64` is not installed,
-  so `cyrius build --aarch64` fails before reaching darshana's source, at v1.0.0
-  and v1.0.1 alike. The aarch64 arm is therefore *unbuilt*, not *known-good*;
-  v0.9.2's `SYS_IOCTL` fix was verified by reading emitted machine code, not by
-  a cross-build. Worth wiring up before an aarch64 consumer appears.
+- ~~**`--aarch64` is unverifiable on this host**~~ — **closed at v1.1.0.** The
+  installed toolchain still ships no `cycc_aarch64`, but the cyrius repo builds
+  one at `build/cycc_aarch64`, and pointing `CYRIUS_HOME` at a **sandboxed copy**
+  of the toolchain tree (never the live one — a previous cyrius release lost a
+  toolchain to treating `$CYRIUS_HOME` as scratch) produces working aarch64
+  ELFs. Those run under `qemu-aarch64` and on the `pi` host (Raspberry Pi 4,
+  Linux 6.8). The arm is now *known-good*, not merely *unbuilt*: smoke ok,
+  234/234 assertions, exhaustive composer checksum identical to x86_64.
+  **Not yet wired into CI** — the standard installer does not place
+  `cycc_aarch64`, so a CI step would need the compiler built or fetched first.
+  That is the remaining piece.
 - **Inherited at v1.0.1: aarch64 `SYS_SIGNALFD4` moved `74` to `1074`** in the
   vendored `lib/syscalls_aarch64_linux.cyr` (a private alias upstream now
   translates via `ESYSXLAT 1074 -> 74`). darshana's Linux arm calls the stdlib
@@ -455,6 +513,8 @@ the **20** modules vendored in `lib/`: `alloc` `alloc_agnos` `alloc_macos` `allo
 | Release on semver tag | `.github/workflows/release.yml` — gates on ci.yml via `workflow_call`, version-verify against tag, regenerates dist + ships `darshana-X.Y.Z.cyr` standalone + `darshana-X.Y.Z.tar.gz` package + source tarball + SHA256SUMS, GH release with body extracted from CHANGELOG section |
 | Syscall allowlist | `scripts/syscall-audit.sh` (v0.9.4, hardened v1.0.2) — the permitted syscall targets and stdlib wrappers, each with its rationale. One implementation, invoked by both `scripts/smoke.sh` and the CI security job so the two cannot drift. Replaced the exec-sink denylist, which could only catch anticipated sinks. **v1.0.2** closed three bypasses that all compiled, ran and audited green — a parenthesized first argument (`syscall((59), …)` did not match the regex at all), a line-wrapped call, and any stdlib wrapper outside the `sys_*`/`file_*` prefixes (`xopen`, `getenv`, `panic`, …) — by normalizing before matching (comments stripped, string literals blanked, statements rejoined) and making the callee scan a true allowlist. It now also scans **`docs/examples/`**, which is how the ungated `syscall(60)` there was found. `--self-test` asserts each bypass is rejected. |
 | Platform gate | `scripts/platform-gate.sh` (v1.0.2) — extracted so `smoke.sh` and the CI security job share one implementation instead of two copies of the same awk. **Corpus-driven**: every `src/*.cyr` is checked against its own gates. v0.9.3 fixed this check's substring-vs-positional half but left it hard-coded to `src/termios.cyr` as both gate source and search corpus, so identical ungated Linux ioctl code in any other module was never examined and would ship outside any `#ifdef` with every gate green. Carries a vacuity guard (a gutted tree with no tokens cannot pass) and a `--self-test`. |
+| aarch64 verification | Not in CI (the installer places no `cycc_aarch64`). Reproduce by hand — v1.1.0: copy the toolchain tree to a scratch dir, drop the compiler the cyrius repo builds into it, and point `CYRIUS_HOME` at the copy. **Never at the live tree.**<br>`cp -a ~/.cyrius/versions $S/cyhome/versions && ln -sfn $S/cyhome/versions/6.6.0/bin $S/cyhome/bin` (same for `lib`)<br>`cp ~/Repos/cyrius/build/cycc_aarch64 $S/cyhome/versions/6.6.0/bin/`<br>`CYRIUS_HOME=$S/cyhome cyrius build --aarch64 tests/darshana.tcyr build/a64-tests`<br>Run under `qemu-aarch64 build/a64-tests`, and on real hardware via `ssh pi` (Raspberry Pi 4, Linux 6.8) — `scp` the binary to `/tmp` and execute. Expect 234/234 unit and 56/56 pty (the four `prlimit64`-gated unit assertions skip). |
+| Emitted-byte identity | Two harnesses, both kept out of the repo (scratch tooling, regenerate as needed). A **streaming** one dumps every composer's bytes + return over its full envelope for `diff`/`sha256` (13,518 records / 178,199 bytes; `sha256:6dcd7228…` since v1.0.1). An **exhaustive** one folds the return plus all 48 bytes of a `0xAA`-poisoned canvas, composing at `pos = 3`, over the complete `[0,255]³` RGB cube (16.7M triples × 2 composers) plus every rejection edge and start position; it printed `CHECKSUM 2666313271416689717` identically on x86_64, qemu-aarch64 and a real Pi 4, before and after v1.1.0's refactor. Folding the whole canvas rather than the escape is what proves a wide store leaves no stray byte. |
 | Examples | `docs/examples/*.cyr` — CI builds **and runs** each one. Every example checks `tty_isatty` first and degrades cleanly, so executing it in CI is meaningful. |
 | Smoke test | `scripts/smoke.sh` — runs smoke binary, verifies dist drift, asserts the public contract surface (29 `tty_*` / `tio_*` fn symbols + 37 `TIO_* / TIOC* / TTY_*` constants present in dist) with a **bidirectional self-audit** covering both fns (v0.7.0) and constants (v0.9.3) — it fails if dist exports a public name the checklist omits, in either direction. The platform-gate check is **positional** as of v0.9.3: Linux ioctl tokens must sit inside the `CYRIUS_TARGET_LINUX` gate and agnos syscall tokens inside `CYRIUS_TARGET_AGNOS`, by line number rather than by substring presence. A **docstring audit** (v0.9.4) additionally fails the build if any public fn lacks a docstring or a stated return contract, if any `_buf` composer omits its byte budget, or if a public constant is undocumented. **v1.0.2**: the platform-gate check moved out to `scripts/platform-gate.sh` (shared with CI); the dist-drift check now covers **`dist/darshana.deps`** as well as the bundle, restoring both on failure — previously the sidecar was silently regenerated before anything could compare it; and the docstring audit's `!seen[name]++` de-dup was removed, which had exempted **every duplicated symbol — i.e. the whole AGNOS peer arm** — and whose removal immediately found AGNOS `tty_winsize` shipping with no docstring at all since v0.8.0 |
 | Cutting a release | Bump VERSION + CHANGELOG section, push tag `vX.Y.Z` (or `X.Y.Z`); release.yml takes over. Pre-1.0 tags publish as GH prerelease automatically. |

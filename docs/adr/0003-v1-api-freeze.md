@@ -81,10 +81,15 @@ which is the point.
 ### What "frozen" does NOT cover
 
 - **`_`-prefixed symbols.** `_tty_saved`, `_tty_in_raw`, `_tty_raw_fd`,
-  `_tty_apply_raw_flags`, `_ansi_emit_u8`, `_ansi_rgb_buf`, `_ansi_rgb_write`,
+  `_tty_apply_raw_flags`, `_ansi_rgb_buf`, `_ansi_rgb_write`,
   `_cursor_rel`, `_AGNOS_SYS_*`, `_AGNOS_SFD_CLOEXEC`. These ship in the bundle
   because it is one compilation unit, not because they are API. They may be
-  renamed, resliced, or deleted in a minor release.
+  renamed, resliced, or deleted in a minor release. (`_ansi_emit_u8` was named
+  on this list until v1.1.0 deleted it outright, inlining its 1-3 digit
+  sequence into the five composers that called it. That is the clause working
+  as designed: an internal helper disappeared, the frozen 29 functions and 37
+  constants did not move, and their emitted bytes were proven unchanged over
+  the complete RGB cube on x86_64 and on real aarch64.)
 
   One caveat, stated because ADR 0002 depends on it: the module-global save
   state (`_tty_saved` / `_tty_in_raw` / `_tty_raw_fd`) is *reachable* by design —

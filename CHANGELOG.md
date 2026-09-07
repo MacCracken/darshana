@@ -4,6 +4,169 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-09-07
+
+**The two refactors v1.0.2 deferred, plus the first verification of darshana on
+real aarch64 hardware.** Minor rather than patch because ADR 0003 prices
+"internal refactors with identical output" that way — and identical output is
+exactly what this is: the frozen 29 functions and 37 constants emit the same
+bytes for the same inputs, proven exhaustively on three platforms.
+
+⭐ **The two deferred refactors turned out to contradict each other, and doing
+the first one as written would have made darshana ~40% slower.** That is the
+substance of this release.
+
+### Changed
+
+- ⛔ **The two v1.0.2 findings conflicted, and the conflict was only visible
+  once measured.** v1.0.2 recorded two byte-identical improvements to take at
+  the next minor: (1) collapse the duplicate decimal emitter `_ansi_emit_u8`
+  into `tty_dec_buf`, and (2) a ~30% speedup in the RGB composers whose main
+  ingredient is *inlining* those same digit emissions. One says share a
+  function; the other says stop calling one.
+
+  Measured on this host (Ryzen 7 5800H, cyrius 6.6.0, 20M calls, median of 7,
+  interleaved to control for thermal drift):
+
+  | | v1.0.2 | delegate to `tty_dec_buf` | **shipped here** |
+  |---|---|---|---|
+  | `tty_fg_rgb_buf`  |  990 ms | 1418 ms (**+43%**) | **696 ms (−30%)** |
+  | `tty_fg_256_buf`  |  458 ms |  605 ms (**+32%**) | **303 ms (−34%)** |
+  | `tty_sgr_buf`     |  353 ms |  511 ms (**+45%**) | **289 ms (−18%)** |
+
+  Refactor (1) as literally described is byte-identical and a **large
+  regression**: `tty_dec_buf` is a general i64 formatter that reverses digits
+  through a 24-byte scratch array and copies them back, where these composers
+  only ever emit 1–3 digits. The two findings came from different audit lenses
+  (refactor vs optimization) and neither measured the other's direction.
+
+  So the duplication was removed by **elimination rather than delegation**: the
+  1–3 digit sequence is written inline at each of the five call sites and
+  `_ansi_emit_u8` is deleted. That satisfies what refactor (1) actually
+  wanted — no second decimal-emitter *function* in the library — while getting
+  faster instead of slower.
+
+- **`_ansi_emit_u8` deleted.** ADR 0003 explicitly lists it among the
+  `_`-prefixed symbols that "may be renamed, resliced, or deleted in a minor
+  release", so this is the not-frozen clause working exactly as designed. The
+  ADR's enumeration is updated to match.
+
+- **The 7-byte fixed prefixes are now single wide stores.** `_ansi_rgb_buf`'s
+  `ESC [ <layer> 8 ; 2 ;` and `tty_fg_256_buf`'s `ESC [ 3 8 ; 5 ;` were seven
+  `store8` + increment pairs each; they are now one `store64`. The 8th byte is
+  always overwritten immediately by the first digit — the shortest escape
+  either composer can produce is 13 and 9 bytes respectively, so `[pos, pos+8)`
+  is strictly inside the result. `tty_sgr_reset_buf`'s four pairs became one
+  `store32`, which writes exactly the four bytes it produces with no overrun
+  argument needed at all.
+
+  ⚠ These are darshana's **first unaligned wide stores**, which is why v1.0.2
+  declined to take them: the aarch64 question could not be answered on this
+  host. It can be now — see *Verification*.
+
+- ⛔ **Two audit conclusions are recorded in the source so they are not
+  re-litigated**, both measured rather than reasoned:
+  - **Do not substitute reciprocal multiplication for the divisions.**
+    `(val*41)>>12` for `/100` and `(val*205)>>11` for `/10` are exact over this
+    domain and are **slower** (1040 ms vs 1000 ms): the extra multiply/shift
+    nodes cost more in cycc's stack machine than Zen3's `idiv` on small
+    operands saves. anuenue's `src/filter.cyr` asserts the divides dominate
+    here; they do not.
+  - **The cost was the CALL, not the arithmetic.** cycc's prologue
+    unconditionally spills `rbx`/`r12`–`r15` even in a leaf function that
+    touches none of them, so `_ansi_rgb_buf` paid ~30 wasted memory ops per
+    call for its three digit emissions. This deliberately re-expands what
+    v0.9.3 deduplicated, so the reason is written at the site: if cycc ever
+    grows a leaf-prologue optimization, re-collapsing becomes free — measure
+    before assuming it still is.
+
+  Context for why 15 ns matters: anuenue currently builds a 1,530-entry,
+  48,960-byte heap table of pre-baked escapes plus a per-character copy loop
+  purely to avoid this call. The v1.0.2 audit measured that replica at 39.3
+  ns/call — **slower than the composer now is** (34.8 ns). Its biggest consumer
+  can delete 48 KB of heap, a build pass and a cache-invalidation bug class,
+  and get faster doing it.
+
+### Fixed
+
+- ⛔ **`tests/pty.tcyr` — darshana's deepest coverage — was silently x86_64-only,
+  and failed 15 of 53 assertions the first time it ran on real aarch64.** Its
+  ABI block hardcoded `SYS_ioctl = 16`, `nanosleep = 35`, `dup = 32`,
+  `dup2 = 33`, `prlimit64 = 302` and `rt_sigprocmask = 14` inside a gate that is
+  only `CYRIUS_TARGET_LINUX` — which is arch-**blind**. On aarch64 syscall 16 is
+  `fremovexattr`, so every `TCGETS` / `TIOCGWINSZ` probe in the harness was
+  calling the wrong kernel entry point, and the resulting failures were reported
+  against darshana rather than against the test. Syscall 35 there is `unlinkat`,
+  not `nanosleep`.
+
+  This is the v0.9.2 `SYS_IOCTL` defect for the third time — an x86_64 literal
+  in an arch-blind position, no diagnostic — now living in the harness that
+  exists to catch it. Everything the stdlib defines arch-aware is taken from the
+  stdlib (`SYS_IOCTL` 16/29, `SYS_DUP` 32/23, `sys_sigprocmask` 14/135); the two
+  it does not define (`nanosleep`, `prlimit64`) get an explicit
+  `CYRIUS_ARCH_X86` / `CYRIUS_ARCH_AARCH64` gate; and `dup2` gets a local
+  two-line helper because aarch64 has no `dup2` at all, only
+  `dup3(old, new, 0)`. **56/56 on both architectures now.**
+
+- **`tests/darshana.tcyr` read the signal mask with a hardcoded x86_64 syscall
+  number.** Four sites used `syscall(14, 0, 0, &buf, 8)` for `rt_sigprocmask`.
+  That number is **135 on aarch64**, so on that target the read returned
+  something else entirely and the assertions checked garbage. Found the moment
+  the suite was first run on aarch64 — it failed there and passed on x86_64.
+  This is precisely the v0.9.2 `SYS_IOCTL` class of defect (an x86_64 constant
+  in an arch-blind position, no diagnostic), living in the test suite that is
+  supposed to catch it. Now uses the stdlib's arch-aware `sys_sigprocmask`.
+
+### Added
+
+- **Tests: 295 → 309** (`darshana.tcyr` 224 → 238). The assertions that called
+  `_ansi_emit_u8` directly now drive the same three digit-length branches
+  through the **public** composers, which is what actually ships — same
+  coverage, one layer further out. Plus new assertions pinning each byte of the
+  256-colour composer's wide-stored prefix, and a poisoned-canvas check that
+  the byte past the escape is untouched — the specific hazard a wide store
+  introduces.
+
+### Verification
+
+- ⭐ **darshana ran on real aarch64 hardware for the first time**, closing the
+  carry-forward v1.0.2 opened ("the aarch64 arm is *unbuilt*, not
+  *known-good*"). The toolchain ships no `cycc_aarch64` in the installed tree,
+  but the cyrius repo builds one, and pointing `CYRIUS_HOME` at a sandboxed
+  copy — never mutating the live toolchain — produces working aarch64 ELFs.
+  Verified in three places, in increasing order of authority: `qemu-aarch64`,
+  then a **Raspberry Pi 4 (Linux 6.8, aarch64)**.
+
+  | | smoke | `darshana.tcyr` | exhaustive equivalence checksum |
+  |---|---|---|---|
+  | x86_64 native | ok | 238/238 | `2666313271416689717` |
+  | aarch64 (qemu) | ok | — | `2666313271416689717` |
+  | **aarch64 (Pi 4, real)** | **ok** | **234/234** + pty **56/56** | **`2666313271416689717`** |
+
+  (234 rather than 238 on aarch64: the four assertions behind the `prlimit64`
+  forced-failure guard skip there, by design.) **That is what licensed the
+  unaligned wide stores** — the same checksum before and after the refactor, on
+  real ARM, not an argument about `SCTLR.A`.
+
+- **Emitted-byte identity, two independent proofs.**
+  - The v1.0.2 streaming harness — 13,518 records / 178,199 bytes across every
+    composer's full envelope — is **byte-identical**, `sha256:6dcd7228…`,
+    unchanged since v1.0.1.
+  - A new exhaustive checksum harness folds the return value **and all 48 bytes
+    of a `0xAA`-poisoned canvas** for every case, composing at `pos = 3` so a
+    wide store cannot land on a convenient alignment. It sweeps
+    `tty_fg_rgb_buf` and `tty_bg_rgb_buf` over the **complete `[0,255]³` cube**
+    (16,777,216 triples × 2 composers), plus every rejection edge, every start
+    position including the negative reject, and the full `tty_sgr_buf` /
+    `tty_fg_256_buf` / `tty_dec_buf` envelopes. Folding the whole canvas rather
+    than the escape is what proves the wide stores leave no stray byte.
+    Identical across all three platforms and both before and after.
+- **309 assertions green**; `scripts/smoke.sh` PASS with the frozen 29 fns / 37
+  constants bidirectionally audited; both gate self-tests pass; `cyrius lint`
+  clean; DCE parity OK; the example builds and runs on both targets; AGNOS
+  suite 15/15. Native builds emit **zero warnings**.
+
+
 ## [1.0.2] — 2026-09-07
 
 **P-1 audit / refactor / hardening / optimization / security sweep** — the

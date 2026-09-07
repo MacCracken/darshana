@@ -161,9 +161,8 @@ fn tio_store32(buf, off, val) {
 # Private (`_`-prefixed) — internal to `tty_raw`, NOT part of darshana's
 # public surface. Privatized in v0.7.0: it bakes in darshana's specific
 # raw-mode mask, so no consumer has a reason to call it directly, and a
-# same-compilation-unit test can still reach it (the `_ansi_emit_u8`
-# precedent). The pure-function split exists for testability, not for
-# the API.
+# same-compilation-unit test can still reach it. The pure-function
+# split exists for testability, not for the API.
 #
 # Cleared:
 #   c_iflag: BRKINT | ICRNL | INPCK | ISTRIP | IXON

@@ -206,28 +206,61 @@ fn main() {
     # known RGB triples covering 1/2/3-digit channel encodings, plus
     # the per-channel bounds rejection (negative / >255).
 
-    test_group("ansi.cyr — _ansi_emit_u8 digit encoding");
-    var dbuf[8];
+    # v1.1.0: `_ansi_emit_u8` no longer exists — its 1-3 digit sequence
+    # is inline at each composer (see the section note in ansi.cyr for
+    # why the shared helper was eliminated rather than delegated to
+    # `tty_dec_buf`). These assertions used to call the helper directly;
+    # they now drive the same three digit-length branches through the
+    # PUBLIC composers, which is what actually ships. Same coverage,
+    # tested one layer further out.
+    test_group("ansi.cyr — digit-length branches via tty_sgr_buf");
+    var dbuf[16];
     var di = 0;
-    while (di < 8) { store8(&dbuf + di, 0); di = di + 1; }
-    assert_eq(_ansi_emit_u8(&dbuf, 0, 0),   1, "0 → 1 digit");
-    assert_eq(load8(&dbuf + 0), 0x30, "0 written as '0'");
-    assert_eq(_ansi_emit_u8(&dbuf, 0, 5),   1, "5 → 1 digit");
-    assert_eq(load8(&dbuf + 0), 0x35, "5 written as '5'");
-    assert_eq(_ansi_emit_u8(&dbuf, 0, 42),  2, "42 → 2 digits");
-    assert_eq(load8(&dbuf + 0), 0x34, "42 first '4'");
-    assert_eq(load8(&dbuf + 1), 0x32, "42 second '2'");
-    assert_eq(_ansi_emit_u8(&dbuf, 0, 255), 3, "255 → 3 digits");
-    assert_eq(load8(&dbuf + 0), 0x32, "255 first '2'");
-    assert_eq(load8(&dbuf + 1), 0x35, "255 second '5'");
-    assert_eq(load8(&dbuf + 2), 0x35, "255 third '5'");
+    while (di < 16) { store8(&dbuf + di, 0); di = di + 1; }
+    # 1-digit branch
+    assert_eq(tty_sgr_buf(&dbuf, 0, 0),   4, "code 0 → 1 digit (4-byte escape)");
+    assert_eq(load8(&dbuf + 2), 0x30, "0 written as '0'");
+    assert_eq(tty_sgr_buf(&dbuf, 0, 5),   4, "code 5 → 1 digit");
+    assert_eq(load8(&dbuf + 2), 0x35, "5 written as '5'");
+    # 2-digit branch
+    assert_eq(tty_sgr_buf(&dbuf, 0, 42),  5, "code 42 → 2 digits");
+    assert_eq(load8(&dbuf + 2), 0x34, "42 first '4'");
+    assert_eq(load8(&dbuf + 3), 0x32, "42 second '2'");
+    # 3-digit branch
+    assert_eq(tty_sgr_buf(&dbuf, 0, 255), 6, "code 255 → 3 digits");
+    assert_eq(load8(&dbuf + 2), 0x32, "255 first '2'");
+    assert_eq(load8(&dbuf + 3), 0x35, "255 second '5'");
+    assert_eq(load8(&dbuf + 4), 0x35, "255 third '5'");
+    # The same three branches through the 256-colour composer, whose
+    # 7-byte prefix is written by a single wide store as of v1.1.0 —
+    # this pins that the prefix bytes are still exactly right.
+    assert_eq(tty_fg_256_buf(&dbuf, 0, 7),   9,  "n=7 → 1 digit");
+    assert_eq(load8(&dbuf + 7), 0x37, "n=7 digit is '7'");
+    assert_eq(tty_fg_256_buf(&dbuf, 0, 42),  10, "n=42 → 2 digits");
+    assert_eq(tty_fg_256_buf(&dbuf, 0, 255), 11, "n=255 → 3 digits");
+    assert_eq(load8(&dbuf + 0), 0x1b, "256 prefix byte 0 = ESC");
+    assert_eq(load8(&dbuf + 1), 0x5b, "256 prefix byte 1 = '['");
+    assert_eq(load8(&dbuf + 2), 0x33, "256 prefix byte 2 = '3'");
+    assert_eq(load8(&dbuf + 3), 0x38, "256 prefix byte 3 = '8'");
+    assert_eq(load8(&dbuf + 4), 0x3b, "256 prefix byte 4 = ';'");
+    assert_eq(load8(&dbuf + 5), 0x35, "256 prefix byte 5 = '5'");
+    assert_eq(load8(&dbuf + 6), 0x3b, "256 prefix byte 6 = ';'");
+    # A wide store writes 8 bytes for a 7-byte prefix; the 8th is the
+    # first digit. Prove nothing lands past the escape: poison the
+    # canvas, compose, and require the byte after the result untouched.
+    var pi2 = 0;
+    while (pi2 < 16) { store8(&dbuf + pi2, 0xAA); pi2 = pi2 + 1; }
+    var rp2 = tty_fg_256_buf(&dbuf, 0, 0);
+    assert_eq(rp2, 9, "n=0 → 9-byte escape");
+    assert_eq(load8(&dbuf + 8), 0x6d, "byte 8 = 'm' terminator");
+    assert_eq(load8(&dbuf + 9), 0xAA, "byte past the escape is untouched by the wide store");
 
     test_group("ansi.cyr — tty_fg_rgb_buf exact bytes");
     var fbufx[32];
     var fxi = 0;
     while (fxi < 32) { store8(&fbufx + fxi, 0); fxi = fxi + 1; }
-    # (255, 0, 128) — max + min + 3-digit, exercises all three branches
-    # in _ansi_emit_u8 and confirms the framing bytes are intact.
+    # (255, 0, 128) — max + min + 3-digit, exercises all three inline
+    # digit-length branches and confirms the framing bytes are intact.
     var fpos = tty_fg_rgb_buf(&fbufx, 0, 255, 0, 128);
     # ESC[ (2) + "38;2;" (5) + "255" (3) + ";" (1) + "0" (1) + ";" (1) +
     # "128" (3) + "m" (1) = 17 bytes total; fpos is the next free slot.
@@ -511,7 +544,7 @@ fn main() {
         # rt_sigprocmask(SIG_BLOCK, NULL, &cur, 8) — read the mask back.
         var cur[8];
         store64(&cur, 0);
-        syscall(14, 0, 0, &cur, 8);
+        sys_sigprocmask(0, 0, &cur);
         assert_eq(load64(&cur) & TTY_SIGMASK_WINCH, 0,
             "failed open rolls its SIG_BLOCK back — no mask residue");
     }
@@ -653,7 +686,7 @@ fn main() {
     if (rb_fd1 >= 0) {
         var rb_m[8];
         store64(&rb_m, 0);
-        syscall(14, 0, 0, &rb_m, 8);              # rt_sigprocmask read-back
+        sys_sigprocmask(0, 0, &rb_m);              # rt_sigprocmask read-back
         assert_eq(load64(&rb_m) & TTY_SIGMASK_WINCH, TTY_SIGMASK_WINCH,
             "SIGWINCH blocked while fd1 is open");
 
@@ -670,7 +703,7 @@ fn main() {
                 if (rb_fd2 < 0) {
                     assert_eq(rb_fd2, 0 - 1, "second open failed with exactly -1");
                     store64(&rb_m, 0);
-                    syscall(14, 0, 0, &rb_m, 8);
+                    sys_sigprocmask(0, 0, &rb_m);
                     # THE FIX: the block fd1 owns must survive the failure.
                     assert_eq(load64(&rb_m) & TTY_SIGMASK_WINCH, TTY_SIGMASK_WINCH,
                         "failed open leaves fd1's SIGWINCH block INTACT");
@@ -685,7 +718,7 @@ fn main() {
         assert_eq(tty_close_signalfd(rb_fd1, TTY_SIGMASK_WINCH), 0,
             "tty_close_signalfd returns exactly 0 on success");
         store64(&rb_m, 0);
-        syscall(14, 0, 0, &rb_m, 8);
+        sys_sigprocmask(0, 0, &rb_m);
         assert_eq(load64(&rb_m) & TTY_SIGMASK_WINCH, 0,
             "close unblocks the mask it was given");
     }

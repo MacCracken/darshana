@@ -12,9 +12,9 @@ Donor: [`cyim/src/tty.cyr`](https://github.com/MacCracken/cyim) (~207 lines, Lin
 
 ## Status
 
-**v1.0.2 — stable. The API has been frozen since v1.0.0.** 29 functions and 37 constants, enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) and machine-checked on every CI run. Breaking any of them now requires a major bump; additive change (new symbols, new platform peers) stays a minor bump. Pin a `1.x` tag and take minor bumps without reading a diff.
+**v1.1.0 — stable. The API has been frozen since v1.0.0.** 29 functions and 37 constants, enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) and machine-checked on every CI run. Breaking any of them now requires a major bump; additive change (new symbols, new platform peers) stays a minor bump. Pin a `1.x` tag and take minor bumps without reading a diff.
 
-v1.0.2 is a P-1 audit / hardening / security patch: a signalfd rollback that could silently disarm a consumer's exit path, a sentinel that leaked a raw `-errno`, an ungated `syscall(60)` in the shipped example, four stale docstrings, and a round of gate repairs — plus the AGNOS arm's first test coverage of any kind. **295 assertions, up from 217.** No frozen byte moved, proven against an exhaustive 178 KB emitted-byte baseline. (v1.0.1 was the toolchain + vendoring patch: cyrius pin `6.5.35` → `6.6.0` and `lib/` re-resolved to its 20-module dependency closure.)
+v1.1.0 is an internal-refactor release: the digit encoding in the SGR and truecolor composers is inlined and their fixed prefixes are single wide stores, making tty_fg_rgb_buf 30% faster, tty_fg_256_buf 34% and tty_sgr_buf 18% — with emitted bytes proven unchanged over the complete [0,255] RGB cube on x86_64 and on real aarch64 hardware. 309 assertions. (v1.0.2 was the P-1 audit / hardening / security sweep; v1.0.1 the toolchain + vendoring patch.)
 
 The TTY surface works on Linux and, since v0.9.0, fully on AGNOS — every syscall-touching entry point (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) has an `#ifdef CYRIUS_TARGET_AGNOS` peer over the kernel's own syscalls (requires agnos ≥ 1.45.13), so consumers stay platform-blind on both targets. macOS/BSD is deliberately out of scope.
 
