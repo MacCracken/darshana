@@ -4,6 +4,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-09-11
+
+Cuts the accumulated documentation sweep together with the cyrius **6.6.2**
+toolchain bump. **No executable line changed** on either half.
+
+### Changed — toolchain `6.6.0` → `6.6.2`
+
+darshana needed **no source edit**. It was already on 6.6.0, i.e. already on the
+`Result` value form, and it has no `Result` surface of its own to migrate: zero
+loud sites, zero fail-open sites, and no indirect call that could hide one — its
+own sources contain no `callptr` and no `fncall*` at all, so the class that is
+invisible to the compiler cannot arise here.
+
+The re-vendored stdlib closure is the same 23 modules, and exactly one file
+differs from the 6.6.0 copy — `lib/result.cyr`, **comment-only** (the v6.6.2
+same-arity-predicate note). Stripping comments and blank lines from both leaves
+an empty diff, so emitted bytes are unchanged by construction.
+
+⚠ Relevant to consumers, not to darshana: cyrius 6.6.2 finishes retiring the
+boxed accessors. `payload` went at 6.6.0; **`tag` went at 6.6.2** — 6.6.0 had kept
+the name and redefined the body, so on a box it silently returned the pointer —
+while `tagged_new` was *restored* in `lib/boxed.cyr`. `cyrius distlib` now
+**refuses** a bundle whose self-check reports `undefined function 'payload'` or
+`'tag'`; `--allow-undef` no longer downgrades those. `dist/darshana.cyr` carries
+neither name, so the drift check passes unchanged.
+
+### Verified
+
+Linux, AGNOS and aarch64 arms all exercised: 238 unit + 56 PTY assertions native,
+and the same 238 + 56 re-run on the aarch64 binaries under qemu with the smoke
+output matching `darshana smoke ok` exactly.
+
+
 Roadmap restructured around the semver cost of each open item, and a
 stale-information sweep over every doc the last five releases outran. **No
 executable line changed** — the `src/` diff is comment-only, and so is the
