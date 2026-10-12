@@ -12,9 +12,9 @@ Donor: [`cyim/src/tty.cyr`](https://github.com/MacCracken/cyim) (~207 lines, Lin
 
 ## Status
 
-**v1.1.1 — stable. The API has been frozen since v1.0.0.** 29 functions and 37 constants, enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) and machine-checked on every CI run. Breaking any of them now requires a major bump; additive change (new symbols, new platform peers) stays a minor bump. Pin a `1.x` tag and take minor bumps without reading a diff.
+**Stable. The API has been frozen since v1.0.0.** The current version is in [`VERSION`](VERSION). 29 functions and 37 constants, enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) and machine-checked on every CI run. Breaking any of them requires a major bump; additive change (new symbols, new platform peers) stays a minor bump. Pin a `1.x` tag and take minor bumps without reading a diff.
 
-Verified on **Linux/x86_64 and Linux/aarch64** on every CI run — smoke plus both suites, cross-built and executed — and on **AGNOS** by cross-build. 309 assertions. The recent arc: v1.1.1 wired aarch64 into CI and gated the arch-blind-syscall class it exposed; v1.1.0 made the SGR and truecolor composers 18–34% faster with emitted bytes proven unchanged over the complete RGB cube; v1.0.2 was a P-1 audit / hardening / security sweep. See the [CHANGELOG](CHANGELOG.md).
+Verified on **Linux/x86_64 and Linux/aarch64** on every CI run — smoke plus every suite, cross-built and executed — and on **AGNOS** by cross-build. Since v1.1.4 the emitted bytes are frozen by digest: `tests/identity.tcyr` drives every composer over its whole input domain and every fd-1 emitter, and its eleven digests have been identical on every release since the freeze (v1.0.0), on x86_64, under qemu-aarch64 and on a real Raspberry Pi 4. Assertion counts and the release history live in [`docs/development/state.md`](docs/development/state.md) and the [CHANGELOG](CHANGELOG.md).
 
 The TTY surface works on Linux and, since v0.9.0, fully on AGNOS — every syscall-touching entry point (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) has an `#ifdef CYRIUS_TARGET_AGNOS` peer over the kernel's own syscalls (requires agnos ≥ 1.45.13), so consumers stay platform-blind on both targets. macOS/BSD is deliberately out of scope.
 
@@ -27,9 +27,14 @@ Consume it via `cyrius deps` against the `dist/darshana.cyr` bundle — no need 
 ```sh
 cyrius deps                                          # resolve stdlib
 cyrius build programs/smoke.cyr build/darshana-smoke # compile-link smoke
-cyrius distlib                                       # produce dist/darshana.cyr
-cyrius test                                          # run tests/*.tcyr
+cyrius distlib                                       # produce dist/darshana.cyr + .deps
+cyrius test tests/darshana.tcyr tests/pty.tcyr tests/identity.tcyr
+bash scripts/ci.sh all                               # every CI gate, exactly as CI runs it
 ```
+
+Bare `cyrius test` is not the way to run the suites: it also picks up
+`tests/agnos.tcyr`, which only builds `--agnos` (see
+[getting-started](docs/guides/getting-started.md)).
 
 ## Consumers
 
@@ -38,6 +43,12 @@ cyrius test                                          # run tests/*.tcyr
 - [anuenue](https://github.com/MacCracken/anuenue) — drove the truecolor / relative-cursor / color-mode helpers
 - [bannermanor](https://github.com/MacCracken/bannermanor) — figlet-equivalent banner generator (drove the SGR color helpers)
 - [kii](https://github.com/MacCracken/kii) — image → ANSI/ASCII converter (consumes `tty_winsize` to size art to the real console)
+- [thoth](https://github.com/MacCracken/thoth) — rich-TUI agent shell (vendors the bundle by copy)
+- [jalwa](https://github.com/MacCracken/jalwa) — raw mode, alt screen, cursor
+- [darshini](https://github.com/MacCracken/darshini) — directory lister (SGR colors)
+- [agora](https://github.com/MacCracken/agora) — `tty_sgr_buf` composition and a signalfd-driven exit
+
+Per-consumer pins are in [`state.md`](docs/development/state.md) § Consumers.
 
 ## Scope
 
@@ -49,6 +60,7 @@ cyrius test                                          # run tests/*.tcyr
 | Window-size query (`TIOCGWINSZ` on Linux, `winsize`#60 on AGNOS) | Event/input dispatch system |
 | Signal delivery via `signalfd` — `tty_open_signalfd` / `tty_close_signalfd` + `TTY_SIGMASK_*` | Tab/window/pane management |
 | | Signal-*handler* installation (`sigaction`) — routed through `signalfd` instead; see [ADR 0002](docs/adr/0002-state-restore-posture.md) |
+| | Key-input decoding, and an AGNOS raw-keyboard reader — ruled out 2026-10-12; see [roadmap § Out of scope](docs/development/roadmap.md) |
 
 Render loops, widgets, and event loops belong in the consumer. darshana is the primitive layer.
 

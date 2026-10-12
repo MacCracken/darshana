@@ -40,18 +40,27 @@ cyrius deps                                          # resolve the stdlib footpr
 cyrius build programs/smoke.cyr build/darshana-smoke
 cyrius test tests/darshana.tcyr                      # pure surface
 cyrius test tests/pty.tcyr                           # real pseudo-terminal
+cyrius test tests/identity.tcyr                      # emitted-byte digests + byte budgets
 bash scripts/smoke.sh                                # dist drift + frozen surface + gates
+bash scripts/ci.sh all                               # EVERY CI gate, exactly as CI runs it
 ```
 
-Two suites are **not** reachable by `cyrius test` — they are cross-target and
-must be built for their target and then executed:
+`scripts/ci.sh` is the one implementation of every CI gate — `ci.yml` calls
+it step by step — so "passes locally" and "passes in CI" are the same claim.
+It pins each suite's assertion total (`EXPECT_*`): **adding or removing an
+assertion means updating its pin in the same change.**
+
+The AGNOS suite is **not** reachable by `cyrius test` — it is cross-target and
+must be built for its target and then executed. aarch64 is reachable either
+way (`cyrius test --aarch64` drives qemu itself as of cyrius 6.6.20):
 
 ```sh
 cyrius build --agnos   tests/agnos.tcyr    build/agnos-tests && ./build/agnos-tests
+cyrius test --aarch64  tests/darshana.tcyr
 cyrius build --aarch64 tests/darshana.tcyr build/a64-unit    && qemu-aarch64 build/a64-unit
 ```
 
-Both emit x86_64-runnable or qemu-runnable ELFs, so they work on an ordinary
+These emit x86_64-runnable or qemu-runnable ELFs, so they work on an ordinary
 Linux host. CI runs all of them. See [`state.md`](docs/development/state.md)
 §"Release Process" for the aarch64 recipe on a machine whose toolchain install
 lacks `cycc_aarch64`.
@@ -80,7 +89,7 @@ lacks `cycc_aarch64`.
 - **Documentation is never a release by itself.** Doc changes — README, guides, ADRs, `state.md`, the roadmap, and comments/docstrings in `src/` — ride whatever release comes next (patch, minor or major) and never set its level. Record them under `## [Unreleased]` in the CHANGELOG until that release is cut. The one exception is not really one: a docstring edit that changes a documented *contract* is the contract change, priced by ADR 0003 like any other.
 - **Do not add a public symbol without adding it to `scripts/smoke.sh`** (`required_syms` / `required_flags`). The surface check is bidirectional — a public name in dist that the list omits fails CI. Internal helpers take a `_` prefix instead.
 - **Do not add a syscall without adding it to `scripts/syscall-audit.sh`.** That rule is an allowlist, not a denylist: anything unlisted fails, whether or not it looks dangerous.
-- **Never write a syscall number as a bare integer.** It is correct for exactly one architecture, and darshana targets Linux on x86_64 **and** aarch64 (ioctl 16 vs 29, exit 60 vs 93, openat 257 vs 56). Use the stdlib's arch-aware constant, or declare your own inside an explicit `#ifdef CYRIUS_ARCH_X86` / `CYRIUS_ARCH_AARCH64` gate. `syscall(1, ...)` — `write(2)` — is the sole literal exception. This class has bitten three times and is now mechanically gated by `scripts/syscall-audit.sh`; the toolchain's "syscall not routed" diagnostic is Mach-O-only, so nothing else catches it.
+- **Never write a syscall number as a bare integer.** It is correct for exactly one architecture, and darshana targets Linux on x86_64 **and** aarch64 (ioctl 16 vs 29, exit 60 vs 93, openat 257 vs 56). Use the stdlib's arch-aware constant, or declare your own inside an explicit `#ifdef CYRIUS_ARCH_X86` / `CYRIUS_ARCH_AARCH64` gate. `syscall(1, ...)` — `write(2)` — is the sole literal exception. This class has bitten three times and is mechanically gated by `scripts/syscall-audit.sh` across `src/`, `tests/`, `programs/` and `docs/examples/` — both halves: no literal at a call site, and no locally-declared syscall constant outside an arch (or AGNOS-target) gate. (Through v1.1.3 that gate scanned no `*.tcyr` file and checked only call-site literals, so it caught neither the v0.9.2 shape nor the v1.1.0 one; v1.1.4 fixed both.) Prefer the stdlib's constant even over a per-arch declaration: the aarch64 backend rewrites some x86_64 numbers, which is why the stdlib uses private aliases such as `SYS_PPOLL`. The toolchain's "syscall not routed" diagnostic is Mach-O-only, so nothing else catches it.
 
 ## Domain rules (darshana-specific)
 
@@ -88,7 +97,7 @@ lacks `cycc_aarch64`.
 - **darshana is output, termios and signals — never input decoding** (owner ruling, 2026-10-12). No key-sequence decoder (arrows, modifiers, SS3, lone-Esc timing) and no AGNOS kbscan reader, though several consumers hand-roll both. Termios *settings* that affect input (e.g. VMIN/VTIME) are still in charter; parsing what the user typed is not. The reasons are in `roadmap.md` § Out of scope.
 - **Output sanitization IS in charter** (owner ruling, 2026-10-12): neutralizing control bytes in untrusted text before it reaches the terminal is terminal safety, not formatting. It is still consumer-driven — its rule and shape are settled with the consumers that hand-roll it (`roadmap.md`, 1.2.0).
 - **Linux + AGNOS; macOS/BSD is out of scope.** Every syscall-touching entry point has had an `#ifdef CYRIUS_TARGET_AGNOS` peer since v0.9.0, so consumers stay platform-blind across both. Termios layout differs on macOS (BSD) — add that arm only when a real consumer needs it. Gate platform-specific code via `#ifdef CYRIUS_TARGET_LINUX` / `#ifdef CYRIUS_TARGET_AGNOS`, and keep the tokens *inside* their gate. `scripts/platform-gate.sh` enforces this **positionally** (by line number, not substring presence) and **corpus-wide** (every `src/*.cyr`, not just `termios.cyr`); `scripts/smoke.sh` and the CI security job both call that one script, so their verdicts cannot drift.
-- **No FFI / libc / ncurses.** Same sovereign-stack rule as chakshu / cyim. termios is `syscall(SYS_IOCTL, fd, TCGETS|TCSETS, &buf)`; ANSI is `syscall(SYS_WRITE, 1, "\e[...", n)`. No `tcgetattr(3)`, no `tputs(3)`.
+- **No FFI / libc / ncurses.** Same sovereign-stack rule as chakshu / cyim. termios is `syscall(SYS_IOCTL, fd, TCGETS|TCSETS, &buf)`; ANSI is `syscall(1, 1, "\e[...", n)` — write(2) as the literal `1`, the one literal `scripts/syscall-audit.sh` permits (`SYS_WRITE` is not on its allowlist). No `tcgetattr(3)`, no `tputs(3)`.
 - **Consumers drive the API.** Don't add knobs cyim/chakshu haven't asked for. The whole point of extracting cyim's tty.cyr was that chakshu's needs would shape the seams — listen to those needs, don't anticipate hypothetical ones.
 
 ## Documentation
@@ -98,7 +107,7 @@ lacks `cycc_aarch64`.
 - [`docs/guides/`](docs/guides/) — Task-oriented how-tos
 - [`docs/examples/`](docs/examples/) — Runnable examples
 - [`docs/development/state.md`](docs/development/state.md) — Live state snapshot
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — **Forward-facing only**: what is left to do, bucketed by the semver bump it would cost (`1.1.x` patch / `1.x.0` minor / `2.0.0` major). Closed items are deleted from it, not checked off — shipped work lives in the CHANGELOG, current state in `state.md`.
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — **Forward-facing only**: what is left to do, organized around the next release and the semver bump each item would cost (patch / minor / major), plus the out-of-scope charter boundaries. Closed items are deleted from it, not checked off — shipped work lives in the CHANGELOG, current state in `state.md`.
 
 ## Process
 

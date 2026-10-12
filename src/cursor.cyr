@@ -20,8 +20,8 @@
 # digit-count to new-position: the old name was a generic misnomer and
 # the digit-count return was the lone odd-one-out in the `_buf` family
 # (every other `_buf` helper returns the new position) — a documented
-# footgun. `tmp` is sized 24: an i64 is at most 20 decimal digits, so
-# 24 leaves headroom.
+# footgun. `tmp` is sized 24: a positive i64 is at most 19 decimal
+# digits (negative values clamp to '0'), so 24 leaves headroom.
 #
 # Byte budget: 1 byte when `val <= 0`; up to 19 bytes for a positive
 # i64 (i64 max is 19 decimal digits). There is no capacity argument,
@@ -58,7 +58,7 @@ fn tty_dec_buf(buf, pos, val) {
 # *before* any byte reaches fd 1, matching the fail-before-emit
 # discipline of tty_sgr ([0,999]) and tty_fg_rgb ([0,255]). The bound
 # is the u16 winsize envelope every real caller draws from; an out-of-
-# range coordinate would otherwise feed tty_dec_buf up to 20 digits and
+# range coordinate would otherwise feed tty_dec_buf up to 19 digits and
 # a malformed CSI to the terminal.
 #
 # Composes the escape into a stack buf and writes it in one syscall —
@@ -124,6 +124,12 @@ fn _cursor_rel(n, final) {
 # NO-OP, not a rejection: xterm treats `CSI 0A` as "move 1 row", so
 # guarding here lets callers pass an unchecked row count straight
 # through without special-casing zero.
+#
+# There is no upper bound: `n` up to i64 max is emitted as-is, a
+# parameter of up to 19 digits (digits only, so nothing can be
+# injected). Terminals clamp the move to the screen edge, but some cap
+# the parameter itself; keep `n` within the window size. darshana does
+# not clamp, because the emitted bytes are frozen (ADR 0003).
 fn tty_cursor_up(n) {
     return _cursor_rel(n, 0x41);     # 'A'
 }

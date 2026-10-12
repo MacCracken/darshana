@@ -11,6 +11,13 @@
 # to a TTY does not partial-write in practice, and a consumer mid-
 # render has no meaningful recovery from a failed escape, so the
 # emitters keep their call sites clean rather than thread an error.
+#
+# ⚠ One failure is not quiet: if fd 1 is a pipe whose reader has gone
+# (`prog | head -c1`), the write raises SIGPIPE, whose default action
+# kills the process on the spot. That is why a teardown restores the
+# terminal with `tty_cooked()` BEFORE emitting any of these (ADR 0002,
+# amended v1.1.4) — and why a consumer that may write to a pipe should
+# ignore SIGPIPE. TTY_SIGMASK_EXIT does not include it.
 # The `_buf` composers in this file (and `tty_dec_buf` in cursor.cyr)
 # are the batching answer for frame-coalesced writes: compose into a
 # caller buffer and issue one write(2) at frame end.
@@ -149,9 +156,8 @@ fn tty_sgr_reset() {
 # - `_buf` variants append into a caller-provided buffer and return
 #   the new write position. Used by pipe filters that batch many
 #   escapes + payload bytes into a single line-sized write to avoid
-#   per-character syscall overhead. anuenue's M1 loop is the first
-#   and so far only `_buf` consumer; chakshu's draw path still uses
-#   the direct fd-1 emitters.
+#   per-character syscall overhead. anuenue's M1 loop was the first
+#   `_buf` consumer; kii and agora have since joined it.
 #
 # Escape layout (foreground): `CSI 38;2;<R>;<G>;<B>m` — 19 bytes max
 # (ESC[ + "38;2;" + "255" * 3 + ";" * 2 + "m"). Background swaps "38"
@@ -173,9 +179,9 @@ fn tty_sgr_reset() {
 # measurements are recorded because the obvious way is a trap.
 #
 # Delegating the five call sites to `tty_dec_buf` is byte-identical
-# (proven exhaustively) and **44% SLOWER**: 20M `tty_fg_rgb_buf` calls
-# went 983 ms -> 1418 ms, `tty_fg_256_buf` 468 -> 605, `tty_sgr_buf`
-# 354 -> 511. `tty_dec_buf` is a general i64 formatter — it reverses
+# (proven exhaustively) and 32-45% SLOWER: 20M `tty_fg_rgb_buf` calls
+# went 990 ms -> 1418 ms, `tty_fg_256_buf` 458 -> 605, `tty_sgr_buf`
+# 353 -> 511 (the CHANGELOG [1.1.0] table; median of 7). `tty_dec_buf` is a general i64 formatter — it reverses
 # digits through a 24-byte scratch array and copies them back — where
 # these composers only ever emit 1-3 digits.
 #
@@ -218,7 +224,7 @@ fn tty_sgr_reset() {
 #
 # v1.1.0 rewrote the body for speed without moving a byte: the 7-byte
 # fixed prefix is one store, and the three digit emissions are inline
-# (see the section note above). 20M calls: 983 ms -> 698 ms, -29%.
+# (see the section note above). 20M calls: 990 ms -> 696 ms, -30%.
 fn _ansi_rgb_buf(buf, pos, layer, r, g, b) {
     if (pos < 0) { return 0 - 1; }
     if (r < 0 || r > 255) { return 0 - 1; }
@@ -358,10 +364,10 @@ fn tty_sgr_buf(buf, pos, code) {
 # builder. Byte budget: up to 11.
 #
 # The background twin (`tty_bg_256_buf`) is deferred — see roadmap.md
-# §"Next, by bucket" (1.x.0) and CHANGELOG v0.5.3 — under the same
+# §"Queued: 1.2.0" (candidate 4) and CHANGELOG v0.5.3 — under the same
 # extract-on-2nd-consumer discipline as v0.5.1's bg/fg split. kii
-# carries a local `_emit_bg_256_buf` as consumer #1; lift it here
-# when a second consumer needs it.
+# carries a local `_emit_bg_256_buf` as consumer #1, and thoth now
+# hand-rolls the same escape, so the lift is queued for 1.2.0.
 fn tty_fg_256_buf(buf, pos, n) {
     if (pos < 0) { return 0 - 1; }
     if (n < 0 || n > 255) { return 0 - 1; }

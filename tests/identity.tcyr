@@ -1,0 +1,479 @@
+# darshana emitted-byte identity + byte-budget suite (v1.1.4).
+#
+# Two jobs, one file:
+#
+#   1. BYTE BUDGETS, ABSOLUTELY. Every `_buf` composer is called over its
+#      WHOLE input domain (the complete [0,255]^3 RGB cube for the two RGB
+#      composers; every code / index / digit-length boundary for the rest;
+#      every rejection edge; start positions 0-7) into a 0xAA-poisoned guard
+#      region larger than the buffer. Each call must (a) leave every byte
+#      outside [pos, ret) untouched, (b) stay inside its documented budget,
+#      and (c) on a rejection, touch nothing at all. That is the whole
+#      memory-safety contract of a composer with no capacity argument, and
+#      for these finite domains an exhaustive check is strictly stronger
+#      than random fuzzing.
+#
+#   2. EMITTED BYTES, FROZEN. ADR 0003 freezes emitted bytes. Each composer
+#      group, and each fd-1 emitter group (captured through a pipe dup'd over
+#      fd 1), folds every return value and every byte it produced into a
+#      64-bit digest that must equal the EXPECTED value below. Any change to
+#      what darshana emits — including a byte-identical-looking optimization
+#      that is not — moves a digest and fails this suite by name.
+#
+# This replaces two harnesses that proved v1.0.1 and v1.1.0 byte-identical
+# but lived outside the repo ("regenerate as needed"): a streaming sha256
+# dump and an exhaustive RGB-cube checksum. Their record formats were never
+# written down and the scripts are gone, so their recorded values cannot be
+# re-derived. The proof now lives here, and the fold is documented below.
+#
+# The digests were cross-checked when this file landed: identical when the
+# same harness is compiled against the v1.0.2 tag's src/ (before v1.1.0's
+# composer rewrite) and against v1.1.0 and v1.1.3 — which re-proves v1.1.0's
+# byte-identity claim with a harness anyone can re-run.
+#
+# UPDATING A DIGEST is a frozen-surface change (ADR 0003): it needs a major,
+# or an additive symbol that only adds records. Never "fix" this suite by
+# pasting in the new value.
+#
+# Fold: h' = (h XOR w) * 1099511628211 (the 64-bit FNV prime; wrapping i64
+# multiply), seeded per group, over: the return value, then — on success —
+# the ten 8-byte words of the 80-byte guard region. Emitter records fold the
+# call's arguments, its return, the captured length and every captured byte.
+# Not cryptographic: a change detector, which is all a frozen-bytes gate
+# needs.
+
+include "src/main.cyr"
+
+var ID_SEED = 1469598103934665603;
+var ID_PRIME = 1099511628211;
+var ID_IMAX = 9223372036854775807;
+var ID_IMIN = (0 - 9223372036854775807) - 1;
+
+# Guard region: 80 bytes. Composers write at region + 16 + pos, pos in
+# [0, 7], and the largest budget is 19, so the furthest legal byte is
+# offset 16 + 7 + 19 - 1 = 41. Everything else must stay 0xAA.
+var ID_BASE = 16;
+var _id_region[80];
+var _id_aa = 0;
+var _id_bad = 0;          # budget / guard violations (absolute checks)
+var _id_records = 0;
+
+fn _id_mix(h, w) {
+    return (h ^ w) * ID_PRIME;
+}
+
+fn _id_poison() {
+    var i = 0;
+    while (i < 80) {
+        store64(&_id_region + i, _id_aa);
+        i = i + 8;
+    }
+    return 0;
+}
+
+# 1 if every byte outside [lo, hi) of the guard region is still 0xAA.
+# Whole words that cannot overlap [lo, hi) are compared 8 bytes at a time.
+fn _id_guard_ok(lo, hi) {
+    var w = 0;
+    while (w < 80) {
+        if (w + 8 <= lo || w >= hi) {
+            if (load64(&_id_region + w) != _id_aa) { return 0; }
+        } else {
+            var b = w;
+            while (b < w + 8) {
+                if (b < lo || b >= hi) {
+                    if (load8(&_id_region + b) != 0xAA) { return 0; }
+                }
+                b = b + 1;
+            }
+        }
+        w = w + 8;
+    }
+    return 1;
+}
+
+# Account for one composer call. `pos` is where it was asked to write,
+# `ret` what it returned, `minlen`/`maxlen` its documented length envelope
+# (`maxlen` is the byte budget). Returns the updated digest.
+fn _id_account(h, pos, ret, minlen, maxlen) {
+    _id_records = _id_records + 1;
+    h = _id_mix(h, ret);
+    if (ret == 0 - 1) {
+        # A rejection writes nothing at all.
+        if (_id_guard_ok(0, 0) == 0) { _id_bad = _id_bad + 1; }
+        return h;
+    }
+    var len = ret - pos;
+    if (len < minlen || len > maxlen) { _id_bad = _id_bad + 1; }
+    if (_id_guard_ok(ID_BASE + pos, ID_BASE + ret) == 0) { _id_bad = _id_bad + 1; }
+    var w = 0;
+    while (w < 80) {
+        h = _id_mix(h, load64(&_id_region + w));
+        w = w + 8;
+    }
+    return h;
+}
+
+# ---- composers --------------------------------------------------------
+
+# `layer` 0 = tty_fg_rgb_buf, 1 = tty_bg_rgb_buf. Budget 13..19 bytes.
+fn _id_rgb(h, layer, pos, r, g, b) {
+    _id_poison();
+    var ret = 0;
+    if (layer == 0) { ret = tty_fg_rgb_buf(&_id_region + ID_BASE, pos, r, g, b); }
+    else            { ret = tty_bg_rgb_buf(&_id_region + ID_BASE, pos, r, g, b); }
+    return _id_account(h, pos, ret, 13, 19);
+}
+
+fn _id_rgb_group(layer) {
+    var h = ID_SEED + layer;
+    # The complete cube at pos = 3 (the v1.1.0 harness's start position).
+    var r = 0;
+    while (r < 256) {
+        var g = 0;
+        while (g < 256) {
+            var b = 0;
+            while (b < 256) {
+                h = _id_rgb(h, layer, 3, r, g, b);
+                b = b + 1;
+            }
+            g = g + 1;
+        }
+        r = r + 1;
+    }
+    # Every start position over the grey ramp, so each alignment of the
+    # unaligned 8-byte prefix store is exercised with every digit length.
+    var pos = 0;
+    while (pos < 8) {
+        var v = 0;
+        while (v < 256) { h = _id_rgb(h, layer, pos, v, v, v); v = v + 1; }
+        pos = pos + 1;
+    }
+    # Rejections: each channel out of range alone, then a bad pos.
+    var k = 0;
+    while (k < 4) {
+        var bad = 0 - 1;
+        if (k == 1) { bad = 256; }
+        if (k == 2) { bad = ID_IMIN; }
+        if (k == 3) { bad = ID_IMAX; }
+        h = _id_rgb(h, layer, 3, bad, 0, 255);
+        h = _id_rgb(h, layer, 3, 0, bad, 255);
+        h = _id_rgb(h, layer, 3, 0, 255, bad);
+        k = k + 1;
+    }
+    h = _id_rgb(h, layer, 0 - 1, 1, 2, 3);
+    h = _id_rgb(h, layer, ID_IMIN, 1, 2, 3);
+    return h;
+}
+
+fn _id_fg256(h, pos, n) {
+    _id_poison();
+    var ret = tty_fg_256_buf(&_id_region + ID_BASE, pos, n);
+    return _id_account(h, pos, ret, 9, 11);
+}
+
+fn _id_fg256_group() {
+    var h = ID_SEED + 2;
+    var pos = 0;
+    while (pos < 8) {
+        var n = 0 - 1;
+        while (n <= 256) { h = _id_fg256(h, pos, n); n = n + 1; }
+        h = _id_fg256(h, pos, ID_IMIN);
+        h = _id_fg256(h, pos, ID_IMAX);
+        pos = pos + 1;
+    }
+    h = _id_fg256(h, 0 - 1, 7);
+    h = _id_fg256(h, ID_IMIN, 7);
+    return h;
+}
+
+fn _id_sgr(h, pos, code) {
+    _id_poison();
+    var ret = tty_sgr_buf(&_id_region + ID_BASE, pos, code);
+    return _id_account(h, pos, ret, 4, 6);
+}
+
+fn _id_sgr_group() {
+    var h = ID_SEED + 3;
+    var pos = 0;
+    while (pos < 8) {
+        var c = 0 - 1;
+        while (c <= 1000) { h = _id_sgr(h, pos, c); c = c + 1; }
+        h = _id_sgr(h, pos, ID_IMIN);
+        h = _id_sgr(h, pos, ID_IMAX);
+        pos = pos + 1;
+    }
+    h = _id_sgr(h, 0 - 1, 1);
+    h = _id_sgr(h, ID_IMIN, 1);
+    return h;
+}
+
+fn _id_reset(h, pos) {
+    _id_poison();
+    var ret = tty_sgr_reset_buf(&_id_region + ID_BASE, pos);
+    return _id_account(h, pos, ret, 4, 4);
+}
+
+fn _id_reset_group() {
+    var h = ID_SEED + 4;
+    var pos = 0;
+    while (pos < 8) { h = _id_reset(h, pos); pos = pos + 1; }
+    h = _id_reset(h, 0 - 1);
+    h = _id_reset(h, ID_IMIN);
+    return h;
+}
+
+# tty_dec_buf: 1 byte for val <= 0, 1..19 for val > 0.
+fn _id_dec(h, pos, val) {
+    _id_poison();
+    var ret = tty_dec_buf(&_id_region + ID_BASE, pos, val);
+    var minlen = 1;
+    var maxlen = 19;
+    if (val <= 0) { maxlen = 1; }
+    return _id_account(h, pos, ret, minlen, maxlen);
+}
+
+fn _id_dec_group() {
+    var h = ID_SEED + 5;
+    var pos = 0;
+    while (pos < 8) {
+        var v = 0 - 2;
+        while (v <= 2000) { h = _id_dec(h, pos, v); v = v + 1; }
+        # Every digit-length boundary up to the largest i64.
+        var p = 10;
+        var k = 1;
+        while (k <= 18) {
+            h = _id_dec(h, pos, p - 1);
+            h = _id_dec(h, pos, p);
+            h = _id_dec(h, pos, p + 1);
+            p = p * 10;
+            k = k + 1;
+        }
+        h = _id_dec(h, pos, ID_IMAX);
+        h = _id_dec(h, pos, ID_IMIN);
+        h = _id_dec(h, pos, ID_IMIN + 1);
+        pos = pos + 1;
+    }
+    h = _id_dec(h, 0 - 1, 5);
+    h = _id_dec(h, ID_IMIN, 5);
+    return h;
+}
+
+# ---- fd-1 emitters, captured through a pipe ----------------------------
+
+var _id_rfd = 0 - 1;
+var _id_wfd = 0 - 1;
+var _id_cap[512];
+var _id_capture_fail = 0;
+
+# Run emitter `id` with up to three args with fd 1 pointed at the pipe,
+# put fd 1 back, then drain what it wrote. Folds everything observable.
+fn _id_emit(h, id, a, b, c) {
+    var saved = syscall(SYS_DUP, 1);
+    if (saved < 0) { _id_capture_fail = _id_capture_fail + 1; return h; }
+    sys_dup2(_id_wfd, 1);
+    var ret = 0;
+    if (id == 0)  { ret = tty_alt_enter(); }
+    if (id == 1)  { ret = tty_alt_leave(); }
+    if (id == 2)  { ret = tty_clear(); }
+    if (id == 3)  { ret = tty_clear_to_eol(); }
+    if (id == 4)  { ret = tty_clear_to_eos(); }
+    if (id == 5)  { ret = tty_cursor_hide(); }
+    if (id == 6)  { ret = tty_cursor_show(); }
+    if (id == 7)  { ret = tty_cursor_home(); }
+    if (id == 8)  { ret = tty_sgr_reset(); }
+    if (id == 9)  { ret = tty_sgr(a); }
+    if (id == 10) { ret = tty_fg_rgb(a, b, c); }
+    if (id == 11) { ret = tty_bg_rgb(a, b, c); }
+    if (id == 12) { ret = tty_move(a, b); }
+    if (id == 13) { ret = tty_cursor_up(a); }
+    if (id == 14) { ret = tty_cursor_down(a); }
+    sys_dup2(saved, 1);
+    sys_close(saved);
+    var n = sys_read(_id_rfd, &_id_cap, 512);
+    if (n < 0) { n = 0; }              # EAGAIN: the call wrote nothing
+    _id_records = _id_records + 1;
+    h = _id_mix(h, id);
+    h = _id_mix(h, a);
+    h = _id_mix(h, b);
+    h = _id_mix(h, c);
+    h = _id_mix(h, ret);
+    h = _id_mix(h, n);
+    var i = 0;
+    while (i < n) { h = _id_mix(h, load8(&_id_cap + i)); i = i + 1; }
+    return h;
+}
+
+fn _id_fixed_group() {
+    var h = ID_SEED + 6;
+    var id = 0;
+    while (id <= 8) { h = _id_emit(h, id, 0, 0, 0); id = id + 1; }
+    return h;
+}
+
+fn _id_sgr_emit_group() {
+    var h = ID_SEED + 7;
+    var c = 0 - 1;
+    while (c <= 1000) { h = _id_emit(h, 9, c, 0, 0); c = c + 1; }
+    h = _id_emit(h, 9, ID_IMIN, 0, 0);
+    h = _id_emit(h, 9, ID_IMAX, 0, 0);
+    return h;
+}
+
+# The one-shot RGB writers wrap _ansi_rgb_buf, which the composer groups
+# cover exhaustively; here a corner cube proves the write path itself.
+fn _id_rgb_emit_group() {
+    var h = ID_SEED + 8;
+    var vals[8];
+    store8(&vals, 0);   store8(&vals + 1, 1);   store8(&vals + 2, 9);
+    store8(&vals + 3, 10); store8(&vals + 4, 99); store8(&vals + 5, 100);
+    store8(&vals + 6, 254); store8(&vals + 7, 255);
+    var layer = 10;
+    while (layer <= 11) {
+        var i = 0;
+        while (i < 8) {
+            var j = 0;
+            while (j < 8) {
+                var k = 0;
+                while (k < 8) {
+                    h = _id_emit(h, layer, load8(&vals + i), load8(&vals + j), load8(&vals + k));
+                    k = k + 1;
+                }
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+        h = _id_emit(h, layer, 0 - 1, 0, 0);
+        h = _id_emit(h, layer, 0, 256, 0);
+        h = _id_emit(h, layer, 0, 0, ID_IMIN);
+        layer = layer + 1;
+    }
+    return h;
+}
+
+fn _id_move_group() {
+    var h = ID_SEED + 9;
+    var vals[128];
+    store64(&vals,       0);     store64(&vals + 8,   1);
+    store64(&vals + 16,  2);     store64(&vals + 24,  9);
+    store64(&vals + 32,  10);    store64(&vals + 40,  99);
+    store64(&vals + 48,  100);   store64(&vals + 56,  999);
+    store64(&vals + 64,  1000);  store64(&vals + 72,  9999);
+    store64(&vals + 80,  10000); store64(&vals + 88,  65534);
+    store64(&vals + 96,  65535); store64(&vals + 104, 65536);
+    store64(&vals + 112, ID_IMIN); store64(&vals + 120, ID_IMAX);
+    var i = 0;
+    while (i < 16) {
+        var j = 0;
+        while (j < 16) {
+            h = _id_emit(h, 12, load64(&vals + i * 8), load64(&vals + j * 8), 0);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    var n = 1;
+    while (n <= 1100) {
+        h = _id_emit(h, 12, n, 1, 0);
+        h = _id_emit(h, 12, 1, n, 0);
+        n = n + 1;
+    }
+    return h;
+}
+
+fn _id_rel_group() {
+    var h = ID_SEED + 10;
+    var id = 13;
+    while (id <= 14) {
+        var n = 0 - 2;
+        while (n <= 1100) { h = _id_emit(h, id, n, 0, 0); n = n + 1; }
+        var p = 10;
+        var k = 1;
+        while (k <= 18) {
+            h = _id_emit(h, id, p - 1, 0, 0);
+            h = _id_emit(h, id, p, 0, 0);
+            h = _id_emit(h, id, p + 1, 0, 0);
+            p = p * 10;
+            k = k + 1;
+        }
+        h = _id_emit(h, id, ID_IMAX, 0, 0);
+        h = _id_emit(h, id, ID_IMIN, 0, 0);
+        id = id + 1;
+    }
+    return h;
+}
+
+# ---- expected digests (frozen — see the header before touching) --------
+
+var EXPECT_FG_RGB    = (0 - 2994597192840213677);   # 0xd6710db81b608b53
+var EXPECT_BG_RGB    = (0 - 4546277609968130888);   # 0xc0e86099d789a4b8
+var EXPECT_FG_256    = 2184592974035930553;   # 0x1e513bbc4439cdb9
+var EXPECT_SGR_BUF   = 4209402076987493844;   # 0x3a6acce2fba18dd4
+var EXPECT_RESET_BUF = (0 - 4177354535157875462);   # 0xc6070e2ecf0c3cfa
+var EXPECT_DEC_BUF   = 464301250883807051;   # 0x0671878717b2e74b
+var EXPECT_FIXED     = (0 - 7194304134156127716);   # 0x9c28b281cd7ff21c
+var EXPECT_SGR       = 8416752889827628924;   # 0x74ce5028d06b177c
+var EXPECT_RGB_EMIT  = (0 - 2693599707969797582);   # 0xda9e69563f5d4232
+var EXPECT_MOVE      = (0 - 1328405259568562800);   # 0xed908e7461a7bd90
+var EXPECT_REL       = (0 - 3644634539072174773);   # 0xcd6ba832627bc54b
+
+fn _id_report(name, got, want) {
+    syscall(1, 1, "  ", 2);
+    syscall(1, 1, name, strlen(name));
+    syscall(1, 1, " = 0x", 5);
+    fmt_hex(got);
+    syscall(1, 1, "\n", 1);
+    assert_eq(got, want, name);
+    return 0;
+}
+
+fn main() {
+    _id_aa = 0xAAAAAAAA;
+    _id_aa = _id_aa | (_id_aa << 32);
+
+    println("=== identity.tcyr — composers, whole domain ===");
+    var d_fg  = _id_rgb_group(0);
+    var d_bg  = _id_rgb_group(1);
+    var d_256 = _id_fg256_group();
+    var d_sgb = _id_sgr_group();
+    var d_rst = _id_reset_group();
+    var d_dec = _id_dec_group();
+    assert_eq(_id_bad, 0, "every composer call stayed in budget and inside [pos, ret)");
+
+    println("=== identity.tcyr — fd-1 emitters, captured ===");
+    var fds[8];
+    store64(&fds, 0);
+    var prc = sys_pipe(&fds);
+    assert_eq(prc, 0, "pipe for fd-1 capture");
+    _id_rfd = tio_load32(&fds, 0);
+    _id_wfd = tio_load32(&fds, 4);
+    assert(fd_set_nonblocking(_id_rfd) >= 0, "capture pipe read end non-blocking");
+    var d_fix = _id_fixed_group();
+    var d_sgr = _id_sgr_emit_group();
+    var d_rgb = _id_rgb_emit_group();
+    var d_mov = _id_move_group();
+    var d_rel = _id_rel_group();
+    assert_eq(_id_capture_fail, 0, "every fd-1 capture could dup fd 1");
+    sys_close(_id_rfd);
+    sys_close(_id_wfd);
+
+    println("=== identity.tcyr — digests ===");
+    _id_report("tty_fg_rgb_buf (cube + edges)", d_fg, EXPECT_FG_RGB);
+    _id_report("tty_bg_rgb_buf (cube + edges)", d_bg, EXPECT_BG_RGB);
+    _id_report("tty_fg_256_buf", d_256, EXPECT_FG_256);
+    _id_report("tty_sgr_buf", d_sgb, EXPECT_SGR_BUF);
+    _id_report("tty_sgr_reset_buf", d_rst, EXPECT_RESET_BUF);
+    _id_report("tty_dec_buf", d_dec, EXPECT_DEC_BUF);
+    _id_report("fixed emitters", d_fix, EXPECT_FIXED);
+    _id_report("tty_sgr", d_sgr, EXPECT_SGR);
+    _id_report("tty_fg_rgb / tty_bg_rgb", d_rgb, EXPECT_RGB_EMIT);
+    _id_report("tty_move", d_mov, EXPECT_MOVE);
+    _id_report("tty_cursor_up / tty_cursor_down", d_rel, EXPECT_REL);
+    syscall(1, 1, "  records: ", 11);
+    fmt_int(_id_records);
+    syscall(1, 1, "\n", 1);
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(SYS_EXIT, exit_code);

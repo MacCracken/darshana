@@ -1,15 +1,27 @@
 name: Release
 
-# Triggers on semver tags only (1.0.0, 1.2.3, 2.0.0-rc1). An optional
-# leading `v` is accepted (v1.0.0). Non-numeric tags are ignored.
+# Triggers on plain X.Y.Z semver tags only (1.0.0, 1.2.3), with an optional
+# leading `v` (v1.0.0). Pre-release tags such as 2.0.0-rc1 do NOT trigger:
+# the filter globs match the whole ref. (Through v1.1.3 this comment said
+# they did.)
 on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+'
 
+# v1.1.4: least privilege. Through v1.1.3 `contents: write` sat here, so every
+# job held a write token — including the reused CI gate, which runs the whole
+# test and build toolchain. Only the `release` job publishes, so only it gets
+# write (see its own `permissions:` block); everything else reads.
+#
+# Third-party actions are pinned by commit SHA, with the tag they resolved from
+# in a trailing comment. A mutable tag (`@v4`) lets whoever controls that tag
+# change the code that runs here — and these jobs build and upload the
+# artifacts consumers download. To bump one, resolve the new tag to its commit
+# (GitHub API `git/ref/tags/<tag>`) and update both the SHA and the comment.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # ────────────────────────────────────────────────────────────────
@@ -36,7 +48,7 @@ jobs:
     outputs:
       version: ${{ steps.extract.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Extract VERSION / tag / cyml version
         id: extract
@@ -75,7 +87,7 @@ jobs:
     env:
       VERSION: ${{ needs.version-verify.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Install Cyrius toolchain
         # The cyrius.cyml `[package].cyrius` pin is the single source of truth
@@ -91,11 +103,15 @@ jobs:
         # symlinks bin/ + lib/ at it, and additionally does SHA256 +
         # signature verification the hand-rolled block skipped. Same
         # pattern as patra / libro.
+        #
+        # v1.1.4: fetched at the pinned tag, not `main` — the installer
+        # carries the release-signing public key, so its source must be as
+        # pinned as the version it installs. Same fix as ci.yml.
         run: |
           set -e
           CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
           echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sSf https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | \
+          curl -sSf "https://raw.githubusercontent.com/MacCracken/cyrius/${CYRIUS_VERSION}/scripts/install.sh" | \
             CYRIUS_VERSION="$CYRIUS_VERSION" sh
           echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
@@ -114,43 +130,48 @@ jobs:
       - name: Resolve dependencies
         run: cyrius deps
 
-      - name: Regenerate dist bundle
-        # Even though the CI gate verifies dist isn't drifted, regen
-        # here so the artifact ships the freshly-built bytes (which
-        # also re-write the version header from VERSION). Belt and
-        # braces — drift detection caught the stale case; regen
-        # ensures the published artifact is canonical.
+      - name: Verify dist is current
+        # v1.1.4: verify, do not regenerate. Through v1.1.3 this step ran
+        # `cyrius distlib` and shipped whatever it produced — bytes the CI
+        # gate above never saw. `--check` fails (exit 1) if either committed
+        # artifact, the bundle or the sidecar, is stale, so the release
+        # ships exactly the bytes that were tested and tagged.
         run: |
-          cyrius distlib
+          cyrius distlib --check
           echo "dist/darshana.cyr: $(wc -c < dist/darshana.cyr) bytes"
+          echo "dist/darshana.deps: $(wc -l < dist/darshana.deps) lines"
 
       - name: Package dist artifact
-        # Single dist artifact: dist/darshana.cyr + minimal project
-        # metadata. Consumers fetch this via cyrius deps from the GH
-        # release, not from a tarball — but we ship a tarball too for
-        # offline mirrors / vendoring.
+        # The dist artifacts — dist/darshana.cyr and its stdlib-leaf
+        # sidecar dist/darshana.deps — plus minimal project metadata.
+        # Consumers fetch these via cyrius deps from the GH release, not
+        # from a tarball, but we ship a tarball too for offline mirrors /
+        # vendoring. v1.1.4: the sidecar ships too; without it a vendored
+        # bundle does not say which stdlib leaves it needs.
         run: |
           PKG="darshana-${VERSION}"
           mkdir -p "pkg/$PKG"
-          cp dist/darshana.cyr "pkg/$PKG/"
+          cp dist/darshana.cyr dist/darshana.deps "pkg/$PKG/"
           cp README.md LICENSE CHANGELOG.md VERSION cyrius.cyml "pkg/$PKG/"
           mkdir -p out
           tar czf "out/${PKG}.tar.gz" -C pkg "$PKG"
-          # Also publish dist/darshana.cyr standalone for direct fetch.
-          cp dist/darshana.cyr "out/darshana-${VERSION}.cyr"
+          # Also publish both dist artifacts standalone for direct fetch.
+          cp dist/darshana.cyr  "out/darshana-${VERSION}.cyr"
+          cp dist/darshana.deps "out/darshana-${VERSION}.deps"
 
       - name: Generate SHA256
         run: |
           cd out
-          sha256sum *.tar.gz *.cyr > SHA256SUMS.dist
+          sha256sum *.tar.gz *.cyr *.deps > SHA256SUMS.dist
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: release-dist
           path: |
             out/*.tar.gz
             out/*.cyr
+            out/*.deps
             out/SHA256SUMS.*
 
   # ────────────────────────────────────────────────────────────────
@@ -163,7 +184,7 @@ jobs:
     env:
       VERSION: ${{ needs.version-verify.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Create source tarball
         run: |
@@ -175,7 +196,7 @@ jobs:
           sha256sum "darshana-${VERSION}-src.tar.gz" > SHA256SUMS.src
 
       - name: Upload source artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: release-source
           path: |
@@ -192,20 +213,23 @@ jobs:
     name: GitHub release
     needs: [package, source, version-verify]
     runs-on: ubuntu-latest
+    # The one job that writes: it creates the GitHub release and uploads assets.
+    permissions:
+      contents: write
     env:
       VERSION: ${{ needs.version-verify.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Download all release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           path: dist-raw
 
       - name: Consolidate artifacts
         run: |
           mkdir -p out
-          find dist-raw -type f \( -name '*.tar.gz' -o -name '*.cyr' -o -name 'SHA256SUMS.*' \) \
+          find dist-raw -type f \( -name '*.tar.gz' -o -name '*.cyr' -o -name '*.deps' -o -name 'SHA256SUMS.*' \) \
             -exec cp {} out/ \;
           cd out
           cat SHA256SUMS.* | sort -u > SHA256SUMS
@@ -224,7 +248,7 @@ jobs:
           fi
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
           name: "darshana ${{ env.VERSION }}"
           body_path: /tmp/body.md
@@ -232,6 +256,7 @@ jobs:
           files: |
             out/*.tar.gz
             out/*.cyr
+            out/*.deps
             out/SHA256SUMS
           generate_release_notes: true
           fail_on_unmatched_files: true

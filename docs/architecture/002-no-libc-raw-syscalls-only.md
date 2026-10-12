@@ -39,23 +39,42 @@ the compiler's "syscall not routed" diagnostic is Mach-O-only:
 | through v1.0.1 | `docs/examples/raw_loop.cyr` ended with `syscall(60, ...)` for exit, outside both platform gates | a stray `winsize` on AGNOS, where 60 is the console-grid call |
 | through v1.1.0 | both test suites hardcoded ioctl / nanosleep / dup / dup2 / openat / close / prlimit64 / rt_sigprocmask | `tests/pty.tcyr` failed 15 of 53 assertions the first time it ran on real aarch64; four `tests/darshana.tcyr` assertions — including the v1.0.2 signalfd security regression test — silently never ran there while *looking* like a deliberate skip |
 
-Two gates now enforce it, and both carry a `--self-test` because a gate that
-cannot fail proves nothing. `scripts/platform-gate.sh` checks **positionally**
-(by line number) and **corpus-wide** (every `src/*.cyr`, not one file) that
-Linux ioctl tokens stay inside the Linux gate and agnos tokens inside theirs.
-`scripts/syscall-audit.sh` additionally refuses any syscall number written as a
-bare integer, anywhere in `src/`, `tests/`, `programs/` or `docs/examples/` —
-`syscall(1, ...)` excepted.
+Two gates enforce it, and both carry a `--self-test` because a gate that cannot
+fail proves nothing. `scripts/platform-gate.sh` checks **positionally** (by line
+number) and **corpus-wide** (every `src/*.cyr`, not one file) that Linux ioctl and
+signalfd tokens stay inside the Linux gate and agnos tokens inside theirs.
+`scripts/syscall-audit.sh` refuses any syscall number written as a bare integer,
+and any locally-declared syscall constant outside an arch (or AGNOS-target) gate,
+anywhere in `src/`, `tests/`, `programs/` or `docs/examples/` — `syscall(1, ...)`
+excepted.
+
+⚠ Until v1.1.4 that sentence overstated what ran. The literal rule globbed
+`*.cyr`, so it never scanned a single `*.tcyr` test, and it looked only at call
+sites, so a NAMED constant declared in an arch-blind gate — the v0.9.2 shape
+itself — passed. Neither of the first and third rows above would have been
+caught by the gate this note said enforced them. Both halves are checked now, and
+each `--self-test` probe asserts its own failure message, so a neutered rule can
+no longer hide behind a different rule's rejection.
 
 The general shape: take arch-varying numbers from the stdlib, which knows the
 target. Define locally only what is arch-*stable* — the ioctl request codes
 (`TCGETS`, `TCSETS`, `TIOCGWINSZ`) are, the syscall numbers are not.
 
-**Numbers inside a target's own `#ifdef` are safe to hardcode.** The AGNOS arm
-uses raw `syscall(60, ...)` / `syscall(17, ...)` / `syscall(18, ...)` with no
-stdlib wrapper, because inside `#ifdef CYRIUS_TARGET_AGNOS` those numbers can
-only ever mean agnos's. The Linux↔agnos overlap hazard cannot bite a number used
-inside its own target's gate.
+**Numbers declared inside a target's own `#ifdef` are safe.** The AGNOS arm
+declares `_AGNOS_SYS_WINSIZE = 60`, `_AGNOS_SYS_SIGPROCMASK = 17` and
+`_AGNOS_SYS_SIGNALFD = 18` inside `#ifdef CYRIUS_TARGET_AGNOS`, where those numbers
+can only ever mean agnos's, and calls through the names. (It never wrote a bare
+`syscall(60, ...)` — the syscall audit rejects that even there.) The Linux↔agnos
+overlap hazard cannot bite a number declared inside its own target's gate.
+
+**Even a correct per-arch number can be rewritten.** The aarch64 backend
+translates *some* x86_64 syscall numbers into their aarch64 equivalents. A
+hand-written NATIVE aarch64 number that collides with an x86_64 one can be
+"translated" into the wrong call: aarch64's ppoll is 73, which is x86_64's flock.
+That is why the stdlib spells such numbers as private aliases (`SYS_PPOLL = 1073`,
+translated back to 73), and why the rule is "prefer the stdlib's constant" before
+"declare your own per arch". `docs/examples/raw_loop.cyr` (v1.1.4) uses the
+stdlib's `SYS_PPOLL` on aarch64 for exactly this reason.
 
 **No terminfo means no capability negotiation.** darshana emits vt100/xterm
 sequences unconditionally and never asks the terminal what it supports. That is

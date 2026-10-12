@@ -114,7 +114,14 @@ fn main() {
 # line is target code and must stay target-correct; this one line is host
 # code. `write(2)` is 1 on both, which is why the assert harness itself
 # needs no special handling.
+#
+# Gated on CYRIUS_TARGET_AGNOS (v1.1.4) so scripts/syscall-audit.sh can see
+# the number is not arch-blind: this file is only ever built `--agnos`,
+# which emits x86_64, and run on an x86_64 Linux host — so 60 is the host's
+# exit on the one architecture this build can produce.
+#ifdef CYRIUS_TARGET_AGNOS
 var HOST_SYS_EXIT = 60;      # Linux x86_64 exit(2) — the runner's kernel
+#endif
 
 var exit_code = main();
 syscall(HOST_SYS_EXIT, exit_code);

@@ -20,7 +20,7 @@
 #
 #     [deps.darshana]
 #     git     = "https://github.com/MacCracken/darshana.git"
-#     tag     = "1.0.2"
+#     tag     = "1.1.4"
 #     modules = ["dist/darshana.cyr"]
 #
 # and then writes `include "lib/darshana.cyr"` after `cyrius deps`.
@@ -31,12 +31,34 @@ include "src/main.cyr"
 
 #ifdef CYRIUS_TARGET_LINUX
 
-# poll(2) — x86_64 SYS_poll. Used instead of a blocking read so the
-# loop can wait on the signalfd and stdin at the same time. A consumer
-# already running an epoll loop wires the signalfd into that instead;
-# darshana does not care which readiness mechanism you use.
+# Waiting on stdin and the signalfd at once. Used instead of a blocking
+# read so the loop can wake for either. A consumer already running an
+# epoll loop wires the signalfd into that instead; darshana does not care
+# which readiness mechanism you use.
+#
+# The syscall differs per ARCHITECTURE, not just per number (v1.1.4):
+# x86_64 has poll(2) = 7; aarch64 has no poll at all, only ppoll. Through
+# v1.1.3 this example declared `EX_SYS_POLL = 7` for both, and worked on
+# aarch64 only because the compiler happens to translate x86_64's 7 into
+# ppoll there. Do not write aarch64's native ppoll number (73) by hand
+# either: the backend rewrites some x86_64 numbers, and x86_64's 73 is
+# flock — which is why the stdlib spells aarch64 ppoll as the private
+# alias SYS_PPOLL. Use the stdlib's constant wherever one exists.
+#ifdef CYRIUS_ARCH_X86
 var EX_SYS_POLL = 7;
+#endif
 var EX_POLLIN   = 1;
+
+# Block until stdin or the signalfd is readable. Returns the ready count,
+# or a negative errno.
+fn ex_wait(pfds, nfds) {
+#ifdef CYRIUS_ARCH_X86
+    return syscall(EX_SYS_POLL, pfds, nfds, 0 - 1);      # -1 = no timeout
+#endif
+#ifdef CYRIUS_ARCH_AARCH64
+    return syscall(SYS_PPOLL, pfds, nfds, 0, 0, 0);      # NULL timeout = none
+#endif
+}
 
 # struct pollfd { i32 fd; i16 events; i16 revents; } — 8 bytes.
 # NUL-terminated write to fd 1. The stdlib `print` takes an explicit
@@ -68,27 +90,37 @@ fn ex_pollfd_revents(buf, slot) {
 
 # ---- teardown -------------------------------------------------------
 #
-# THE WHOLE POINT OF THIS EXAMPLE. The order is ADR 0002's, and it is
-# not arbitrary:
+# THE WHOLE POINT OF THIS EXAMPLE. The order is ADR 0002's (reordered
+# in v1.1.4), and it is not arbitrary:
 #
-#   1. tty_cursor_show()  — or the user's shell prompt comes back with
+#   1. tty_cooked()       — line discipline back FIRST. Zero-arg: it
+#                           restores onto the fd tty_raw saved. Every
+#                           step after this is a write to fd 1, and if
+#                           fd 1 is a pipe whose reader has gone, that
+#                           write raises SIGPIPE and kills the process —
+#                           so the step that matters most goes first.
+#                           (None of the escapes below has a '\n', so
+#                           restoring output processing changes no byte.)
+#   2. tty_cursor_show()  — or the user's shell prompt comes back with
 #                           an invisible cursor.
-#   2. tty_alt_leave()    — restore the primary screen. Do this BEFORE
+#   3. tty_alt_leave()    — restore the primary screen. Do this BEFORE
 #                           resetting colors so the reset lands on the
 #                           screen the user is actually left looking at.
-#   3. tty_sgr_reset()    — only needed if you emitted any SGR.
-#   4. tty_cooked()       — line discipline back. Zero-arg: it restores
-#                           onto the fd tty_raw saved.
-#   5. tty_close_signalfd() — closes the fd AND unblocks the signals.
-#                           Closing the fd alone leaves them blocked.
+#   4. tty_sgr_reset()    — only needed if you emitted any SGR.
+#   5. tty_close_signalfd() — LAST. Closes the fd AND unblocks the
+#                           signals (closing the fd alone leaves them
+#                           blocked). The unblock delivers any signal
+#                           that arrived but was never read, with its
+#                           default action — for TTY_SIGMASK_EXIT, death
+#                           — so it must come after the terminal is back.
 #
 # Every step is idempotent, so calling this from two different exit
 # paths is safe. That is deliberate — see ADR 0002.
 fn ex_teardown(sfd, mask) {
+    tty_cooked();
     tty_cursor_show();
     tty_alt_leave();
     tty_sgr_reset();
-    tty_cooked();
     if (sfd >= 0) { tty_close_signalfd(sfd, mask); }
     return 0;
 }
@@ -126,18 +158,22 @@ fn ex_draw(frame) {
 }
 
 fn main() {
-    # 1. Refuse to take over something that is not a terminal. Without
-    #    this, running under a pipe or in CI would emit escape bytes
-    #    into whatever is downstream.
-    if (tty_isatty(0) == 0) {
-        println("raw_loop: stdin is not a TTY — nothing to drive, exiting cleanly.");
+    # 1. Refuse to take over something that is not a terminal — on BOTH
+    #    ends. Input comes from fd 0, but every escape goes to fd 1, so
+    #    checking only stdin (as this example did through v1.1.3) still
+    #    sprayed alt-screen and cursor escapes into `raw_loop > file` or
+    #    a pipe — and a pipe whose reader exits is the SIGPIPE case the
+    #    teardown above is ordered against.
+    if (tty_isatty(0) == 0 || tty_isatty(1) == 0) {
+        println("raw_loop: stdin or stdout is not a TTY — nothing to drive, exiting cleanly.");
         return 0;
     }
 
     # 2. Open the signalfd BEFORE going raw. If this fails we have not
     #    touched the terminal yet, so there is nothing to unwind.
-    #    As of v0.9.3 a failed open returns exactly -1 and leaves no
-    #    signal-mask residue behind, so degrading here is clean.
+    #    A failed open returns exactly -1 (since v0.9.3) and leaves no
+    #    signal-mask residue behind (exactly so since v1.0.2), so
+    #    degrading here is clean.
     var mask = TTY_SIGMASK_EXIT | TTY_SIGMASK_WINCH;
     var sfd = tty_open_signalfd(mask);
     if (sfd < 0) {
@@ -175,9 +211,9 @@ fn main() {
             nfds = 2;
         }
 
-        # -1 = block indefinitely. A real render loop with a periodic
-        # refresh passes a timeout here instead.
-        var rc = syscall(EX_SYS_POLL, &pfds, nfds, 0 - 1);
+        # Block indefinitely. A real render loop with a periodic refresh
+        # passes a timeout here instead.
+        var rc = ex_wait(&pfds, nfds);
         if (rc < 0) { running = 0; }
 
         if (running == 1) {

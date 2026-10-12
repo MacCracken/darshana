@@ -171,6 +171,7 @@ fn main() {
     # ----- PTY setup -------------------------------------------------
     # open("/dev/ptmx", O_RDWR|O_NOCTTY|O_NONBLOCK) → master.
     test_group("pty.tcyr — open pseudo-terminal");
+    var master_closed = 0;           # the hangup group (v1.1.4) closes it early
     var master = sys_open("/dev/ptmx",
         PTY_O_RDWR | PTY_O_NOCTTY | PTY_O_NONBLOCK, 0);
     if (master >= 0) {
@@ -338,6 +339,16 @@ fn main() {
                         "VMIN = 1 in raw");
                     assert_eq(load8(&raw + TIO_CC_BASE + TIO_VTIME), 0,
                         "VTIME = 0 in raw");
+                    # iflag (off 0) — v1.1.4. A real pty's cooked iflag has
+                    # ICRNL | IXON set, so these bits are live here; through
+                    # v1.1.3 nothing asserted them on a real terminal, and a
+                    # regression in iflag clearing would have passed.
+                    var ifl = tio_load32(&raw, 0);
+                    assert_eq(ifl & TIO_BRKINT, 0, "BRKINT cleared in raw");
+                    assert_eq(ifl & TIO_ICRNL,  0, "ICRNL cleared in raw");
+                    assert_eq(ifl & TIO_INPCK,  0, "INPCK cleared in raw");
+                    assert_eq(ifl & TIO_ISTRIP, 0, "ISTRIP cleared in raw");
+                    assert_eq(ifl & TIO_IXON,   0, "IXON cleared in raw");
 
                     # ----- behavioral output round-trip (raw) --------
                     # With OPOST off, "\n" passes through untranslated.
@@ -488,6 +499,66 @@ fn main() {
                 assert_eq(tty_raw(master), 0 - 1, "tty_raw(master) refused while slave raw");
                 assert_eq(tty_cooked(), 0, "tty_cooked() restores the saved fd");
                 assert_eq(tty_cooked(), 0, "tty_cooked() again is a no-op");
+                # v1.1.4 — tty_cooked() RELEASES the slot: the same fd can go
+                # raw again for real, not just get the same-fd "already raw"
+                # success. Checked through TCGETS, because the return value
+                # alone cannot tell the two apart — through v1.1.3 a
+                # tty_cooked() that forgot to clear the slot passed here.
+                assert_eq(tty_raw(slave), 0, "tty_raw(slave) again after cooked");
+                var rr_t[60];
+                syscall(SYS_IOCTL, slave, TCGETS, &rr_t);
+                assert_eq(tio_load32(&rr_t, 12) & TIO_ECHO, 0, "...and the slave really is raw again (ECHO clear)");
+                assert_eq(tty_cooked(), 0, "tty_cooked() after the re-raw");
+
+                # v1.1.4 — the kernel reads an fd as a 32-bit unsigned int,
+                # so through v1.1.3 any i64 outside [0, 0x7FFFFFFF] aliased
+                # the descriptor in its low 32 bits.
+                test_group("pty.tcyr — out-of-range fds never alias a live fd (v1.1.4)");
+                var hi32 = 1 << 32;
+                var imin = 1 << 63;
+                assert_eq(tty_isatty(slave + hi32), 0, "isatty(slave + 2^32) = 0, not slave's verdict");
+                assert_eq(tty_isatty(imin + slave), 0, "isatty(i64min + slave) = 0");
+                assert_eq(tty_isatty(slave - hi32), 0, "isatty(slave - 2^32) = 0 (negative)");
+                var ar = 0;
+                var ac = 0;
+                assert_eq(tty_winsize(slave + hi32, &ar, &ac), 0 - 1, "winsize(slave + 2^32) = -1");
+                assert_eq(tty_raw(slave + hi32), 0 - 1, "tty_raw(slave + 2^32) = -1, slave not taken raw");
+                assert_eq(tty_raw(slave), 0, "tty_raw(slave) still succeeds after the rejected alias");
+                assert_eq(tty_cooked(), 0, "tty_cooked() after the alias test");
+                var alias_dn = sys_open("/dev/null", 2, 0);
+                if (alias_dn >= 0) {
+                    tty_close_signalfd(alias_dn + hi32, 0);
+                    var dnb[8];
+                    assert_eq(file_read(alias_dn, &dnb, 1), 0,
+                        "close_signalfd(alias_dn + 2^32) did not close the live alias_dn");
+                    # A failed tty_raw leaves no state behind (documented):
+                    # /dev/null is not a TTY, so TCGETS fails, and the slot
+                    # stays free for the real terminal.
+                    assert_eq(tty_raw(alias_dn), 0 - 1, "tty_raw(/dev/null) = -1");
+                    assert_eq(tty_raw(slave), 0, "the failed raw left no state: slave can go raw");
+                    assert_eq(tty_cooked(), 0, "tty_cooked() after the failed-raw check");
+                    file_close(alias_dn);
+                }
+
+                # Hangup — the documented permanent-failure path, run LAST
+                # because it closes the master. With the master gone,
+                # TCSETS on the slave fails (EIO), tty_cooked() returns -1,
+                # and the single raw slot stays stranded: tty_raw on any
+                # other fd is refused (ADR 0003's knowingly-frozen
+                # imperfection). The private flag is cleared afterwards so
+                # the remaining groups start clean — tests share the unit.
+                test_group("pty.tcyr — hangup strands the raw slot (documented)");
+                assert_eq(tty_raw(slave), 0, "tty_raw(slave) before hangup");
+                file_close(master);
+                master_closed = 1;
+                assert_eq(tty_cooked(), 0 - 1, "tty_cooked() = -1 after the master hangs up");
+                assert_eq(_tty_in_raw, 1, "the slot stays held after a failed restore");
+                var hup_dn = sys_open("/dev/null", 2, 0);
+                if (hup_dn >= 0) {
+                    assert_eq(tty_raw(hup_dn), 0 - 1, "a different fd is refused while the slot is stranded");
+                    file_close(hup_dn);
+                }
+                _tty_in_raw = 0;
 
                 file_close(slave);
             } else {
@@ -496,7 +567,7 @@ fn main() {
         } else {
             _pty_skip("TIOCSPTLCK/TIOCGPTN ioctl blocked");
         }
-        file_close(master);
+        if (master_closed == 0) { file_close(master); }
     } else {
         # /dev/ptmx unavailable (seccomp / minimal container). The
         # consumer-side PTY smoke covers the live path; emit a skip

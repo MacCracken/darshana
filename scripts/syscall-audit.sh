@@ -36,6 +36,21 @@
 # number written as a bare integer is correct for exactly one architecture.
 # See `audit_no_literals` below for the three times that has bitten.
 #
+# v1.1.4: the 1.1.4 audit found that rule had never covered what it
+# claimed, and closed four more bypasses. (a) Its glob was `*.cyr`, and
+# every test suite is `*.tcyr` — so the rule never scanned tests/, where
+# the v1.1.0 instance lived; the exact v1.1.0 regression
+# (`syscall(302, ...)` in a test) audited green. (b) It only rejected a
+# literal at the call site, so the v0.9.2 shape itself — a NAMED constant
+# `var SYS_IOCTL = 16;` declared in an arch-blind gate — passed. A
+# constant used as a syscall number must now be declared inside an
+# explicit arch (or AGNOS-target) gate, or come from the stdlib. (c)
+# Comments were stripped before strings were blanked, so a `#` inside a
+# string literal hid the rest of its line from the audit. (d) An
+# arithmetic first argument (`syscall(1 + 58, ...)`) audited as `1`, and
+# an allowlisted name could be re-bound by a parameter or a local. Each
+# is now a `--self-test` probe that checks for its own failure message.
+#
 # `--self-test` proves the gate can actually fail, by planting each of the
 # bypasses above plus a plain fork+exec and asserting all are REJECTED — and
 # that `syscall(1, ...)` is still ACCEPTED, so the arch rule is not merely
@@ -77,24 +92,42 @@ BUILTINS="syscall load8 load16 load32 load64 store8 store16 store32 store64 if w
 # platform gates (60 is exit on x86_64 Linux, but `winsize` on AGNOS).
 # Examples additionally exit and poll, which the library itself never does.
 #   SYS_EXIT      the example is a program, not a library; it exits
-#   EX_SYS_POLL   the example's own poll(2) constant, for its input loop
-ALLOWED_SYSCALLS_EXAMPLES="$ALLOWED_SYSCALLS SYS_EXIT EX_SYS_POLL"
+#   EX_SYS_POLL   the example's own poll(2) constant (x86_64 only)
+#   SYS_PPOLL     the stdlib's aarch64 ppoll — aarch64 has no poll(2)
+ALLOWED_SYSCALLS_EXAMPLES="$ALLOWED_SYSCALLS SYS_EXIT EX_SYS_POLL SYS_PPOLL"
 # Examples print; the library never does.
 ALLOWED_WRAPPERS_EXAMPLES="$ALLOWED_WRAPPERS print println fmt_int sys_read"
 
 fail=0
 note() { echo "$1" >&2; }
 
-# Strip comments and blank out string literals, then rejoin so one logical
-# statement is one line. Comment stripping is what the v0.9.4 scan already
-# did; rejoining is what makes a line-wrapped or parenthesized call visible;
-# blanking strings stops payload text being read as code — without it
-# `println("raw_loop: Linux-only (raw mode needs termios)")` is scanned as a
-# call to a function named `only`.
+# Blank out string literals, THEN strip comments, then rejoin so one
+# logical statement is one line. Rejoining is what makes a line-wrapped or
+# parenthesized call visible; blanking strings stops payload text being
+# read as code — without it `println("raw_loop: Linux-only (raw mode needs
+# termios)")` is scanned as a call to a function named `only`. The order
+# matters (v1.1.4): stripping comments first let a `#` INSIDE a string —
+# ordinary in an escape library (`"\x1b#8"` is DECALN) — delete the rest
+# of its line, code included, before anything looked at it.
 normalize() {
-    sed 's/#.*//' "$@" \
-        | sed 's/\\"/\x01/g; s/"[^"]*"/""/g' \
+    sed 's/\\"/\x01/g; s/"[^"]*"/""/g' "$@" \
+        | sed 's/#.*//' \
         | tr '\n' ' ' | sed 's/;/;\n/g'
+}
+
+# Every syscall() first argument, verbatim up to the first `,` or `)`, with
+# parens and whitespace removed. Must be ONE token: an expression such as
+# `1 + 58` audits as its first token otherwise.
+first_args() {
+    printf '%s\n' "$1" | grep -oE 'syscall[[:space:]]*\([^,)]*[,)]' \
+        | sed -E 's/^syscall[[:space:]]*\(//; s/[,)]$//; s/[()[:space:]]//g' || true
+}
+reject_expressions() {   # $1 = label, $2 = normalized text
+    for _a in $(first_args "$2" | grep -vxE '[A-Za-z0-9_]+' | sort -u || true); do
+        note "FAIL: $1 passes an EXPRESSION ('$_a') as a syscall number."
+        note "  The audit reads a syscall number as one token; write the constant."
+        fail=1; _dir_fail=1
+    done
 }
 
 # ------------------------------------------------------------------
@@ -102,9 +135,26 @@ normalize() {
 # ------------------------------------------------------------------
 audit_dir() {
     _dir="$1"; _allow_sys="$2"; _allow_wrap="$3"
+    _dir_fail=0
     set -- "$_dir"/*.cyr
     [ -e "$1" ] || return 0
     _norm=$(normalize "$@")
+    reject_expressions "$_dir/" "$_norm"
+
+    # An allowlisted syscall NAME may not be re-bound: as a fn parameter, or
+    # as a local `var` inside a body. Either way the call site still reads
+    # `syscall(SYS_IOCTL, ...)` while issuing whatever the caller passed.
+    for _nm in $_allow_sys; do
+        case "$_nm" in [0-9]*) continue ;; esac
+        if printf '%s\n' "$_norm" | grep -qE "fn [A-Za-z_0-9]+[[:space:]]*\([^)]*\b${_nm}\b"; then
+            note "FAIL: $_dir/ binds the allowlisted syscall name '$_nm' as a fn parameter."
+            fail=1; _dir_fail=1
+        fi
+        if sed 's/\\"/\x01/g; s/"[^"]*"/""/g; s/#.*//' "$@" | grep -qE "^[[:space:]]+var[[:space:]]+${_nm}\b"; then
+            note "FAIL: $_dir/ shadows the allowlisted syscall name '$_nm' with a local var."
+            fail=1; _dir_fail=1
+        fi
+    done
 
     # 1. Raw syscall() first arguments. `\(*` tolerates any number of
     #    opening parens so `syscall((59), ...)` is captured, not skipped.
@@ -121,7 +171,7 @@ audit_dir() {
                 note "  If this is intentional, add it to scripts/syscall-audit.sh with a"
                 note "  one-line reason. If it is a process-spawning or filesystem"
                 note "  syscall, it is out of charter."
-                fail=1
+                fail=1; _dir_fail=1
                 ;;
         esac
     done
@@ -146,7 +196,7 @@ audit_dir() {
         note "FAIL: $_dir/ calls '$c', which is neither defined there, a builtin,"
         note "  nor an allowlisted wrapper. Permitted wrappers: $_allow_wrap"
         note "  Add it to scripts/syscall-audit.sh with a reason, or drop the call."
-        fail=1
+        fail=1; _dir_fail=1
     done
 
     _ns=$(echo "$_found" | wc -w)
@@ -154,7 +204,10 @@ audit_dir() {
     for c in $_called; do
         case " $_allow_wrap " in *" $c "*) _nw=$((_nw + 1)) ;; esac
     done
-    echo "  ok: $_dir — $_ns distinct syscall targets, $_nw stdlib wrappers, all permitted"
+    # Through v1.1.3 this line printed even after the FAIL lines above.
+    if [ $_dir_fail -eq 0 ]; then
+        echo "  ok: $_dir — $_ns distinct syscall targets, $_nw stdlib wrappers, all permitted"
+    fi
 }
 
 # ------------------------------------------------------------------
@@ -181,20 +234,35 @@ audit_dir() {
 #           like a deliberate skip.
 #
 # The rule: a syscall number must be a NAMED constant. Either the
-# stdlib's (arch-aware by construction) or one the file declares inside
-# an explicit `#ifdef CYRIUS_ARCH_*` gate. `1` is the sole exception —
-# write(2) is 1 on every Linux arch and on AGNOS, and every ANSI
-# emitter in the library uses it.
+# stdlib's (arch-aware by construction) or one the corpus declares inside
+# an explicit `#ifdef CYRIUS_ARCH_X86` / `CYRIUS_ARCH_AARCH64` gate — or
+# `CYRIUS_TARGET_AGNOS`, which is x86_64-only, so its numbers are fixed.
+# Both halves are checked (v1.1.4): no literal at a call site, AND no
+# locally-declared syscall constant outside such a gate. `1` is the sole
+# literal exception: write(2) is 1 on x86_64 and AGNOS, and on aarch64
+# (where write is 64) the backend translates the literal 1 — the one
+# translation darshana relies on, which every aarch64 suite exercises.
 #
 # Comments are stripped before matching, so the prose above (and the
 # rationale comments in src/termios.cyr and tests/agnos.tcyr, which
-# legitimately discuss syscall 60) does not trip it.
+# legitimately discuss syscall 60) does not trip it. The corpus is every
+# compiled extension: .cyr, and the .tcyr / .fcyr / .bcyr test, fuzz and
+# bench files — through v1.1.3 only .cyr, which excluded every test.
+corpus_files() {
+    for _d in "$@"; do
+        for _f in "$_d"/*.cyr "$_d"/*.tcyr "$_d"/*.fcyr "$_d"/*.bcyr; do
+            [ -e "$_f" ] && printf '%s\n' "$_f"
+        done
+    done
+    return 0
+}
 audit_no_literals() {
     _any=0
-    for _d in "$@"; do
-        set -- "$_d"/*.cyr
-        [ -e "$1" ] || continue
-        for _f in "$@"; do
+    _files=$(corpus_files "$@")
+    [ -n "$_files" ] || { note "FAIL: arch rule found no files to scan in: $*"; fail=1; return 0; }
+    for _f in $_files; do
+            _n=$(normalize "$_f")
+            reject_expressions "$_f" "$_n"
             _hits=$(normalize "$_f" \
                     | grep -oE 'syscall[[:space:]]*\([[:space:]]*\(*[[:space:]]*[0-9]+' \
                     | grep -oE '[0-9]+$' | grep -vx '1' | sort -u || true)
@@ -209,55 +277,132 @@ audit_no_literals() {
                 fail=1
                 _any=1
             done
+    done
+
+    # The declaration half: every NAME used as a syscall number that the
+    # corpus itself declares (`var NAME = <integer>;`) must have every one of
+    # its declarations inside an arch / AGNOS-target gate. A name the corpus
+    # never declares comes from the stdlib, which is arch-aware.
+    _used=$(for _f in $_files; do first_args "$(normalize "$_f")"; done \
+            | grep -xE '[A-Za-z_][A-Za-z0-9_]*' | sort -u || true)
+    _ungated=$(awk '
+        FNR == 1 { depth = 0 }
+        /^[[:space:]]*#ifdef[[:space:]]+/  { depth++; g[depth] = ($2 ~ /^CYRIUS_(ARCH_X86|ARCH_AARCH64|TARGET_AGNOS)$/); next }
+        /^[[:space:]]*#ifndef[[:space:]]+/ { depth++; g[depth] = 0; next }
+        /^[[:space:]]*#else/               { g[depth] = 0; next }
+        /^[[:space:]]*#endif/              { if (depth > 0) depth--; next }
+        /^[[:space:]]*var[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(0x[0-9A-Fa-f]+|[0-9]+)[[:space:]]*;/ {
+            name = $2; sub(/=.*/, "", name)
+            gated = 0; for (i = 1; i <= depth; i++) if (g[i]) gated = 1
+            if (!gated) print name "\t" FILENAME ":" FNR
+        }' $_files)
+    for _nm in $_used; do
+        _bad=$(printf '%s\n' "$_ungated" | awk -F'\t' -v n="$_nm" '$1 == n { print $2 }')
+        for _where in $_bad; do
+            note "FAIL: $_where declares syscall number '$_nm' outside an arch gate."
+            note "  This is the v0.9.2 shape: a named constant is still a literal for"
+            note "  ONE architecture. Prefer the stdlib's constant; otherwise declare it"
+            note "  inside #ifdef CYRIUS_ARCH_X86 and CYRIUS_ARCH_AARCH64 (or"
+            note "  CYRIUS_TARGET_AGNOS). On aarch64, check a hand-written number"
+            note "  against the backend's ESYSXLAT table: it rewrites some x86_64"
+            note "  numbers, which is why the stdlib uses private aliases (SYS_PPOLL)."
+            fail=1
+            _any=1
         done
     done
-    [ $_any -eq 0 ] && echo "  ok: no numeric-literal syscall numbers (arch-blind class gated)"
+    [ $_any -eq 0 ] && echo "  ok: no numeric-literal or arch-blind syscall numbers ($(echo "$_files" | wc -l) files)"
     return 0
 }
 
 # ------------------------------------------------------------------
 # --self-test: prove each closed bypass is actually rejected.
 # ------------------------------------------------------------------
+# Every probe names the FAILURE MESSAGE it expects (v1.1.4). Through
+# v1.1.3 a probe passed on any non-zero exit, so the two "numeric
+# literal" probes were in fact being rejected by the allowlist rule —
+# the literal rule itself was never exercised, and neutering it left
+# --self-test green. The arch rule's probes now run through --corpus,
+# which runs that rule alone.
 if [ "${1:-}" = "--self-test" ]; then
     st_fail=0
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT INT TERM
-    mkdir -p "$tmp/src"
-    probe() {   # $1 = name, $2 = body
-        printf '%s\n' "$2" > "$tmp/src/probe.cyr"
-        if ( "$0" "$tmp/src" >/dev/null 2>&1 ); then
-            echo "  SELF-TEST FAIL: '$1' was NOT rejected" >&2
-            st_fail=1
+    expect_reject() {   # $1 = name, $2 = expected message, then the command
+        _name="$1"; _want="$2"; shift 2
+        if _out=$("$@" 2>&1); then
+            echo "  SELF-TEST FAIL: '$_name' was NOT rejected" >&2; st_fail=1
+        elif ! printf '%s' "$_out" | grep -qF "$_want"; then
+            echo "  SELF-TEST FAIL: '$_name' was rejected, but not by the rule under test" >&2
+            echo "    expected: $_want" >&2; st_fail=1
         else
-            echo "  ok: rejected — $1"
+            echo "  ok: rejected — $_name"
         fi
     }
-    probe "parenthesized first arg  syscall((59), ...)" 'fn f() { syscall((59), 0, 0, 0); return 0; }'
-    probe "line-wrapped call"                           'fn f() { syscall(
+    expect_accept() {   # $1 = name, then the command
+        _name="$1"; shift
+        if "$@" >/dev/null 2>&1; then echo "  ok: accepted — $_name"
+        else echo "  SELF-TEST FAIL: '$_name' was rejected" >&2; st_fail=1; fi
+    }
+    put() {   # $1 = dir, $2 = file, $3 = body
+        rm -rf "$tmp/$1"; mkdir -p "$tmp/$1"; printf '%s\n' "$3" > "$tmp/$1/$2"
+    }
+    ALLOW="not on the allowlist"
+
+    # The allowlist rule (audit_dir), over a probe src/.
+    put src probe.cyr 'fn f() { syscall((59), 0, 0, 0); return 0; }'
+    expect_reject "parenthesized first arg  syscall((59), ...)" "$ALLOW" "$0" "$tmp/src"
+    put src probe.cyr 'fn f() { syscall(
     59, 0, 0, 0); return 0; }'
-    probe "bare fork+exec numbers"                       'fn f() { syscall(57); syscall(59, 0, 0, 0); return 0; }'
-    probe "non-sys_/file_ stdlib sink (xopen)"           'fn f() { return xopen(0, 0, 0); }'
-    probe "unlisted sys_ wrapper"                        'fn f() { return sys_execve(0, 0, 0); }'
-    # The arch-blind class (v1.1.1). SYS_IOCTL is on the allowlist by
-    # NAME, so this probe proves the literal is rejected even when the
-    # same syscall would be permitted spelled properly.
-    probe "numeric-literal ioctl  syscall(16, ...)"     'fn f() { return syscall(16, 0, 0, 0); }'
-    probe "numeric-literal exit    syscall(60, ...)"    'fn f() { syscall(60, 0); return 0; }'
-    # ...and that write(1) is still allowed, or every emitter would fail.
-    printf '%s\n' 'fn f() { syscall(1, 1, "x", 1); return 0; }' > "$tmp/src/probe.cyr"
-    if ( "$0" "$tmp/src" >/dev/null 2>&1 ); then
-        echo "  ok: accepted — syscall(1, ...) write literal (not over-strict)"
-    else
-        echo "  SELF-TEST FAIL: syscall(1, ...) was rejected" >&2
-        st_fail=1
-    fi
-    # And a negative control: the real source must still pass.
-    if ( "$0" src >/dev/null 2>&1 ); then
-        echo "  ok: real src/ still passes (not vacuous)"
-    else
-        echo "  SELF-TEST FAIL: real src/ was rejected" >&2
-        st_fail=1
-    fi
+    expect_reject "line-wrapped call" "$ALLOW" "$0" "$tmp/src"
+    put src probe.cyr 'fn f() { syscall(57); syscall(59, 0, 0, 0); return 0; }'
+    expect_reject "bare fork+exec numbers" "$ALLOW" "$0" "$tmp/src"
+    put src probe.cyr 'fn f() { return xopen(0, 0, 0); }'
+    expect_reject "non-sys_/file_ stdlib sink (xopen)" "calls 'xopen'" "$0" "$tmp/src"
+    put src probe.cyr 'fn f() { return sys_execve(0, 0, 0); }'
+    expect_reject "unlisted sys_ wrapper" "calls 'sys_execve'" "$0" "$tmp/src"
+    put src probe.cyr 'fn f() { var s = "#"; syscall(59, 0, 0, 0); return 0; }'
+    expect_reject "a # inside a string hides the rest of the line (v1.1.4)" "$ALLOW" "$0" "$tmp/src"
+    put src probe.cyr 'fn f() { syscall(1 + 58, 0, 0, 0); return 0; }'
+    expect_reject "arithmetic first arg  syscall(1 + 58, ...) (v1.1.4)" "EXPRESSION" "$0" "$tmp/src"
+    put src probe.cyr 'fn f(SYS_IOCTL, a) { return syscall(SYS_IOCTL, a, 0, 0); }'
+    expect_reject "allowlisted name re-bound as a parameter (v1.1.4)" "as a fn parameter" "$0" "$tmp/src"
+    put src probe.cyr 'fn f() {
+    var SYS_IOCTL = 59;
+    return syscall(SYS_IOCTL, 0, 0, 0);
+}'
+    expect_reject "allowlisted name shadowed by a local (v1.1.4)" "with a local var" "$0" "$tmp/src"
+    put src probe.cyr 'fn f() { syscall(1, 1, "x", 1); return 0; }'
+    expect_accept "syscall(1, ...) write literal (not over-strict)" "$0" "$tmp/src"
+
+    # The arch-blindness rule (audit_no_literals), via --corpus.
+    put corpus probe.cyr 'fn f() { return syscall(16, 0, 0, 0); }'
+    expect_reject "numeric-literal ioctl  syscall(16, ...)" "NUMERIC LITERAL" "$0" --corpus "$tmp/corpus"
+    put corpus probe.cyr 'fn f() { syscall(60, 0); return 0; }'
+    expect_reject "numeric-literal exit    syscall(60, ...)" "NUMERIC LITERAL" "$0" --corpus "$tmp/corpus"
+    put corpus probe.tcyr 'fn t() { return syscall(302, 0, 7, 0, 0); }'
+    expect_reject "numeric literal in a *.tcyr test — the v1.1.0 shape (v1.1.4)" "NUMERIC LITERAL" "$0" --corpus "$tmp/corpus"
+    put corpus probe.cyr '#ifdef CYRIUS_TARGET_LINUX
+var SYS_IOCTL_X = 16;
+#endif
+fn f() { return syscall(SYS_IOCTL_X, 0, 0, 0); }'
+    expect_reject "named constant in an arch-BLIND gate — the v0.9.2 shape (v1.1.4)" "outside an arch gate" "$0" --corpus "$tmp/corpus"
+    put corpus probe.tcyr 'var T_SYS = 35;
+fn t() { return syscall(T_SYS, 0); }'
+    expect_reject "ungated named constant in a test (v1.1.4)" "outside an arch gate" "$0" --corpus "$tmp/corpus"
+    put corpus probe.cyr '#ifdef CYRIUS_ARCH_X86
+var P_SYS = 35;
+#endif
+#ifdef CYRIUS_ARCH_AARCH64
+var P_SYS = 101;
+#endif
+fn f() { return syscall(P_SYS, 0); }'
+    expect_accept "a constant declared per arch (not over-strict)" "$0" --corpus "$tmp/corpus"
+    put corpus probe.cyr 'fn f() { syscall(1, 1, "x", 1); return syscall(SYS_IOCTL, 0, 0, 0); }'
+    expect_accept "write(1) literal and a stdlib constant" "$0" --corpus "$tmp/corpus"
+
+    # Negative controls: the real trees must still pass both rules.
+    expect_accept "real src/ (allowlist rule)" "$0" src
+    expect_accept "real corpus (arch rule)" "$0" --corpus src tests programs docs/examples
     [ $st_fail -eq 0 ] && echo "  syscall-audit self-test: PASS"
     exit $st_fail
 fi
@@ -265,8 +410,12 @@ fi
 # ------------------------------------------------------------------
 # Normal run.
 # ------------------------------------------------------------------
-if [ $# -ge 1 ]; then
-    # Explicit directory (used by --self-test's probes).
+if [ "${1:-}" = "--corpus" ]; then
+    # The arch-blindness rule alone, over the named trees (--self-test).
+    shift
+    audit_no_literals "$@"
+elif [ $# -ge 1 ]; then
+    # Explicit directory: the allowlist rule alone (--self-test's probes).
     _extra_defs=""
     audit_dir "$1" "$ALLOWED_SYSCALLS" "$ALLOWED_WRAPPERS"
 else
@@ -274,8 +423,9 @@ else
     audit_dir "src" "$ALLOWED_SYSCALLS" "$ALLOWED_WRAPPERS"
     _extra_defs="src/*.cyr"
     audit_dir "docs/examples" "$ALLOWED_SYSCALLS_EXAMPLES" "$ALLOWED_WRAPPERS_EXAMPLES"
-    # The arch-blindness gate runs over EVERY tree that compiles, tests
-    # included — tests/ is where this class hid longest.
+    # The arch-blindness rule runs over EVERY tree that compiles, tests
+    # included — tests/ is where this class hid longest, and through v1.1.3
+    # this rule did not actually look there (see the header).
     audit_no_literals src tests programs docs/examples
 fi
 

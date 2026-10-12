@@ -26,116 +26,79 @@ known consumers onto a `1.x` dep — closed by v1.1.3. A survey on 2026-10-12
 found four more (thoth, jalwa, darshini, agora); [`state.md`](state.md)
 § Consumers has each one's pin.
 
+**v1.1.4 was the third audit sweep** (after v0.9.3 and v1.0.2): five lenses,
+every finding verified before it was acted on. Its record, including what it
+confirmed and deliberately did not take, is [CHANGELOG `[1.1.4]`](../../CHANGELOG.md).
+What it found and deferred because it prices as minor is queued below. **The
+next release is 1.2.0.**
+
 Current version, counts and verification status live in [`state.md`](state.md);
 this file does not restate them.
 
-## Next: 1.1.4 — audit, repairs and security sweep (patch)
-
-The third full sweep (after v0.9.3 and v1.0.2), and the first since v1.1.0
-rewrote the composers with unaligned wide stores and two toolchain bumps changed
-how the stdlib and the aarch64 backend emit code.
-
-**Scope is patch, strictly** — ADR 0003 § Post-1.0 change policy:
-
-- **In:** bug fixes that do not change a documented contract, including fixes
-  that make behaviour *match* its documentation; tests; gates; CI; and
-  refactors of code that does **not ship** (`tests/`, `scripts/`, CI, harnesses).
-  Documentation rides along as it does with every release — it is never a
-  release by itself and never sets the level (ADR 0003, amended 2026-10-12).
-- **Out, queued for 1.2.0:** every optimization, and any `src/` refactor that is
-  not part of a bug fix. ADR 0003 prices "internal refactors with identical
-  output" as **minor**. The sweep still *looks* for optimizations and measures
-  them — it records each one in the 1.2.0 queue below instead of landing it.
-
-**Process** — the v1.0.2 shape, which worked: independent lenses over the whole
-surface, every finding through an adversarial refutation pass (does it
-reproduce; is the semver classification honest; is the severity honest), and
-every finding that survives but is not taken named in the CHANGELOG rather than
-silently carried.
-
-**Seeded leads.** Each was checked to *exist* while planning; none has been
-judged yet, and the sweep is not limited to them.
-
-- *Correctness — signalfd teardown order.* `tty_close_signalfd` closes the fd,
-  then unblocks. Any signal still queued and unread when the unblock lands is
-  delivered with its default action, which for `TTY_SIGMASK_EXIT` terminates the
-  process. So closing a signalfd *before* `tty_cooked()` / `tty_alt_leave()`
-  can strand the user's terminal — the outcome v1.0.2's headline fix existed to
-  prevent. `docs/examples/raw_loop.cyr` already closes it last, but neither the
-  docstring nor ADR 0002 says *why*. Prove the hazard with a test, then document
-  the ordering where consumers read it (the docstring ships in the bundle).
-- *Correctness — real aarch64 hardware.* The last Pi 4 run was v1.1.1. Since
-  then: two toolchain bumps, including 6.6.18's compile-time ESYSXLAT fold,
-  which changed how aarch64 syscall numbers are emitted. qemu-user passes;
-  the Pi is what settles alignment and ABI questions for the wide stores.
-- *Security — CI trusts an unpinned installer.* `ci.yml` and `release.yml` pipe
-  `install.sh` from cyrius's **`main`** branch into `sh`, though the toolchain
-  version is pinned. The installer carries the Ed25519 key that verifies the
-  release tarball, so the trust anchor itself is fetched unpinned. The script
-  exists at the pinned tag; fetch it from there.
-- *Security — workflow privileges.* `release.yml` grants `contents: write` at
-  workflow level, so every job — including the reused CI gate — holds it. Only
-  the publishing job needs it. Third-party actions are on mutable major tags
-  (`actions/checkout@v4`, `softprops/action-gh-release@v2`, …); decide whether
-  to pin by commit SHA.
-- *Security — byte budgets, mechanically.* The six `_buf` composers take no
-  capacity argument, so each one's documented byte budget is the whole memory
-  safety contract. The suite checks the returned length at every budget edge
-  and poisons the canvas for one composer's shortest escape. A
-  `cyrius fuzz --poison` harness (new in cyrius 6.6.18) giving every composer a
-  buffer sized *exactly* to its budget would turn any write past the end into a
-  redzone stop (exit 86), across the whole input envelope.
-- *Refactor (non-shipping) — land the identity harnesses.* The two emitted-byte
-  harnesses that proved v1.0.1 and v1.1.0 byte-identical (the streaming
-  `sha256:6dcd7228…` dump and the exhaustive RGB-cube checksum) live outside
-  the repo as scratch tooling, "regenerate as needed". Every 1.2.0 optimization
-  will need exactly that proof, and a proof that is rebuilt each time can
-  quietly drift from the one that was run before.
-- *Refactor (non-shipping) — one local runner for every CI gate.* `ci.yml` has
-  16 gates; `scripts/smoke.sh` runs a subset, and the aarch64, agnos, lint, DCE
-  and example gates have no local one-command equivalent. The 1.1.3 toolchain
-  comparison needed a scratch mirror of all 16.
-- *Docs (ride along) — what consumers had to discover alone.* Two docstrings
-  leave out facts that consumers re-derived by hand, which a 2026-10-12 survey
-  of all five consumer trees found:
-  - `tty_winsize` succeeds with **0 × 0** on a pty whose size was never set.
-    Four consumers (chakshu, cyim, kii, bannermanor) each wrote their own guard
-    for that "successful zero", and bannermanor's `stdout_is_tty` treats it as
-    not-a-TTY, so it disagrees with `tty_isatty`. The docstring should say so.
-  - `tty_open_signalfd` returns a **blocking** fd, and nothing says how to get a
-    non-blocking one; anuenue hand-rolled a signalfd for exactly that reason.
-    The stdlib's `fd_set_nonblocking(fd)` (cyrius 6.6.8+) on the returned fd
-    does it with no new darshana API. One docstring line says so.
-  - Two shipped comments are now inaccurate. `src/termios.cyr` says no consumer
-    references the `_AGNOS_*` internals, "verified across all five consumer
-    trees". There are nine; re-checked 2026-10-12 and none does, so only the
-    count is stale. The AGNOS `tty_raw` docstring says raw mode waits until
-    "agnos grows a raw-input mechanism". kbscan#42 already delivers raw
-    scancodes, and chakshu and cyim decode it themselves. Since AGNOS input was
-    ruled out of scope (2026-10-12), the docstring should say that -1 is the
-    answer by design — darshana will not build raw input over kbscan, and
-    consumers wanting raw keys on AGNOS read it themselves. Only a kernel-side
-    raw-mode switch on the AGNOS console would change that, as a termios-shaped
-    peer rather than a decoder.
-
 ## Queued: 1.2.0 (minor)
 
-Additive only — adding a symbol never breaks the freeze. Items arrive here from
-the 1.1.4 sweep (optimizations and standalone `src/` refactors) and from
-consumers (new symbols). The bar for anything claiming identical output is
-proof, not argument: emitted bytes identical over the full input envelope, on
-every architecture the change could affect — which is why 1.1.4 lands the
-harnesses first.
+The next release. Additive only — adding a symbol never breaks the freeze.
+Items arrive here from the 1.1.4 sweep (optimizations and standalone `src/`
+refactors) and from consumers (new symbols). The bar for anything claiming
+identical output is proof, not argument: **`tests/identity.tcyr`'s eleven
+digests unchanged** — on x86_64, under qemu-aarch64, and on the Pi 4 for
+anything that changes a store width or alignment. That suite, landed in 1.1.4,
+is the proof; a moved digest is a frozen-surface change, not a test update.
 
-**Queued at planning** (before the sweep):
+**Optimizations, queued by 1.1.4.** Each was prototyped in scratch and matched
+1.1.3 with zero mismatches over its full envelope (return value plus every byte
+of a poisoned canvas), on x86_64 and qemu-aarch64. Medians of 14–28 samples of
+20M calls, pinned to one core, cycc 6.6.20 on Zen3. Nothing here is a consumer
+bottleneck today: the largest measured win for a real consumer is ~70 µs/frame
+for kii at ~10k cells, and anuenue's per-character path only if it drops its
+escape cache.
+
+1. **Write the constant escape prefixes as hex literals** (`ansi.cyr`, the
+   three wide stores). cycc 6.6.20 does not fold `27 | (91 << 8) | …`: ~45
+   instructions per call build the "one store". `tty_fg_256_buf` −17%,
+   `tty_sgr_reset_buf` −19%, `tty_fg_rgb_buf` −6%. No control flow changes.
+2. **Rewrite the shared RGB body, keeping the wrappers.** Literal prefix; one
+   range check `((r | g | b) >> 8) != 0`; a pointer cursor instead of
+   `pos = pos + 1` per byte; exact-width packed stores per field.
+   `tty_fg_rgb_buf` 770.5 → 502.9 ms (−35%); net 31.8 → 18.4 ns. **Needs the Pi**:
+   store16 is new and store32 lands at data-dependent unaligned offsets.
+3. **Optional on top of 2: flatten `tty_fg_rgb_buf` / `tty_bg_rgb_buf`.** −47–49%
+   gross, net 13.8 ns. Re-expands v0.9.3's dedupe; the identity suite is what
+   catches the two copies drifting.
+4. **The same treatment for `tty_fg_256_buf` (−41%) and `tty_sgr_buf` (−31%)** —
+   and write the queued `tty_bg_256_buf` in that shape from the start.
+5. **A `tty_dec_buf` fast path** — small values −47%, 10-digit −40%. Trap: the
+   digit counter overflows at 19 digits; it needs an explicit stop.
+
+*Measured and rejected — do not retry without new evidence:* `#inline` (cycc
+ignores it here); `#regalloc` (no codegen change); copying parameters into
+locals (none); two divisions instead of four (+3%); rodata digit tables (−27%,
+but +2,328 B in every consumer binary, even under DCE); inlining `tty_move`'s
+compose, flattening `tty_cursor_up`/`down`, or inlining `tty_sgr`'s hop (−1% to
+−6.6% end to end — the write(2) dominates); widening `tty_raw`'s 60-byte copy
+(runs once per session); build flags (no change in ranking).
+
+*Correctness traps that look like optimizations:* a packed store that writes
+past the escape (only a whole-canvas check sees it); folding `pos` into the
+channel mask (rejects pos ≥ 256); dropping a composer's own `pos < 0` guard
+(reopens v0.9.3's laundered -1); an 8-byte access at offset 56 of `tty_raw`'s
+60-byte buffer; a fixed 5-digit inline in `tty_move` (silently depends on a
+guard its docstring contemplates loosening).
+
+**Refactors with identical output, queued:**
 
 - **Route the five Linux `ioctl` calls through the stdlib's `sys_ioctl`.** The
   wrapper is in the vendored 6.6.20 stdlib (`lib/syscalls_linux_common.cyr`),
-  filed by kybernet, and its own comment cites darshana's hand-rolled call. The
-  behaviour is identical, so it is a refactor and minor-priced.
+  filed by kybernet, and its own comment cites darshana's hand-rolled call.
   `scripts/syscall-audit.sh`'s allowlist moves with it.
-
-**Queued by 1.1.4** — empty until the sweep runs.
+- **Move the AGNOS arm onto the stdlib's agnos `sys_winsize`,
+  `sys_sigprocmask` and `sys_signalfd`**, which use the same numbers.
+- **Extract the AGNOS peers' pure decode and mask math into `_agnos_*`
+  helpers**, so `tests/agnos.tcyr` can unit-test them. Today they have compile
+  coverage only: in the 1.1.4 audit, swapping AGNOS `tty_winsize`'s rows and
+  cols, or dropping its signalfd rollback, survived every gate.
+- **`tty_raw`'s copy-loop bound to `TIO_BUF_SIZE`**, removing the fourth literal
+  `60` site a resize has to remember.
 
 **Candidate symbols** — consumer-driven, under the house rule (CLAUDE.md) that
 darshana does not anticipate: a primitive is extracted when a **second**
@@ -244,6 +207,10 @@ rule. Names and shapes are placeholders to settle with the consumers.
   flushes pending input with `TCSETSF`). Termios-shaped, so in charter, but no
   consumer has asked.
 - **Input flush (`TCIFLUSH`)** — chakshu only (`src/tui.cyr:495-496`, `:520`).
+- **`TTY_SIGMASK_PIPE`** (Linux 0x1000 / AGNOS 0x2000), so a consumer can route
+  SIGPIPE through its signalfd instead of dying on a broken output pipe —
+  suggested by the 1.1.4 security lens alongside the teardown reorder. No
+  consumer has asked; ignoring SIGPIPE works today.
 - **thoth-only screen controls:** cursor save/restore (`ESC 7` / `ESC 8`), the
   DECSTBM scroll region, OSC 0 window title, OSC 52 clipboard, and `_buf` forms
   of cursor-move and clear-to-EOL. thoth also hand-rolls mouse reporting and
@@ -263,22 +230,53 @@ that take over a screen.
 **Always eligible:** a new platform peer (additive by ADR 0003 — the AGNOS arm
 arrived this way across v0.8.0–v0.9.0), and anything a consumer asks for.
 
-## Downstream — not darshana work
+## Later 1.1.x — patch candidates
 
-Kept so the reasons are not lost:
+Confirmed in the 1.1.4 sweep and patch-shaped, but not taken in it:
 
-- **anuenue** can delete its 1,530-entry / 48,960-byte pre-baked escape table,
-  its build pass, and a cache-invalidation bug class. v1.1.0's composers are
-  *faster* than that cache — 34.8 ns/call against the 39.3 ns measured for a
-  faithful replica in the v1.0.2 audit. Still present at anuenue 1.3.6.
-- **kii and anuenue resolve darshana by `path`.** Both declare
-  `path = "../darshana"` beside their `git` / `tag`, so the vendored bundle
-  tracks this working tree rather than the tag they name (kii: `tag = "1.0.0"`,
-  anuenue: `tag = "1.1.1"`; both vendored 1.1.2). Reconcile at their next bump.
-- **A bump to 1.1.3 needs no consumer code change.** The frozen surface has not
-  moved since v1.0.0. What changes is that `cyrius deps` resolves two stdlib
-  leaves from darshana's sidecar instead of six — and every consumer already
-  declares the four that dropped.
+- **Run `tests/agnos.tcyr`'s live half under mirshi in CI.** The AGNOS peers
+  that issue agnos syscalls are uncallable on a Linux host, so they have compile
+  coverage only. The 1.1.4 correctness lens ran them under mirshi 1.11.3 locally
+  — winsize, isatty, raw/cooked, both signalfds — 15/15. Wiring it needs mirshi
+  available in CI.
+
+## Upstream — not darshana work
+
+Found by the 1.1.4 sweep in the toolchain and emulator darshana builds on,
+recorded for their owners:
+
+- **cyrius stdlib, agnos `sys_close(-1)`** treats -1 as a tagged socket (bit
+  0x40000000 is set in -1) and frees socket slot 7. darshana's AGNOS
+  `tty_close_signalfd` guards against it since 1.1.4.
+- **mirshi** never frees a closed signalfd's slot (its documented v1.6.0 limit;
+  8 per process), so the 9th `tty_open_signalfd` under mirshi fails.
+- **The agnos kernel's sigprocmask** stores any `how` other than 0 and 1
+  verbatim, while mirshi names SIG_SETMASK — the two disagree on `how = 2`.
+- **cyrius `lib/syscalls_linux_common.cyr`** (≈:179) repeats darshana's old
+  "no 16→29 ESYSXLAT row" claim; 6.5.38 added that row.
+- **cyrius 6.6.20 `cyrius deps`** does not prune `cyrius.lock` when a stdlib
+  leaf is removed, and `cyrius lib sync --dry-run` prints pointer values
+  instead of file names.
+
+## Upgrade notes for consumers
+
+What a consumer bumping its darshana dep should know. Consumer-specific
+issues live in each consumer's own roadmap, not here.
+
+- **1.1.4 needs no consumer code change.** No frozen name, arity, return
+  contract, emitted byte or constant moved — `tests/identity.tcyr`'s digests are
+  identical to every release since v1.0.0. Two inputs that were already
+  outside the documented contract now behave as documented: an fd outside
+  [0, 0x7FFFFFFF] is rejected by the four Linux fd-taking functions instead of
+  aliasing another descriptor, and the AGNOS `tty_close_signalfd` no longer
+  passes a negative fd to close.
+- **Reorder your teardown** to ADR 0002's amended sequence: `tty_cooked()`
+  first, `tty_close_signalfd()` last. The old order (cooked fourth) can leave the
+  terminal raw when fd 1 is a broken pipe.
+- **Live signalfds need disjoint masks**, and a child spawned while one is open
+  inherits its signal block — both now documented in the docstrings.
+- **1.1.3 needed no consumer code change either.** `cyrius deps` resolves two
+  stdlib leaves from darshana's sidecar instead of six.
 
 ## 2.0.0 — major
 

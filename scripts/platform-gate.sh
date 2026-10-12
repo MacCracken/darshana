@@ -28,7 +28,18 @@
 # its own copy of the awk.)
 #
 # `--self-test` mutation-proves it: an ungated token in a non-termios
-# module must be REJECTED.
+# module must be REJECTED, and so must a token in termios.cyr itself that
+# sits outside that file's own gate.
+#
+# v1.1.4: the 1.1.4 audit found two holes. (1) The self-test only planted a
+# token in a module with NO gate, so it exercised the "no gate at all"
+# branch and never the positional one — disabling the line-number check
+# left --self-test green. (2) The Linux token set was the ioctl names only,
+# so the Linux signalfd pair (`sys_signalfd`, `sys_sigprocmask`,
+# `SFD_CLOEXEC`) could be moved below the AGNOS #endif with every gate
+# green; the AGNOS build then warned "duplicate fn … last definition wins"
+# and silently used the Linux bodies. Both are closed, and each probe now
+# checks for its own failure message rather than for any non-zero exit.
 
 set -eu
 
@@ -63,7 +74,7 @@ $_stray"
 run() {
     lin_report=""; agn_report=""
     for f in "$SRC_DIR"/*.cyr; do
-        r=$(check_gate "$f" '(SYS_IOCTL|TCGETS|TCSETS|TIOCGWINSZ)' CYRIUS_TARGET_LINUX "Linux ioctl")
+        r=$(check_gate "$f" '(SYS_IOCTL|TCGETS|TCSETS|TIOCGWINSZ|sys_signalfd|sys_sigprocmask|\bSFD_CLOEXEC)' CYRIUS_TARGET_LINUX "Linux ioctl")
         [ -n "$r" ] && lin_report="$lin_report $r"
         r=$(check_gate "$f" '_AGNOS_SYS_[A-Z]+|_AGNOS_SFD_' CYRIUS_TARGET_AGNOS "agnos syscall")
         [ -n "$r" ] && agn_report="$agn_report $r"
@@ -78,17 +89,30 @@ run() {
 if [ "${1:-}" = "--self-test" ]; then
     st_fail=0
     tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT INT TERM
-    mkdir -p "$tmp/src"
-    cp "$SRC_DIR"/*.cyr "$tmp/src/"
-    # Mutation: an ungated Linux ioctl token in a NON-termios module — the
-    # exact shape the v0.9.3 file-scoped check could not see.
-    printf '\nvar _probe_req = TCGETS;\n' >> "$tmp/src/ansi.cyr"
-    if ( SRC_DIR="$tmp/src" "$0" >/dev/null 2>&1 ); then
-        echo "  SELF-TEST FAIL: ungated ioctl token in ansi.cyr was NOT rejected" >&2
-        st_fail=1
-    else
-        echo "  ok: rejected — ungated Linux ioctl token in a non-termios module"
-    fi
+    # probe <name> <expected message> <file to append to> <line to append>
+    probe() {
+        mkdir -p "$tmp/p"; cp "$SRC_DIR"/*.cyr "$tmp/p/"
+        printf '\n%s\n' "$4" >> "$tmp/p/$3"
+        if _out=$( SRC_DIR="$tmp/p" "$0" 2>&1 ); then
+            echo "  SELF-TEST FAIL: '$1' was NOT rejected" >&2; st_fail=1
+        elif ! printf '%s' "$_out" | grep -qF "$2"; then
+            echo "  SELF-TEST FAIL: '$1' was rejected, but not by the rule under test" >&2; st_fail=1
+        else
+            echo "  ok: rejected — $1"
+        fi
+        for _x in "$tmp/p"/*.cyr; do : > "$_x"; done
+    }
+    # An ungated Linux ioctl token in a NON-termios module — the exact
+    # shape the v0.9.3 file-scoped check could not see.
+    probe "ungated Linux ioctl token in a non-termios module" "has no CYRIUS_TARGET_LINUX gate" \
+        ansi.cyr 'var _probe_req = TCGETS;'
+    # The POSITIONAL branch (v1.1.4): termios.cyr HAS the gate, but this
+    # token sits after its #endif.
+    probe "ioctl token after termios.cyr's own Linux #endif (positional)" "outside the CYRIUS_TARGET_LINUX gate" \
+        termios.cyr 'var _probe_pos = TCGETS;'
+    # A Linux-only signalfd wrapper outside the gate (v1.1.4).
+    probe "Linux signalfd wrapper outside the gate" "outside the CYRIUS_TARGET_LINUX gate" \
+        termios.cyr 'fn _probe_sfd() { return sys_signalfd(0 - 1, 0, 0); }'
     # Negative control: the real tree must still pass.
     if ( "$0" >/dev/null 2>&1 ); then
         echo "  ok: real $SRC_DIR still passes (not vacuous)"

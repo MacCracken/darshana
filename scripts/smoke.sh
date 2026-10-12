@@ -4,8 +4,9 @@
 # sync with the source modules. CI runs this in build-and-test;
 # contributors should run it before commit.
 #
-# bash (not /bin/sh dash) is required: `<( ... )` process substitution
-# is used for the dist drift check.
+# Run it with bash, as CI and scripts/ci.sh do. (Through v1.1.3 this
+# header said bash was required for `<( ... )` process substitution in
+# the drift check; that was removed in v1.0.2.)
 
 set -eu
 
@@ -91,7 +92,10 @@ pass "all $(echo "$required_syms" | wc -w) cyim-API tty_* / tio_* symbols presen
 # silently lag the shipped surface (the loop above only catches the
 # other direction — listed-but-missing-from-dist). This is how
 # tty_cursor_up / tty_cursor_down went unchecked for several releases.
-actual_fns=$(grep -oE '^fn (tty_|tio_)[A-Za-z0-9_]+' dist/darshana.cyr | awk '{print $2}' | sort -u)
+# v1.1.4: EVERY non-underscore fn, not just `tty_`/`tio_` ones. The
+# naming convention says anything without a `_` prefix is public, so an
+# undocumented `fn darshana_bell()` used to ship past this check unlisted.
+actual_fns=$(grep -oE '^fn [A-Za-z][A-Za-z0-9_]*' dist/darshana.cyr | awk '{print $2}' | sort -u)
 for fn in $actual_fns; do
     case " $required_syms " in
         *" $fn "*) : ;;
@@ -111,11 +115,14 @@ pass "all $(echo "$required_flags" | wc -w) TIO_* / TIOC* / TTY_* constants pres
 # above, added v0.9.3. Without it the constant contract list could
 # silently lag the shipped surface, and it had: four AGNOS_* internals
 # entered dist across v0.8.0-v0.9.0 unlisted and outside the naming
-# convention `src/main.cyr` calls frozen at v1.0. A shipped constant is
+# convention the bundle front matter (src/termios.cyr) calls frozen at
+# v1.0 — in src/main.cyr until v0.9.4. A shipped constant is
 # either public contract (list it here) or internal (`_`-prefix it).
 # Not hypothetical in this toolchain: darshana's own v0.9.2 SYS_IOCTL
 # bug was a shipped constant silently shadowing a stdlib value.
-actual_vars=$(grep -oE '^var [A-Z][A-Za-z0-9_]*' dist/darshana.cyr | awk '{print $2}' | sort -u)
+# v1.1.4: any non-underscore `var`, lowercase included — `var tty_last_sgr`
+# used to slip past an uppercase-only pattern.
+actual_vars=$(grep -oE '^var [A-Za-z][A-Za-z0-9_]*' dist/darshana.cyr | awk '{print $2}' | sort -u)
 for v in $actual_vars; do
     case " $required_flags " in
         *" $v "*) : ;;
@@ -123,6 +130,73 @@ for v in $actual_vars; do
     esac
 done
 pass "required_flags covers every public constant in dist ($(echo "$actual_vars" | wc -w) total — no lag)"
+
+# The lists above are this script's own; ADR 0003 is the freeze (v1.1.4).
+# Renaming a frozen symbol CONSISTENTLY — in src, tests and the lists
+# above — kept every check green through v1.1.3. So every name the ADR's
+# two tables freeze must still exist in dist, and each table must hold the
+# count its heading states. Additive 1.x symbols are fine: this is a
+# subset check, not equality.
+adr=docs/adr/0003-v1-api-freeze.md
+adr_names() {   # $1 = heading regex that starts the table section
+    awk -v h="$1" '$0 ~ h { on = 1; next } on && /^### / { exit } on && /^\|/' "$adr" \
+        | grep -oE '`[A-Za-z_][A-Za-z0-9_]*`' | tr -d '`' | sort -u
+}
+adr_fns=$(adr_names '^### Frozen: 29 public functions')
+adr_consts=$(adr_names '^### Frozen: 37 public constants')
+[ "$(echo "$adr_fns" | wc -w)" -eq 29 ] || fail "ADR 0003's function table lists $(echo "$adr_fns" | wc -w) names, not 29"
+[ "$(echo "$adr_consts" | wc -w)" -eq 37 ] || fail "ADR 0003's constant table lists $(echo "$adr_consts" | wc -w) names, not 37"
+for n in $adr_fns; do
+    grep -qE "^fn ${n}\(" dist/darshana.cyr || fail "ADR 0003 freezes 'fn ${n}', but dist/darshana.cyr does not define it — renaming or removing a frozen fn needs a major (ADR 0003)"
+done
+for n in $adr_consts; do
+    grep -qE "^var ${n} " dist/darshana.cyr || fail "ADR 0003 freezes 'var ${n}', but dist/darshana.cyr does not define it — needs a major (ADR 0003)"
+done
+pass "every ADR 0003 frozen name is still in dist (29 fns, 37 constants)"
+
+# ============================================================
+# Stack-buffer budgets — v1.1.4. Every fixed-size stack buffer in src/
+# is listed here with the WORST CASE it has to hold, and must be at least
+# that large. Caller buffers are covered exhaustively by
+# tests/identity.tcyr's guard region; these are the library's OWN
+# buffers, which no test can see past: shrinking tty_move's buf[44] to
+# buf[8] overflows its stack frame silently and every suite stays green
+# (shown in the 1.1.4 audit). Bidirectional: a stack buffer missing from
+# this list fails too, so a new one has to declare its worst case.
+#
+#   fn                  buffer  min  worst case
+#   _ansi_rgb_write     buf     19   CSI 38;2;255;255;255m
+#   tty_sgr             buf      6   ESC [ + 3 digits + m
+#   tty_dec_buf         tmp     19   digits of i64 max
+#   tty_move            buf     42   ESC [ + 19 digits + ; + 19 digits + H
+#   _cursor_rel         buf     22   ESC [ + 19 digits + final
+#   tty_raw             work    60   TIO_BUF_SIZE (the copy loop runs to 60)
+#   tty_winsize         ws       8   struct winsize
+#   tty_isatty          ws       8   struct winsize
+#   tty_open_signalfd   mask     8   one u64 sigset (both peers)
+#   tty_open_signalfd   prev     8
+#   tty_open_signalfd   added    8
+#   tty_close_signalfd  mask     8
+# ============================================================
+echo "[smoke] stack-buffer budgets"
+stack_budgets="_ansi_rgb_write:buf:19 tty_sgr:buf:6 tty_dec_buf:tmp:19 tty_move:buf:42 _cursor_rel:buf:22 tty_raw:work:60 tty_winsize:ws:8 tty_isatty:ws:8 tty_open_signalfd:mask:8 tty_open_signalfd:prev:8 tty_open_signalfd:added:8 tty_close_signalfd:mask:8"
+actual_bufs=$(awk '/^fn /{ f = $2; sub(/\(.*/, "", f) }
+    /^[[:space:]]+var [A-Za-z_][A-Za-z0-9_]*\[[0-9]+\];/ {
+        b = $2; n = b; sub(/\[.*/, "", b); sub(/.*\[/, "", n); sub(/\].*/, "", n)
+        print f ":" b ":" n
+    }' src/*.cyr)
+for entry in $actual_bufs; do
+    fb="${entry%:*}"; size="${entry##*:}"
+    want=""
+    for sb in $stack_budgets; do
+        [ "${sb%:*}" = "$fb" ] && want="${sb##*:}"
+    done
+    [ -n "$want" ] || fail "src/ declares stack buffer '${fb}' (${size} bytes) with no budget in scripts/smoke.sh — add it with its worst case"
+    [ "$size" -ge "$want" ] || fail "stack buffer '${fb}' is ${size} bytes but its worst case is ${want}"
+done
+grep -qE '^var _tty_saved\[([6-9][0-9]|[1-9][0-9]{2,})\];' src/termios.cyr \
+    || fail "_tty_saved must hold TIO_BUF_SIZE (60) bytes"
+pass "every src/ stack buffer meets its documented worst case ($(echo "$actual_bufs" | wc -w) buffers)"
 
 # ============================================================
 # Syscall allowlist — v0.9.4. Shared implementation with the CI
@@ -134,8 +208,8 @@ bash scripts/syscall-audit.sh || fail "syscall allowlist violation (see above)"
 # ============================================================
 # Docstring audit — v0.9.4. `dist/darshana.cyr` IS the documentation
 # a consumer reads, so a public symbol without a usable docstring is a
-# shipped defect, not a style nit. Enforces the three things the v0.9.4
-# per-symbol API audit checked by hand:
+# shipped defect, not a style nit. Enforces what the v0.9.4 per-symbol
+# API audit checked by hand:
 #
 #   1. every public fn has a comment block immediately above it,
 #   2. that block states the return contract,
@@ -170,7 +244,7 @@ echo "[smoke] docstring audit"
 doc_gaps=$(awk '
 /^#/                  { if (reset) { blk=""; reset=0 } blk = blk "\n" $0; prev="c"; next }
 /^[[:space:]]*$/      { reset=1; prev="b"; next }
-/^fn (tty_|tio_)[a-z0-9_]+\(/ {
+/^fn [A-Za-z][A-Za-z0-9_]*\(/ {
     name=$2; sub(/\(.*/, "", name)
     occ[name]++
     tag = (occ[name] > 1) ? name " (peer #" occ[name] ")" : name
@@ -181,7 +255,7 @@ doc_gaps=$(awk '
     }
     blk=""; reset=0; prev="f"; next
 }
-/^var [A-Z]/ {
+/^var [A-Za-z]/ {
     cname=$2
     if ((reset || blk == "") && prev != "v") print "  no doc group:      " cname
     blk=""; reset=0; prev="v"; next

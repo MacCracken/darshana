@@ -71,15 +71,24 @@ What darshana provides:
   invokes its teardown sequence. No `rt_sigaction` / sa_restorer
   trampoline trap — pure syscall.
 - **Documented teardown sequence.** Restore in this order so the
-  terminal is in a sane state when the shell prompt returns:
-  1. `tty_cursor_show()` — cursor visible
-  2. `tty_alt_leave()`   — primary screen restored
-  3. `tty_sgr_reset()`   — colors back to default (if `tty_sgr` was used)
-  4. `tty_cooked()`      — line discipline restored (zero-arg as of
-     v0.7.0; restores the fd `tty_raw` saved)
-  5. `tty_close_signalfd(fd, mask)` — if a signalfd was opened: close
-     it and unblock the signals (v0.7.0; without it the `SIG_BLOCK`
-     installed by `tty_open_signalfd` persists after exit)
+  terminal is in a sane state when the shell prompt returns (reordered
+  in v1.1.4 — see Amendments):
+  1. `tty_cooked()`      — line discipline restored FIRST (zero-arg as of
+     v0.7.0; restores the fd `tty_raw` saved). Everything after it is a
+     write to fd 1, and any of those can kill the process (SIGPIPE when
+     fd 1 is a pipe whose reader has gone), so the step that matters
+     most must not wait behind them. None of the escapes below contains
+     a `\n`, so restoring output processing first changes no byte.
+  2. `tty_cursor_show()` — cursor visible
+  3. `tty_alt_leave()`   — primary screen restored
+  4. `tty_sgr_reset()`   — colors back to default (if `tty_sgr` was used),
+     after the alt-screen leave so it lands on the screen the user keeps
+  5. `tty_close_signalfd(fd, mask)` — LAST, if a signalfd was opened:
+     close it and unblock the signals (v0.7.0; without it the
+     `SIG_BLOCK` installed by `tty_open_signalfd` persists after exit).
+     The unblock delivers any signal that arrived but was never read,
+     with its default action — for `TTY_SIGMASK_EXIT`, termination — so
+     it must come after the terminal is restored.
 
 What darshana does **not** do:
 
@@ -117,7 +126,7 @@ What darshana does **not** do:
   only safety net. The donor cyim already does the right thing, and
   the chakshu render loop does too, so the worst case in practice is
   the consumer that grew from a snippet.
-- "Did the consumer wire all four restore calls in the right order?"
+- "Did the consumer wire all the restore calls in the right order?"
   is a question darshana can't answer at compile time. A future
   `darshana lint`-style helper could grep consumer source for the
   pattern, but that's out of scope for v0.4.0.
@@ -166,8 +175,9 @@ decision (primitives, not framework; the consumer owns teardown):
 - `tty_close_signalfd(fd, sigmask)` added as the teardown counterpart
   to `tty_open_signalfd`. The open call's `SIG_BLOCK` is otherwise
   irreversible within darshana (closing the fd alone does not unblock);
-  the new primitive closes the fd and restores the signal mask, and is
-  step 5 of the teardown sequence above.
+  the new primitive closes the fd and unblocks the signals in its mask
+  (it does not restore a saved mask), and is the last step of the
+  teardown sequence above.
 
 Both are breaking signature changes, taken pre-freeze precisely because
 the frozen v1.0 surface should not advertise a capability the data
@@ -175,9 +185,36 @@ model can't deliver, nor freeze an open primitive without its teardown
 counterpart. Blast radius was one mechanical edit each in cyim/chakshu
 (both already called `tty_cooked(0)`).
 
+**2026-10-12 (v1.1.4).** The documented teardown sequence was reordered
+and three hazards written down. The core decision is unchanged — darshana
+still provides the primitives and the consumer owns the teardown — but the
+sequence this ADR recommended could itself strand the terminal:
+
+- **`tty_cooked()` moved from step 4 to step 1.** Steps 1-3 were fd-1
+  writes whose result darshana never checks. When fd 1 is a pipe whose
+  reader has gone (`prog | head -c 1`), the first of them raises SIGPIPE,
+  whose default action kills the process before `tty_cooked()` runs.
+  Measured in the 1.1.4 audit on a real pty: in the old order the process
+  died of signal 13 with `ICANON` and `ECHO` still clear; with
+  `tty_cooked()` first it still died, but the terminal was restored.
+  Interactive bash can mask this by restoring tty state after a job dies of
+  a signal; `sh -c`, scripts, non-shell parents and `ssh host cmd` do not.
+- **`tty_close_signalfd` is pinned LAST, and the reason is stated.** A
+  signal that arrives but is never read stays pending through the close,
+  and the unblock delivers it with its default action. `tests/darshana.tcyr`
+  now proves the pending delivery.
+- **Live signalfds need disjoint masks.** Close unblocks every bit it is
+  handed, so closing one of two signalfds that share a signal deafens the
+  other. (The `tty_close_signalfd` docstring had claimed the scheme
+  "composes" without that condition.)
+- **The block is inherited by children.** `SIG_BLOCK` survives fork and
+  execve; `SFD_CLOEXEC` covers only the fd. A consumer that spawns a pager,
+  editor or shell while a signalfd is live must unblock in the child.
+
 ## References
 
-- v1.0 release criterion in [`docs/development/roadmap.md`](../development/roadmap.md)
+- The v1.0 release criteria (closed at v1.0.0; recorded in
+  [`CHANGELOG.md`](../../CHANGELOG.md) — the roadmap is forward-facing only)
 - CLAUDE.md domain rule: "Don't grow into a TUI framework."
 - `src/termios.cyr` — `_tty_saved`, `_tty_in_raw`, `_tty_raw_fd`,
   `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`

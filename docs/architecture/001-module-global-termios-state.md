@@ -32,7 +32,7 @@ on the *same* fd is an idempotent success, because there is nothing to lose.
 
 **A failed restore strands the slot.** `tty_cooked()` leaves `_tty_in_raw` set
 when `TCSETS` fails, so the caller can retry. If the failure is permanent —
-`EBADF` after the fd is closed, `ENOTTY` after a hangup — the flag stays 1 and
+`EBADF` after the fd is closed, `EIO` after a hangup (measured v1.1.4 on a pty whose master was closed; this note said `ENOTTY` before) — the flag stays 1 and
 `tty_raw` on any other fd is refused for the life of the process. There is no
 public reset. That is deliberate: every consumer's answer to a failed restore is
 to exit, and a `tty_forget()` would mostly be a way to lose a terminal quietly.
@@ -53,13 +53,16 @@ The cost is the single-slot limit above. No consumer has ever wanted two
 simultaneous raw fds — cyim, chakshu, kii and thoth each hold exactly one
 terminal — so the limit has never bound in practice.
 
-## The literal `60`, in three places
+## The literal `60`, in four places
 
-`TIO_BUF_SIZE = 60` is the public constant, but `_tty_saved[60]` and the `work[60]`
-scratch inside `tty_raw` use the bare literal. Cyrius array sizes must be literals
-or enum constants, not `var` constants, so the duplication cannot be factored out.
-**If that number ever changes, all three sites move together.** `tests/darshana.tcyr`
-carries a drift guard asserting `TIO_BUF_SIZE == 60` for exactly this reason.
+`TIO_BUF_SIZE = 60` is the public constant, but `_tty_saved[60]`, the `work[60]`
+scratch inside `tty_raw`, and that function's copy-loop bound (`while (i < 60)`)
+use the bare literal. Cyrius array sizes must be literals or enum constants, not
+`var` constants, so the array duplication cannot be factored out. **If that number
+ever changes, all four sites move together.** (This note said "three" through
+v1.1.3; the loop bound was the one it missed.) `tests/darshana.tcyr` carries a
+drift guard asserting `TIO_BUF_SIZE == 60`, and since v1.1.4 `scripts/smoke.sh`'s
+stack-buffer check requires `work` and `_tty_saved` to hold at least 60 bytes.
 
-The kernel struct is 36 active bytes; 60 covers the historically padded variants
-without straddling a stack red-zone.
+The kernel's `struct termios` is 36 bytes — what TCGETS copies; 60 matches
+glibc's padded userspace struct and leaves the tail as slack.
