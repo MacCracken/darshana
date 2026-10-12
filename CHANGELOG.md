@@ -4,6 +4,102 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.3] — 2026-10-12
+
+Toolchain bump cyrius **6.6.2 → 6.6.20**, plus the repairs it surfaced. **No
+`src/` line changed**, and `dist/darshana.cyr`'s module bodies are
+byte-identical to the 1.1.2 tag, so the ADR-0003 frozen surface cannot have
+moved. What a consumer sees differently is packaging: the bundle now carries a
+requires block, and its sidecar shrinks from six stdlib leaves to two.
+
+### Changed — toolchain `6.6.2` → `6.6.20`
+
+- darshana needed **no source edit**. The bump spans 18 upstream releases; the
+  parts that reach darshana are all in `cyrius distlib` and the stdlib.
+- **`dist/darshana.deps`: six leaves → two (`syscalls`, `io`).** cyrius 6.6.18
+  made a sidecar exactly what `distlib`'s compile-verify fixpoint proves the
+  bundle needs — across six targets, agnos included — instead of seeding it from
+  the producer's own `[deps].stdlib`. `alloc`, `assert`, `vec` and `args` were
+  darshana's *own* build footprint (`assert` for the tests, `vec` and `args` to
+  close stdlib include gaps), and every consumer had been told to resolve them.
+- **`dist/darshana.cyr` carries a `# Requires` block** — `include
+  "lib/syscalls.cyr"` and `include "lib/io.cyr"`, the sidecar's leaves in the
+  same order — so the bundle compiles with no other stdlib include. Includes are
+  once-only, keyed on the literal path, so a consumer that already includes those
+  files pays nothing.
+- **Consumer impact, checked rather than assumed.** A scratch consumer
+  depending on this tree by `path`, with an **empty** `[deps].stdlib`, builds
+  warning-free on x86_64, aarch64 and agnos and emits the expected bytes; one
+  that includes `lib/syscalls.cyr` and `lib/io.cyr` itself first builds the
+  same. The new bundle also builds and runs under the consumers' current **6.6.2**
+  pin, which matters because kii and anuenue resolve via `path = "../darshana"`
+  and so read this tree directly. All five consumers already declare `syscalls`,
+  `alloc`, `io`, `vec`, `args` and `assert` themselves, so none loses a leaf the
+  sidecar stopped supplying.
+- **`lib/` re-vendored** with `rm -rf lib/ && cyrius deps`: 23 modules,
+  468 KB → 728 KB, every file byte-identical to the 6.6.20 snapshot. Of the 21
+  files carried over, 19 changed and 2 are identical (`alloc_agnos`,
+  `args_macos`); `alloc_cx` and `poison` arrive transitively; `args` and
+  `args_win` leave with the `args` leaf (below).
+- **`cyrius.lock` is new — commit it.** 6.6.9 began writing the first lock of a
+  stdlib-only project, upstream's guidance is to commit it, and all five
+  consumers track theirs. 23 sha256 lines plus a `cyrius 6.6.20` trailer;
+  `cyrius deps --verify` reports 23 verified, 0 failed.
+
+### Changed — declared footprint
+
+- **`[deps].stdlib` drops `vec` and `args`** → `["syscalls", "alloc", "io",
+  "assert"]`. Neither was ever declared because darshana calls it: `vec`
+  (v1.0.1) closed `fmt` calling `vec_get` without including `vec`, and `args`
+  (v1.1.1) closed `io` delegating to `_agnos_getenv` without including
+  `args_agnos`. 6.6.20's `fmt.cyr` includes `vec.cyr` and its `io.cyr` includes
+  `args_agnos.cyr`, so the BFS pulls both definers anyway and the declarations
+  only auto-prepended a dead `lib/args.cyr`. **A/B on a scratch copy**: identical
+  assertion counts on every suite and target, zero warnings either way, smoke
+  binary 99,312 → 95,184 B (DCE'd 17,392 → 17,360). Kept, the `cyrius.cyml`
+  comment justifying `vec` would have been false.
+
+### Fixed
+
+- **The aarch64 build was not warning-free on 6.6.2.** Every `--aarch64` build
+  emitted `lib/io.cyr:442:31: raw syscall 32 is x86_64 'dup'` — the arch-blind
+  syscall class, in the stdlib this time. Nothing recorded it, and `state.md`'s
+  "no target emits a warning" did not hold at that pin. Fixed upstream; at
+  6.6.20 no target emits any warning.
+- **CHANGELOG `[1.1.2]` said "Not assigned a version."** The documentation sweep
+  accumulated under `[Unreleased]` and was cut into 1.1.2 with the toolchain
+  bump, but its "these are working-tree changes; the release they belong to is
+  the owner's call" paragraph went with it — into a tagged section that
+  `release.yml` publishes as the release body. Removed.
+- **`state.md` was a release behind.** The 1.1.2 cut never touched it: the top
+  entry still read "Unreleased (working tree)", the toolchain section said 6.6.0
+  and the test totals "green at cyrius 6.6.0".
+- **The consumer table and the roadmap's only open item were out of date.**
+  Both had the five consumers on 0.7.1–0.9.0. Checked against each consumer's
+  manifest *and* its vendored `lib/darshana.cyr`: all five are on 1.x and on
+  cyrius 6.6.2 — chakshu 1.1.1, anuenue 1.1.1 (vendored 1.1.2), cyim 1.0.0,
+  kii 1.0.0 (vendored 1.1.2), bannermanor 1.0.0. The roadmap item is closed and
+  deleted per its own rule. Its two live follow-ups stay: anuenue still ships
+  its phase-cached escape table, and the path-vs-tag mismatch first recorded for
+  kii is now in anuenue too.
+- **`ci.yml` still called `_agnos_getenv` a "known" warning** on the agnos
+  cross-build step. Closed at v1.1.1 and absent at 6.6.20; comment corrected.
+
+### Verified
+
+A local mirror of every `ci.yml` gate, run on 6.6.2 for a baseline and again on
+6.6.20 — 16/16 green both times: 238 unit + 56 PTY + 15 AGNOS on x86_64, and
+238 + 56 on aarch64 under `qemu-aarch64`; `darshana smoke ok` native, DCE'd and
+on aarch64; lint clean; the example builds and runs; `scripts/smoke.sh` PASS;
+both gate self-tests pass; distlib drift clean on both artifacts. Not re-run on
+the Pi 4 — the aarch64 numbers are qemu-user only.
+
+⚠ For the next footprint trim: removing a leaf did **not** prune its files from
+`cyrius.lock` — 6.6.20 rewrites the lock when `lib/` gains a file, not when it
+loses one — so `cyrius deps --verify` failed on `lib/args.cyr` and
+`lib/args_win.cyr` until the lock was regenerated from the final manifest. Run
+`cyrius deps --verify` after any `[deps].stdlib` change.
+
 ## [1.1.2] — 2026-09-11
 
 Cuts the accumulated documentation sweep together with the cyrius **6.6.2**
@@ -36,15 +132,13 @@ Linux, AGNOS and aarch64 arms all exercised: 238 unit + 56 PTY assertions native
 and the same 238 + 56 re-run on the aarch64 binaries under qemu with the smoke
 output matching `darshana smoke ok` exactly.
 
+### The documentation sweep
 
 Roadmap restructured around the semver cost of each open item, and a
 stale-information sweep over every doc the last five releases outran. **No
 executable line changed** — the `src/` diff is comment-only, and so is the
 regenerated `dist/darshana.cyr`, so emitted bytes are unchanged by construction
 rather than by measurement.
-
-**Not assigned a version.** These are working-tree changes; the release they
-belong to is the owner's call.
 
 ### Changed
 

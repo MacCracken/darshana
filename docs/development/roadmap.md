@@ -28,32 +28,25 @@ this file does not restate them.
 
 ## Open now
 
-Exactly one item, and it is **not** darshana work — it is downstream.
+**Nothing in darshana.** The single item this section carried — bump the five
+consumers to a `1.x` dep — had closed by v1.1.3: all five are on a 1.x tag
+([`state.md`](state.md) § Consumers has each one, checked against the vendored
+bundle as well as the manifest).
 
-- [ ] **Bump the five consumers to a `1.x` dep.** Outstanding since the v1.0.0
-      tag: chakshu (0.9.0), anuenue (0.9.0), cyim (0.8.2), kii (0.8.2),
-      bannermanor (0.7.1). Until this lands, the frozen surface is one nobody is
-      actually compiled against. bannermanor is furthest behind; **kii
-      additionally has a pin mismatch** to reconcile (manifest `tag = "0.8.2"`
-      while its vendored bundle reads 0.9.0, because it resolves via
-      `path = "../darshana"`).
+Downstream notes, **not darshana work**, kept so the reasons are not lost:
 
-      **No consumer code change is required.** The frozen surface has not moved
-      since v1.0.0, and v1.1.0's composer rewrite was proven byte-identical over
-      the complete RGB cube on x86_64 and on real aarch64. The only thing a
-      consumer sees differently is `dist/darshana.deps`, which has gained two
-      stdlib leaves since the freeze — `vec` (v1.0.1) and `args` (v1.1.1) — so
-      `cyrius deps` resolves two more modules.
-
-      Two consumers have a reason to bump beyond staying current:
-      - **anuenue** can delete its 1,530-entry / 48,960-byte pre-baked escape
-        table, its build pass, and a cache-invalidation bug class. v1.1.0's
-        composers are now *faster* than that cache — 34.8 ns/call against the
-        39.3 ns measured for a faithful replica in the v1.0.2 audit.
-      - **chakshu** holds an EXIT signalfd and a WINCH signalfd at the same
-        time, which is exactly the shape v1.0.2's `tty_open_signalfd` rollback
-        fix was written for: before it, a failed second open silently unblocked
-        signals the first fd owned and disarmed chakshu's exit path.
+- **anuenue** can delete its 1,530-entry / 48,960-byte pre-baked escape table,
+  its build pass, and a cache-invalidation bug class. v1.1.0's composers are
+  *faster* than that cache — 34.8 ns/call against the 39.3 ns measured for a
+  faithful replica in the v1.0.2 audit. Still present at anuenue 1.3.6.
+- **kii and anuenue resolve darshana by `path`.** Both declare
+  `path = "../darshana"` beside their `git` / `tag`, so the vendored bundle
+  tracks this working tree rather than the tag they name (kii: `tag = "1.0.0"`,
+  anuenue: `tag = "1.1.1"`; both vendored 1.1.2). Reconcile at their next bump.
+- **A bump to 1.1.3 needs no consumer code change.** The frozen surface has not
+  moved since v1.0.0. What changes is that `cyrius deps` resolves two stdlib
+  leaves from darshana's sidecar instead of six — and every consumer already
+  declares the four that dropped.
 
 ## Next, by bucket
 

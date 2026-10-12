@@ -5,11 +5,42 @@
 
 ## Version
 
-**Unreleased (working tree)** — **roadmap restructured around semver cost,
-and a stale-information sweep over every doc the last five releases outran.**
-Not assigned a version. No executable line changed — the `src/` and
-`dist/darshana.cyr` diffs are comment-only, so emitted bytes are unchanged by
-construction rather than by measurement.
+**1.1.3** — *open cycle*. **Toolchain bump cyrius 6.6.2 → 6.6.20, and the
+sidecar finally tells consumers the truth.** No `src/` line changed and
+`dist/darshana.cyr`'s module bodies are byte-identical to the 1.1.2 tag, so the
+frozen surface cannot have moved. What changed is packaging.
+
+⭐ **`dist/darshana.deps` went from six leaves to two** (`syscalls`, `io`).
+cyrius 6.6.18 made a sidecar exactly what `distlib`'s compile-verify fixpoint
+proves the bundle needs, on six targets including agnos, instead of seeding it
+from the producer's `[deps].stdlib`. So `alloc`, `assert`, `vec` and `args` —
+darshana's own test and include-gap footprint — stop being pushed onto every
+consumer. The bundle also gained a `# Requires` block (`include
+"lib/syscalls.cyr"` / `"lib/io.cyr"`), making it compile with no other stdlib
+include; includes are once-only by literal path, so existing consumers pay
+nothing. Proven with a scratch path-dep consumer on x86_64, aarch64 and agnos,
+with an empty `[deps].stdlib`, and again under the consumers' current 6.6.2 pin.
+
+The two include-gap leaves were then **dropped from darshana's own footprint**:
+6.6.20's `fmt.cyr` includes `vec.cyr` and its `io.cyr` includes
+`args_agnos.cyr`, so both definers arrive through the BFS anyway. A/B-proven:
+identical counts everywhere, zero warnings, smoke binary 99,312 → 95,184 B.
+`cyrius.lock` is new and belongs in the repo.
+
+⛔ **Two stale records corrected.** The consumer table and the roadmap's only
+open item both had the five consumers on 0.7.1–0.9.0 — all five are on 1.x
+(checked against each manifest *and* each vendored bundle), so the roadmap item
+is closed. And 6.6.2's `lib/io.cyr` had been making every `--aarch64` build warn
+(`raw syscall 32 is x86_64 dup`), which nothing recorded; 6.6.20 fixes it, and
+no target now emits any warning.
+
+**1.1.2** — *open cycle*. **Toolchain bump cyrius 6.6.0 → 6.6.2 (no source
+edit; the one changed vendored file, `lib/result.cyr`, is comment-only), plus
+the documentation sweep below: roadmap restructured around semver cost, and a
+stale-information sweep over every doc the last five releases outran.** No
+executable line changed — the `src/` and `dist/darshana.cyr` diffs are
+comment-only, so emitted bytes are unchanged by construction rather than by
+measurement.
 
 `roadmap.md` had kept the shape of a pre-1.0 milestone list while the library
 has been frozen and in maintenance for five releases. It now buckets everything
@@ -436,17 +467,20 @@ TTY_SIGMASK_EXIT/WINCH, `tty_clear_to_eol/to_end`.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.6.0` (in `cyrius.cyml [package].cyrius`, via
-  `${file:VERSION}` indirection on the package version). Bumped from `6.5.35`
-  at v1.0.1 — not drift housekeeping this time: 6.5.35 emitted a correctness
-  advisory on every invocation (*"carries the v6.5.36 enum Critical —
-  constants >= 2^62 read back as -1"*). darshana is not exposed (largest bundle
-  declares no `enum`, which is the defect's only vector; largest bundle constant
-  is `TTY_SIGMASK_WINCH = 0x10000000`), but the pin is what CI greps to pick an
-  installer version.
-  History: `6.2.36` → `6.5.35` at v0.9.1; `6.2.22` → `6.2.36` at v0.8.1;
-  `6.1.24` → `6.2.22` at v0.7.1; `6.0.1` → `6.1.24` at v0.5.4; `5.10.20` →
-  `6.0.1` at v0.3.5.
+- **Cyrius pin**: `6.6.20` (in `cyrius.cyml [package].cyrius`; the package
+  version itself comes from `${file:VERSION}`). Bumped from `6.6.2` at v1.1.3
+  with no source edit; what reached darshana is `distlib`'s verify-derived
+  sidecar and requires block (6.6.18) and the stdlib closing its own include
+  gaps. The pin is what CI greps to pick an installer version.
+  History: `6.6.0` → `6.6.2` at v1.1.2; `6.5.35` → `6.6.0` at v1.0.1 (forced:
+  6.5.35 emitted an enum-Critical advisory on every invocation; darshana
+  declares no `enum`, so it was not exposed); `6.2.36` → `6.5.35` at v0.9.1;
+  `6.2.22` → `6.2.36` at v0.8.1; `6.1.24` → `6.2.22` at v0.7.1; `6.0.1` →
+  `6.1.24` at v0.5.4; `5.10.20` → `6.0.1` at v0.3.5.
+- **`cyrius.lock`** (new at v1.1.3) pins a sha256 for every vendored `lib/`
+  file plus the stdlib pin, and is committed. `cyrius deps --verify` checks it.
+  It is **not** pruned when a leaf is removed — re-run `--verify` after any
+  `[deps].stdlib` change and regenerate the lock if it names a file that is gone.
 - **`[deps].stdlib` is the opt-in auto-prepend list, and the only place the
   footprint is declared.** `lib/` is not hand-curated: it is *output*.
   **`cyrius deps` is the resolver and the authority** — Phase 1 copies the
@@ -468,7 +502,9 @@ TTY_SIGMASK_EXIT/WINCH, `tty_clear_to_eol/to_end`.
   them (`agnosys`, `base64`, `bigint`, `csv`, `cyml`, `json`, `linalg`,
   `matrix`, `toml`, `u128`) deleted upstream and vendored here as dead bytes.
   Verified by resolving into a clean tree and rebuilding: 217 assertions green
-  and `dist/darshana.cyr` byte-identical to the repo's.
+  and `dist/darshana.cyr` byte-identical to the repo's. At v1.1.3 the same
+  procedure yields **23 modules, 728 KB**, each byte-identical to
+  `~/.cyrius/versions/6.6.20/lib`.
 
 ## Source
 
@@ -479,8 +515,8 @@ TTY_SIGMASK_EXIT/WINCH, `tty_clear_to_eol/to_end`.
 | `src/cursor.cyr` | 135 | `tty_dec_buf` (decimal formatter — renamed from `tty_itoa`, returns new write position, v0.7.0), `tty_move` (with [1,65535] coord bounds + `buf[44]` v0.7.0), `tty_cursor_up/down`. Composes the CSI row;colH escape inline. |
 | `src/main.cyr` | 27 | Convenience entry — `include`s the three sub-modules; carries the authoritative surface pointer (→ `scripts/smoke.sh`) + naming/return conventions (v0.7.0). Not in the dist bundle. |
 | `programs/smoke.cyr` | 17 | Compile-link smoke. |
-| `dist/darshana.cyr` | 1,254 | Bundled distribution — regenerate via `cyrius distlib`. What consumers `include "lib/darshana.cyr"`. (1,267 lines on disk; `distlib` reports module-body lines, excluding its 13-line generated header.) |
-| `dist/darshana.deps` | 8 | Generated stdlib-leaf sidecar — **6 entries** (`syscalls`, `alloc`, `io`, `assert`, **`vec`** — the fifth added at v1.0.1, compile-verified by 6.6.0's `distlib`). Consumed by a consumer's `cyrius deps`. |
+| `dist/darshana.cyr` | 1,254 | Bundled distribution — regenerate via `cyrius distlib`. What consumers `include "lib/darshana.cyr"`. (1,271 lines on disk; `distlib` reports module-body lines, excluding its 17-line generated header — 13 lines plus, since v1.1.3, the 4-line `# Requires` block that `include`s the sidecar's leaves so the bundle compiles on its own.) |
+| `dist/darshana.deps` | 4 | Generated stdlib-leaf sidecar — **2 entries** (`syscalls`, `io`) since v1.1.3, down from 6. Derived by `distlib`'s compile-verify across six targets (cyrius 6.6.18+), not copied from `[deps].stdlib`, so darshana's test-only `assert` no longer reaches consumers. Consumed by a consumer's `cyrius deps`. |
 
 Total source ≈ 1,254 lines across the three dist modules (grew from ~780
 at v0.7.0 with the v0.8.0–v0.9.0 agnos peers, and again through the v0.9.3
@@ -498,10 +534,11 @@ self-audits bidirectionally).
 | `tests/darshana.tcyr` | **167 assertions** (a couple live-fd-gated): pure-function coverage of `tio_load32/store32`, `_tty_apply_raw_flags` (every flag bit + idempotence), `tty_dec_buf` (zero / negative / 1–3 digits / new-position offset), `tty_move` rejection bounds (v0.7.0), `TIO_BUF_SIZE` drift guard (v0.7.0), the v0.3.0 constant set (`TTY_SIGMASK_*`, `TIOCGWINSZ` ABI), `tty_sgr` rejection, **v0.5.x** truecolor + 256 `_buf` exact-byte + bounds coverage, and **live-fd** tests for `tty_winsize` and `tty_open_signalfd` + `tty_close_signalfd` (v0.7.0). |
 | `tests/pty.tcyr` | **50 assertions (v0.6.0; hardened v0.7.0 and v0.9.3)** — the in-repo PTY harness. Opens a real pseudo-terminal (`/dev/ptmx` → `TIOCSPTLCK` → `TIOCGPTN` → `/dev/pts/N`) and drives darshana against the slave: `tty_isatty` on a known-live fd (+ deterministic `/dev/null` negative), `tty_winsize` set/get (24×80), the `tty_raw`→`tty_cooked()` state-restore (byte-for-byte), the single-raw-fd model (2nd fd refused), the cooked-vs-raw output round-trip (OPOST/ONLCR, fail-not-skip), and fd-1 escape-byte capture (via `dup2`) for `tty_alt_*`, `tty_clear`, `tty_clear_to_eol/eos`, `tty_cursor_*`, `tty_move`, `tty_sgr`, `tty_sgr_reset`, `tty_fg_rgb`/`tty_bg_rgb`. Wired into CI (v0.7.0) with `SKIP pty:` degradation tokens. Hang-proof (`O_NONBLOCK` master, bounded drains) and skip-clean (Linux-only). |
 
-**309 assertions total** (238 + 56 + 15), green at cyrius 6.6.0 on x86_64 —
-and **294 on real aarch64** (238 + 56; the AGNOS suite is x86_64-hosted by
-construction). Full unit parity since v1.1.1 (a Raspberry Pi 4; the four
-`prlimit64`-gated unit assertions skip there by design); the PTY
+**309 assertions total** (238 + 56 + 15), green at cyrius 6.6.20 on x86_64 —
+and **294 on aarch64** (238 + 56; the AGNOS suite is x86_64-hosted by
+construction), under `qemu-aarch64` at 6.6.20 and last run on real hardware (a
+Raspberry Pi 4) at v1.1.1. Full unit parity since v1.1.1, when the four
+`prlimit64`-gated unit assertions stopped skipping there; the PTY
 harness runs its full set with no `SKIP pty:` token. Grew from 217 at v1.0.2's
 sweep — the additions target proven gaps, not coverage for its own sake: all
 37 frozen constant VALUES (only 4 were pinned before; `smoke.sh` checks names,
@@ -518,10 +555,20 @@ and a regression test for the signalfd rollback.
 
 Direct (declared in `cyrius.cyml`):
 
-- stdlib — `syscalls`, `alloc`, `io`, `assert`, **`vec`** (five leaves as of
-  v1.0.1). Still tighter than the init default (`string / fmt / alloc / io /
-  vec / str / syscalls / assert`) — darshana's own sources use none of
-  `str / fmt / string / vec` directly.
+- stdlib — `syscalls`, `alloc`, `io`, `assert` (four leaves as of v1.1.3,
+  when `vec` and `args` were dropped). Still tighter than the init default
+  (`string / fmt / alloc / io / vec / str / syscalls / assert`) — darshana's
+  own sources use none of `str / fmt / string / vec` directly.
+
+**v1.1.3: both include-gap leaves are gone, because the gaps closed upstream.**
+`vec` (v1.0.1, below) and `args` (v1.1.1, Carry-Forward) were each declared to
+supply a definer some stdlib file called without including it. cyrius 6.6.20's
+`fmt.cyr` includes `vec.cyr` and its `io.cyr` includes `args_agnos.cyr`, so the
+transitive BFS pulls both regardless, and declaring the leaves only
+auto-prepended an unused `lib/args.cyr`. Removing them changed no assertion
+count on any suite or target and introduced no warning; the smoke binary shrank
+99,312 → 95,184 B. The history below is kept because the *method* — read the
+include graph rather than blame the nearest file — is what found both.
 
 ~~Known benign build warning: `undefined function 'vec_get'`~~ — **closed at
 v1.0.1.** `lib/assert.cyr:4` pulls `lib/fmt.cyr`, the only caller of `vec_get`
@@ -538,21 +585,36 @@ cost is 160 bytes in the DCE'd smoke binary (15,808 → 15,968). The earlier
 diagnosis was right that the call was unreachable and upstream-shaped, and
 wrong that nothing could be done about it locally.
 
-`cyrius deps` resolves those five leaves — via its Phase 3 transitive BFS — to
-the **20** modules vendored in `lib/`: `alloc` `alloc_agnos` `alloc_macos` `alloc_windows` `args_macos`
-`assert` `atomic` `fmt` `fnptr` `io` `result` `string` `syscalls`
+`cyrius deps` resolves those four leaves — via its Phase 3 transitive BFS — to
+the **23** modules vendored in `lib/` at cyrius 6.6.20: `alloc` `alloc_agnos`
+`alloc_cx` `alloc_macos` `alloc_windows` `args_agnos` `args_macos` `assert`
+`atomic` `fmt` `fnptr` `io` `poison` `result` `string` `syscalls`
 `syscalls_aarch64_linux` `syscalls_linux_common` `syscalls_macos`
 `syscalls_windows` `syscalls_x86_64_agnos` `syscalls_x86_64_linux` `vec`.
 
+What a **consumer** resolves is narrower: `dist/darshana.deps` names only
+`syscalls` and `io`, the leaves `distlib`'s compile-verify proves the bundle
+needs. darshana's `[deps].stdlib` is its own build footprint — tests and smoke
+included — and since cyrius 6.6.18 it never reaches the published sidecar.
+
 ## Consumers
+
+Re-derived at v1.1.3 (2026-10-12) from each consumer's `cyrius.cyml` **and**
+the `# Version:` header of its vendored `lib/darshana.cyr` — the two disagree
+for the path-resolved consumers, so reading only the manifest misreports them.
+**All five are on a 1.x dep and on cyrius 6.6.2**; none is yet on 1.1.3.
 
 | Consumer | Status |
 |----------|--------|
-| [chakshu](https://github.com/MacCracken/chakshu) | **Live on v0.9.0** (chakshu 0.7.11, cyrius 6.4.66). Drove M2 (Full TUI) and the agnos peers — its `--agnos` build failed to link on `TTY_SIGMASK_EXIT` before v0.9.0. Exercises `tty_raw/cooked`, `tty_alt_*`, `tty_clear_to_eol/eos`, `tty_cursor_*`, `tty_move`, `tty_winsize`, `tty_open_signalfd`, `TTY_SIGMASK_EXIT/WINCH`. |
-| [anuenue](https://github.com/MacCracken/anuenue) | **Live on v0.9.0** (anuenue 1.2.0, cyrius 6.4.62). Pipe-decorator consumer; uses `tty_fg_rgb_buf` + `tty_sgr_reset_buf` to compose per-character escapes into a line buffer for one-write-per-line throughput. Drove the v0.5.1 truecolor addition. |
-| [cyim](https://github.com/MacCracken/cyim) | **Live on v0.8.2** (cyim 1.8.1, cyrius 6.5.18). 1.7.0 was the original adopter on darshana 0.2.0. `cyim/src/tty.cyr` reduced from ~207 lines to 38 (only the cyim-specific `tty_probe` stays local). |
-| [kii](https://github.com/MacCracken/kii) | **Live on v0.8.2** (kii 1.4.1, cyrius 6.4.20) — image → ANSI/ASCII converter; consumes `tty_winsize` to size art to the real console. Resolves via `path = "../darshana"`, so its vendored `lib/darshana.cyr` currently reads 0.9.0 while the manifest `tag` still says 0.8.2 — kii-side pin drift to reconcile at its next bump. |
-| [bannermanor](https://github.com/MacCracken/bannermanor) | **Live on v0.7.1** (bannermanor 1.1.2, cyrius 6.2.24). First non-TUI consumer; uses `tty_sgr` + `TTY_FG_*` constants only. Drove the v0.3.5 SGR addition. Furthest behind — a bump candidate. |
+| [chakshu](https://github.com/MacCracken/chakshu) | **Live on v1.1.1** (chakshu 0.10.3, cyrius 6.6.2). Drove M2 (Full TUI) and the agnos peers — its `--agnos` build failed to link on `TTY_SIGMASK_EXIT` before v0.9.0. Exercises `tty_raw/cooked`, `tty_alt_*`, `tty_clear_to_eol/eos`, `tty_cursor_*`, `tty_move`, `tty_winsize`, `tty_open_signalfd`, `TTY_SIGMASK_EXIT/WINCH`. On a release carrying v1.0.2's signalfd rollback fix, which matters because it holds an EXIT and a WINCH signalfd at once. |
+| [anuenue](https://github.com/MacCracken/anuenue) | **Live on v1.1.2 vendored, `tag = "1.1.1"`** (anuenue 1.3.6, cyrius 6.6.2). Resolves via `path = "../darshana"` beside its `git`/`tag`, so the vendored bundle tracks this working tree, not the tag. Pipe-decorator consumer; uses `tty_fg_rgb_buf` + `tty_sgr_reset_buf` to compose per-character escapes into a line buffer for one-write-per-line throughput. Drove the v0.5.1 truecolor addition. Still ships its phase-cached escape table. |
+| [cyim](https://github.com/MacCracken/cyim) | **Live on v1.0.0** (cyim 1.10.1, cyrius 6.6.2). 1.7.0 was the original adopter on darshana 0.2.0. `cyim/src/tty.cyr` reduced from ~207 lines to 38 (only the cyim-specific `tty_probe` stays local). |
+| [kii](https://github.com/MacCracken/kii) | **Live on v1.1.2 vendored, `tag = "1.0.0"`** (kii 1.5.2, cyrius 6.6.2) — image → ANSI/ASCII converter; consumes `tty_winsize` to size art to the real console. Same `path = "../darshana"` shape as anuenue, and the same tag-vs-vendored drift recorded here since v0.9.x. |
+| [bannermanor](https://github.com/MacCracken/bannermanor) | **Live on v1.0.0** (bannermanor 1.1.5, cyrius 6.6.2). First non-TUI consumer; uses `tty_sgr` + `TTY_FG_*` constants only. Drove the v0.3.5 SGR addition. |
+
+Every consumer declares `syscalls`, `alloc`, `io`, `vec`, `args` and `assert` in
+its own `[deps].stdlib`, so the v1.1.3 sidecar shrinking from six leaves to two
+removes nothing any of them relies on.
 
 ## Carry-Forward
 
@@ -562,13 +624,18 @@ the **20** modules vendored in `lib/`: `alloc` `alloc_agnos` `alloc_macos` `allo
   **closed at v1.1.1**, and it was closable the same way `vec_get` was: it is
   `lib/io.cyr` delegating to `_agnos_getenv`, which `lib/args_agnos.cyr`
   defines and which was simply not in darshana's declared footprint. Declaring
-  the `args` leaf pulls it in. **No target now emits an `undefined function`
-  warning** — native, `--agnos` and `--aarch64` are completely silent, and
-  `--win` emits only the toolchain's generic "which syscall numbers route on
-  Windows" advisory, which is informational, is not darshana-specific, and
-  concerns a target the roadmap puts out of scope. `dist/darshana.cyr` is
-  byte-identical with and without the declaration, so this changes the build
-  footprint and nothing that ships.
+  the `args` leaf pulled it in. **No target emits an `undefined function`
+  warning.** `dist/darshana.cyr` is byte-identical with and without the
+  declaration, so this changed the build footprint and nothing that ships.
+  **Superseded at v1.1.3**: cyrius 6.6.20's `lib/io.cyr` includes
+  `lib/args_agnos.cyr` itself, so the `args` leaf was dropped again — the gap is
+  closed at its source rather than worked around here.
+  ⚠ "native, `--agnos` and `--aarch64` are completely silent" was written here
+  at v1.1.1 and did **not** hold on the 6.6.2 pin: 6.6.2's `lib/io.cyr` made
+  every `--aarch64` build warn `raw syscall 32 is x86_64 'dup'`. Gone at 6.6.20,
+  which is silent on all three. `--win` still emits only the toolchain's generic
+  "which syscall numbers route on Windows" advisory — informational, not
+  darshana-specific, and for a target the roadmap puts out of scope.
 - ~~**`--aarch64` is unverifiable on this host**~~ — **closed at v1.1.0.** The
   installed toolchain still ships no `cycc_aarch64`, but the cyrius repo builds
   one at `build/cycc_aarch64`, and pointing `CYRIUS_HOME` at a **sandboxed copy**
@@ -607,7 +674,7 @@ the **20** modules vendored in `lib/`: `alloc` `alloc_agnos` `alloc_macos` `allo
 | Release on semver tag | `.github/workflows/release.yml` — gates on ci.yml via `workflow_call`, version-verify against tag, regenerates dist + ships `darshana-X.Y.Z.cyr` standalone + `darshana-X.Y.Z.tar.gz` package + source tarball + SHA256SUMS, GH release with body extracted from CHANGELOG section |
 | Syscall allowlist | `scripts/syscall-audit.sh` (v0.9.4, hardened v1.0.2) — the permitted syscall targets and stdlib wrappers, each with its rationale. One implementation, invoked by both `scripts/smoke.sh` and the CI security job so the two cannot drift. Replaced the exec-sink denylist, which could only catch anticipated sinks. **v1.0.2** closed three bypasses that all compiled, ran and audited green — a parenthesized first argument (`syscall((59), …)` did not match the regex at all), a line-wrapped call, and any stdlib wrapper outside the `sys_*`/`file_*` prefixes (`xopen`, `getenv`, `panic`, …) — by normalizing before matching (comments stripped, string literals blanked, statements rejoined) and making the callee scan a true allowlist. It now also scans **`docs/examples/`**, which is how the ungated `syscall(60)` there was found. `--self-test` asserts each bypass is rejected. |
 | Platform gate | `scripts/platform-gate.sh` (v1.0.2) — extracted so `smoke.sh` and the CI security job share one implementation instead of two copies of the same awk. **Corpus-driven**: every `src/*.cyr` is checked against its own gates. v0.9.3 fixed this check's substring-vs-positional half but left it hard-coded to `src/termios.cyr` as both gate source and search corpus, so identical ungated Linux ioctl code in any other module was never examined and would ship outside any `#ifdef` with every gate green. Carries a vacuity guard (a gutted tree with no tokens cannot pass) and a `--self-test`. |
-| aarch64 verification | **In CI since v1.1.1** — the `x86_64-linux` release tarball ships `bin/cycc_aarch64`, so the existing install step provides it; the job adds `qemu-user-static` and runs the emitted aarch64 ELFs (smoke + both suites). Reproduce by hand on a machine whose install lacks the compiler — copy the toolchain tree to a scratch dir, drop the compiler the cyrius repo builds into it, and point `CYRIUS_HOME` at the copy. **Never at the live tree.**<br>`cp -a ~/.cyrius/versions $S/cyhome/versions && ln -sfn $S/cyhome/versions/6.6.0/bin $S/cyhome/bin` (same for `lib`)<br>`cp ~/Repos/cyrius/build/cycc_aarch64 $S/cyhome/versions/6.6.0/bin/`<br>`CYRIUS_HOME=$S/cyhome cyrius build --aarch64 tests/darshana.tcyr build/a64-tests`<br>Run under `qemu-aarch64 build/a64-tests`, and on real hardware via `ssh pi` (Raspberry Pi 4, Linux 6.8) — `scp` the binary to `/tmp` and execute. Expect **238/238 unit and 56/56 pty** — full parity with x86_64 as of v1.1.1, when the `prlimit64` number was gated per-arch. |
+| aarch64 verification | **In CI since v1.1.1** — the `x86_64-linux` release tarball ships `bin/cycc_aarch64`, so the existing install step provides it; the job adds `qemu-user-static` and runs the emitted aarch64 ELFs (smoke + both suites). Reproduce by hand on a machine whose install lacks the compiler — copy the toolchain tree to a scratch dir, drop the compiler the cyrius repo builds into it, and point `CYRIUS_HOME` at the copy. **Never at the live tree.** (`<pin>` is `cyrius.cyml`'s `[package].cyrius`.)<br>`cp -a ~/.cyrius/versions $S/cyhome/versions && ln -sfn $S/cyhome/versions/<pin>/bin $S/cyhome/bin` (same for `lib`)<br>`cp ~/Repos/cyrius/build/cycc_aarch64 $S/cyhome/versions/<pin>/bin/`<br>`CYRIUS_HOME=$S/cyhome cyrius build --aarch64 tests/darshana.tcyr build/a64-tests`<br>Run under `qemu-aarch64 build/a64-tests`, and on real hardware via `ssh pi` (Raspberry Pi 4, Linux 6.8) — `scp` the binary to `/tmp` and execute. Expect **238/238 unit and 56/56 pty** — full parity with x86_64 as of v1.1.1, when the `prlimit64` number was gated per-arch. |
 | Emitted-byte identity | Two harnesses, both kept out of the repo (scratch tooling, regenerate as needed). A **streaming** one dumps every composer's bytes + return over its full envelope for `diff`/`sha256` (13,518 records / 178,199 bytes; `sha256:6dcd7228…` since v1.0.1). An **exhaustive** one folds the return plus all 48 bytes of a `0xAA`-poisoned canvas, composing at `pos = 3`, over the complete `[0,255]³` RGB cube (16.7M triples × 2 composers) plus every rejection edge and start position; it printed `CHECKSUM 2666313271416689717` identically on x86_64, qemu-aarch64 and a real Pi 4, before and after v1.1.0's refactor. Folding the whole canvas rather than the escape is what proves a wide store leaves no stray byte. |
 | Examples | `docs/examples/*.cyr` — CI builds **and runs** each one. Every example checks `tty_isatty` first and degrades cleanly, so executing it in CI is meaningful. |
 | Smoke test | `scripts/smoke.sh` — runs smoke binary, verifies dist drift, asserts the public contract surface (29 `tty_*` / `tio_*` fn symbols + 37 `TIO_* / TIOC* / TTY_*` constants present in dist) with a **bidirectional self-audit** covering both fns (v0.7.0) and constants (v0.9.3) — it fails if dist exports a public name the checklist omits, in either direction. The platform-gate check is **positional** as of v0.9.3: Linux ioctl tokens must sit inside the `CYRIUS_TARGET_LINUX` gate and agnos syscall tokens inside `CYRIUS_TARGET_AGNOS`, by line number rather than by substring presence. A **docstring audit** (v0.9.4) additionally fails the build if any public fn lacks a docstring or a stated return contract, if any `_buf` composer omits its byte budget, or if a public constant is undocumented. **v1.0.2**: the platform-gate check moved out to `scripts/platform-gate.sh` (shared with CI); the dist-drift check now covers **`dist/darshana.deps`** as well as the bundle, restoring both on failure — previously the sidecar was silently regenerated before anything could compare it; and the docstring audit's `!seen[name]++` de-dup was removed, which had exempted **every duplicated symbol — i.e. the whole AGNOS peer arm** — and whose removal immediately found AGNOS `tty_winsize` shipping with no docstring at all since v0.8.0 |
@@ -631,6 +698,6 @@ the **20** modules vendored in `lib/`: `alloc` `alloc_agnos` `alloc_macos` `allo
     - v0.9.4 — **pre-freeze documentation + audit cut** ✓ shipped. `docs/examples/raw_loop.cyr`, `docs/architecture/` 001+002, the per-symbol API audit (0 gaps), the syscall allowlist, and the fix for the conventions block that never shipped.
     - **Nothing is open before the freeze.** All five v1.0 criteria are met; v1.0.0 needs the consumer dep bumps, the freeze itself, and the registry promotion.
     - Shipped-cut detail lives in [`CHANGELOG.md`](../../CHANGELOG.md); [`roadmap.md`](roadmap.md) carries only what is still open.
-- M5 (v1.0.0) — ✅ **shipped 2026-08-23.** All five v1.0 criteria met; the surface is frozen per ADR 0003. The shared-crates registry promotion landed **with the tag** (see the v1.0.0 entry above and CHANGELOG). The one thing still open, and tracked in [`roadmap.md`](roadmap.md), is the five consumer dep bumps to a `1.x` tag — downstream work, not darshana work.
+- M5 (v1.0.0) — ✅ **shipped 2026-08-23.** All five v1.0 criteria met; the surface is frozen per ADR 0003. The shared-crates registry promotion landed **with the tag** (see the v1.0.0 entry above and CHANGELOG). The five consumer dep bumps to a `1.x` tag — the last item the milestone left open — had **all landed** by v1.1.3 (see Consumers).
 
-[`roadmap.md`](roadmap.md) is forward-facing only. Restructured at v1.1.1: it now carries the one open downstream item (the consumer dep bumps) and buckets everything else by the semver bump it would cost — `1.1.x` patch, `1.x.0` minor, `2.0.0` major — plus the out-of-scope charter boundaries. Nothing about the shipped surface is outstanding. The arc above is the surviving milestone summary, and [`CHANGELOG.md`](../../CHANGELOG.md) is the full record.
+[`roadmap.md`](roadmap.md) is forward-facing only. Restructured at v1.1.2: it buckets everything by the semver bump it would cost — `1.1.x` patch, `1.x.0` minor, `2.0.0` major — plus the out-of-scope charter boundaries. Its one open item (the consumer dep bumps) closed at v1.1.3; two downstream follow-ups it carried remain as notes. Nothing about the shipped surface is outstanding. The arc above is the surviving milestone summary, and [`CHANGELOG.md`](../../CHANGELOG.md) is the full record.

@@ -151,8 +151,9 @@ jobs:
         # syscall 60, which is `exit` on Linux, so executing them here would
         # terminate the harness with status 0 and fake a pass.
         #
-        # The known `undefined function '_agnos_getenv'` warning is
-        # upstream-agnos shaped and not fatal.
+        # This arm builds warning-free. The `undefined function
+        # '_agnos_getenv'` warning once carried here closed at v1.1.1, and
+        # since cyrius 6.6.20 lib/io.cyr includes its definer itself.
         run: |
           cyrius build --agnos programs/smoke.cyr build/darshana-smoke-agnos
           cyrius build --agnos tests/agnos.tcyr build/agnos-tests

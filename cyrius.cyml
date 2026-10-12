@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "दर्शन — viewing/showing. Linux TTY/raw-mode primitives (termios, ANSI, cursor) for AGNOS first-party tools (cyim, chakshu, ...)."
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.6.2"
+cyrius = "6.6.20"
 
 [build]
 entry = "programs/smoke.cyr"
@@ -22,16 +22,25 @@ modules = ["src/termios.cyr", "src/ansi.cyr", "src/cursor.cyr"]
 [deps]
 # Footprint: tighter than the init default. termios + ANSI helpers
 # only need syscalls (ioctl + write) and the standard alloc/io path.
-# assert is for tests/darshana.tcyr. `vec` (v1.0.1) is NOT called by
-# darshana's own surface: `assert` pulls `fmt`, and `fmt` is the only
-# caller of `vec_get`, so without the leaf declared that call site
-# linked against nothing and every build warned. 6.6.0's `distlib`
-# compile-verifies the sidecar and flagged it. Still no str/fmt/string
-# as declared leaves — the surface does no dynamic allocation or
-# string formatting of its own.
+# assert is for tests/darshana.tcyr. Still no str/fmt/string as
+# declared leaves — the surface does no dynamic allocation or string
+# formatting of its own.
+#
+# v1.1.3 (cyrius 6.6.20) dropped `vec` and `args`. Both had been declared
+# only to close a stdlib include gap, never because darshana calls them:
+# `vec` (v1.0.1) because `fmt` called `vec_get` without including its
+# definer, `args` (v1.1.1) because `io` delegated to `_agnos_getenv`
+# without including `args_agnos`. The stdlib now includes both definers
+# itself, so the BFS pulls them and declaring the leaves only
+# auto-prepended a dead `lib/args.cyr`.
+#
+# This list is darshana's OWN footprint — tests and smoke included. Since
+# cyrius 6.6.18 it no longer reaches consumers: dist/darshana.deps is
+# derived by `cyrius distlib`'s compile-verify, not copied from here, so
+# a test-only leaf like `assert` stays out of every consumer's build.
 #
 # `lib/` is OUTPUT, not curated: `rm -rf lib/ && cyrius deps` rebuilds
 # it from this list (Phase 3's transitive BFS pulls each leaf's own
 # includes). Do not hand-edit or hand-prune lib/.
-stdlib = ["syscalls", "alloc", "io", "assert", "vec", "args"]
+stdlib = ["syscalls", "alloc", "io", "assert"]
 ---
