@@ -599,10 +599,13 @@ included — and since cyrius 6.6.18 it never reaches the published sidecar.
 
 ## Consumers
 
-Re-derived at v1.1.3 (2026-10-12) from each consumer's `cyrius.cyml` **and**
-the `# Version:` header of its vendored `lib/darshana.cyr` — the two disagree
-for the path-resolved consumers, so reading only the manifest misreports them.
-**All five are on a 1.x dep and on cyrius 6.6.2**; none is yet on 1.1.3.
+Re-derived 2026-10-12 from each consumer's `cyrius.cyml` **and** the
+`# Version:` header of the bundle it actually compiles — the two disagree for
+the path-resolved consumers, so reading only the manifest misreports them.
+**Nine consumers.** This table listed five until a survey of every Cyrius
+project under `~/Repos` found four more: thoth, jalwa, darshini, agora. Eight
+are on a 1.x dep; **agora is still on 0.9.0**, before the freeze. None is yet on
+1.1.3.
 
 | Consumer | Status |
 |----------|--------|
@@ -611,10 +614,16 @@ for the path-resolved consumers, so reading only the manifest misreports them.
 | [cyim](https://github.com/MacCracken/cyim) | **Live on v1.0.0** (cyim 1.10.1, cyrius 6.6.2). 1.7.0 was the original adopter on darshana 0.2.0. `cyim/src/tty.cyr` reduced from ~207 lines to 38 (only the cyim-specific `tty_probe` stays local). |
 | [kii](https://github.com/MacCracken/kii) | **Live on v1.1.2 vendored, `tag = "1.0.0"`** (kii 1.5.2, cyrius 6.6.2) — image → ANSI/ASCII converter; consumes `tty_winsize` to size art to the real console. Same `path = "../darshana"` shape as anuenue, and the same tag-vs-vendored drift recorded here since v0.9.x. |
 | [bannermanor](https://github.com/MacCracken/bannermanor) | **Live on v1.0.0** (bannermanor 1.1.5, cyrius 6.6.2). First non-TUI consumer; uses `tty_sgr` + `TTY_FG_*` constants only. Drove the v0.3.5 SGR addition. |
+| [thoth](https://github.com/MacCracken/thoth) | **Live on v1.1.2, vendored by copy** (thoth 0.52.8, cyrius 6.6.6). No `[deps.darshana]`: `scripts/sync-darshana.sh` copies `dist/darshana.cyr` to `src/vendor/darshana.cyr` by tag. The widest user — raw/cooked, alt screen, clear, cursor, `tty_move`, `tty_winsize`, `tty_isatty`, the signalfd pair. ⚠ Also calls the **private** `_tty_apply_raw_flags` (`src/intr.cyr:50`) and overrides VMIN/VTIME after it, so a change to that non-frozen internal reaches thoth at its next sync. |
+| [jalwa](https://github.com/MacCracken/jalwa) | **Live on v1.1.2** (jalwa 1.4.5, cyrius 6.6.3). Raw/cooked, alt screen, clear, cursor visibility/home, `tty_isatty`. |
+| [darshini](https://github.com/MacCracken/darshini) | **Live on v1.0.0** (darshini 1.3.4, cyrius 6.6.2). `tty_sgr` / `tty_sgr_reset` and seven `TTY_FG_*` colors. |
+| [agora](https://github.com/MacCracken/agora) | **Live on v0.9.0 — pre-freeze** (agora 1.7.1, cyrius 6.6.2). `tty_sgr_buf`, `tty_sgr_reset_buf`, `tty_open_signalfd` + `TTY_SIGMASK_EXIT`. Its pin predates both signalfd failure-path fixes (v0.9.3, v1.0.2) and the v0.9.3 negative-`pos` rejection in the `_buf` composers. |
 
-Every consumer declares `syscalls`, `alloc`, `io`, `vec`, `args` and `assert` in
-its own `[deps].stdlib`, so the v1.1.3 sidecar shrinking from six leaves to two
-removes nothing any of them relies on.
+Every consumer that resolves through `cyrius deps` declares `syscalls`,
+`alloc`, `io`, `vec`, `args` and `assert` in its own `[deps].stdlib`, so the
+v1.1.3 sidecar shrinking from six leaves to two removes nothing any of them
+relies on. thoth does not read the sidecar at all; it declares `syscalls` and
+`io`, which are what the bundle's requires block includes.
 
 ## Carry-Forward
 
@@ -700,4 +709,4 @@ removes nothing any of them relies on.
     - Shipped-cut detail lives in [`CHANGELOG.md`](../../CHANGELOG.md); [`roadmap.md`](roadmap.md) carries only what is still open.
 - M5 (v1.0.0) — ✅ **shipped 2026-08-23.** All five v1.0 criteria met; the surface is frozen per ADR 0003. The shared-crates registry promotion landed **with the tag** (see the v1.0.0 entry above and CHANGELOG). The five consumer dep bumps to a `1.x` tag — the last item the milestone left open — had **all landed** by v1.1.3 (see Consumers).
 
-[`roadmap.md`](roadmap.md) is forward-facing only. Restructured at v1.1.2: it buckets everything by the semver bump it would cost — `1.1.x` patch, `1.x.0` minor, `2.0.0` major — plus the out-of-scope charter boundaries. Its one open item (the consumer dep bumps) closed at v1.1.3; two downstream follow-ups it carried remain as notes. Nothing about the shipped surface is outstanding. The arc above is the surviving milestone summary, and [`CHANGELOG.md`](../../CHANGELOG.md) is the full record.
+[`roadmap.md`](roadmap.md) is forward-facing only. Restructured at v1.1.2 into semver buckets, and again after v1.1.3 around what is actually next: the **1.1.4** audit / repair / security sweep (patch, with eight seeded leads), the **1.2.0** queue (optimizations and standalone `src/` refactors the sweep finds, plus consumer-driven symbol candidates from a survey of all five consumer trees), downstream notes, the two frozen-in `2.0.0` imperfections, and the out-of-scope charter boundaries. Its one open item (the consumer dep bumps) closed at v1.1.3. Nothing about the shipped surface is outstanding. The arc above is the surviving milestone summary, and [`CHANGELOG.md`](../../CHANGELOG.md) is the full record.

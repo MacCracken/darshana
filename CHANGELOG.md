@@ -4,6 +4,77 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Documentation only, so not a release: these ride whatever is cut next
+(1.1.4, per the roadmap).
+
+### Changed
+
+- **Documentation is never a release by itself** (owner decision,
+  2026-10-12). Recorded in three places so they cannot disagree again:
+  - **ADR 0003 amended.** Its post-1.0 policy listed "new documentation" under
+    **minor**. No release ever followed that — 1.1.2 shipped `src/` comment
+    changes as a patch — and `roadmap.md` said docs were patch-shaped. The
+    policy now says documentation, including `src/` comments and docstrings
+    that ship in the bundle, rides whatever release comes next at any level and
+    never sets it. A docstring edit that changes a documented *contract* is the
+    contract change and is priced as one.
+  - **CLAUDE.md** gains the rule as a hard constraint, beside the API-freeze
+    rule it qualifies: doc changes accumulate under `## [Unreleased]`.
+  - **`roadmap.md`**'s 1.1.4 scope says so; the open policy question that had
+    been seeded as a sweep lead is removed, since it is decided.
+- **`roadmap.md` reorganized around what is next**, not around empty buckets:
+  - **1.1.4 — audit, repairs and security sweep (patch)**, with its scope rule
+    stated (bug fixes, tests, gates, CI, non-shipping refactors in; every
+    optimization and standalone `src/` refactor out to 1.2.0, because ADR 0003
+    prices identical-output refactors as minor) and eight seeded leads, each
+    checked to exist: signalfd teardown ordering, a real-hardware aarch64
+    re-run, CI fetching `install.sh` from cyrius's unpinned `main`,
+    workflow-wide `contents: write`, fuzzing the six `_buf` composers' byte
+    budgets with `cyrius fuzz --poison`, landing the two emitted-byte identity
+    harnesses in the repo, one local runner for all 16 CI gates, and a docs
+    lead: two docstring gaps consumers worked around alone (`tty_winsize`'s
+    successful 0 × 0; non-blocking signalfds via `fd_set_nonblocking`) and two
+    shipped comments gone inaccurate (the `_AGNOS_*` note's "all five consumer
+    trees"; AGNOS `tty_raw` waiting on a raw-input mechanism kbscan#42 already
+    provides).
+  - **1.2.0 (minor) queue** — where 1.1.4's optimizations land; one refactor
+    queued at planning (route the five Linux `ioctl` calls through the stdlib's
+    new `sys_ioctl`); and consumer-driven symbol candidates from two surveys —
+    the consumer trees, and every other Cyrius project under `~/Repos` doing
+    terminal control by hand — ranked by consumers, with the other projects
+    counted separately as potential adopters rather than votes. In charter, the
+    2nd-consumer trigger fired: a window size that never reports 0 × 0
+    (4 consumers), named SGR attributes (3), reading a signalfd record (3), and
+    **`tty_bg_256_buf`, whose trigger has now fired** (kii + thoth). Non-blocking
+    raw mode has one consumer, but that consumer gets it through a private
+    symbol. Output sanitization joined the in-charter list by ruling (below);
+    key-input decoding and AGNOS raw keyboard input went to **Out of scope**.
+  - The closed consumer-bump item is gone (deleted per the roadmap's own rule);
+    its live follow-ups moved to **Downstream — not darshana work**.
+- **Charter rulings** (owner, 2026-10-12), recorded in CLAUDE.md's goal and
+  domain rules and in `roadmap.md`:
+  - **Output sanitization is in.** Neutralizing control bytes in untrusted text
+    before it reaches the terminal joins darshana's slice. It is the
+    most-duplicated terminal primitive found (7 consumers, 9 other projects,
+    every consumer rule different), and it is now a 1.2.0 in-charter candidate
+    with its open design questions written down: UTF-8 versus Latin-1 (raw
+    0x80–0x9F are also UTF-8 continuation bytes), replace versus reject, which
+    C0 bytes a caller may keep, and a byte budget stated against input length.
+  - **Key-input decoding and AGNOS raw keyboard input are out.** Both are input
+    decoding, the far side of the line between a primitive layer and a TUI
+    framework. Both move to **Out of scope** with their evidence and reasons.
+    Termios *settings* that affect input (non-blocking raw mode) are unaffected.
+    The ruling covers decoding only: a future kernel raw-mode switch on the AGNOS
+    console would be a termios-shaped peer and is not excluded.
+  - Follow-on for 1.1.4's docs lead: the AGNOS `tty_raw` docstring should say -1
+    is the answer by design, not a stopgap.
+- **darshana has nine consumers, not five.** The survey found thoth (a vendored
+  copy, synced by script), jalwa, darshini and agora. `state.md`'s table now has
+  all nine, each pin read from the bundle the consumer actually compiles. Eight
+  are on 1.x; agora is on 0.9.0, before the freeze. thoth also calls the private
+  `_tty_apply_raw_flags`, so a change to that non-frozen internal reaches it.
+  - `2.0.0` and **Out of scope** are unchanged.
+
 ## [1.1.3] — 2026-10-12
 
 Toolchain bump cyrius **6.6.2 → 6.6.20**, plus the repairs it surfaced. **No

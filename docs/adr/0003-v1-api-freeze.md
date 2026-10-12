@@ -4,6 +4,7 @@
 **Date**: 2026-08-23
 **Deciders**: project owner
 **Supersedes**: nothing. **Amends**: the pre-v1.0 latitude recorded in CLAUDE.md.
+**Amended**: 2026-10-12 — documentation is never a release by itself (§ Post-1.0 change policy).
 
 ## Context
 
@@ -143,11 +144,22 @@ Semver, read strictly:
   A fix that makes behavior *match* its existing documentation is a patch, even
   if the observable behavior changes; v0.9.3's `tty_open_signalfd` sentinel
   normalization would have qualified.
-- **Minor (1.x.0)** — additive only. New symbols, new platform peers, new
-  documentation, internal refactors with identical output.
+- **Minor (1.x.0)** — additive only. New symbols, new platform peers, internal
+  refactors with identical output.
 - **Major (2.0.0)** — anything in the "What frozen covers" list above. Requires
   its own ADR stating what breaks and why the break beats carrying the defect,
   plus a migration note for every consumer.
+- **Documentation is never a release by itself.** A documentation change —
+  including comments and docstrings in `src/`, which ship inside
+  `dist/darshana.cyr` — rides whatever release comes next, at any level, and
+  never sets that level. One limit keeps the rule honest: a docstring edit that
+  changes a documented *contract* is not documentation, it is the contract
+  change, and is priced above like any other.
+
+  *Amended 2026-10-12 (owner decision).* The 1.0.0 text listed "new
+  documentation" under minor. No release ever followed it — 1.1.2 shipped
+  `src/` comment changes as a patch — and the roadmap said the opposite, so the
+  two texts disagreed until this amendment.
 
 ## Alternatives considered
 
