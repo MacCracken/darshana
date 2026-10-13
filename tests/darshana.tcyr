@@ -34,6 +34,19 @@ var TCYR_SYS_RT_SIGPENDING = 127;
 var TCYR_SYS_RT_SIGPENDING = 136;
 #endif
 
+# v1.3.0 — a composer returned `n`; require exactly `want` (len `wl`) at `buf`.
+fn _buf_case(name, buf, n, want, wl) {
+    var ok = 1;
+    if (n != wl) { ok = 0; }
+    var k = 0;
+    while (ok == 1 && k < wl) {
+        if (load8(buf + k) != load8(want + k)) { ok = 0; }
+        k = k + 1;
+    }
+    assert(ok, name);
+    return 0;
+}
+
 # v1.2.0 — one tty_sanitize_buf case: sanitize `in` (len `il`) and require
 # exactly `want` (len `wl`) back.
 fn _san_case(name, in_s, il, mode, keep, want, wl) {
@@ -911,6 +924,92 @@ fn main() {
     } else {
         println("  SKIP: signalfd unavailable — tty_read_signal not exercised");
     }
+
+    test_group("v1.3.0 — constant values");
+    assert_eq(TTY_BG_BLACK, 40, "TTY_BG_BLACK");
+    assert_eq(TTY_BG_RED, 41, "TTY_BG_RED");
+    assert_eq(TTY_BG_GREEN, 42, "TTY_BG_GREEN");
+    assert_eq(TTY_BG_YELLOW, 43, "TTY_BG_YELLOW");
+    assert_eq(TTY_BG_BLUE, 44, "TTY_BG_BLUE");
+    assert_eq(TTY_BG_MAGENTA, 45, "TTY_BG_MAGENTA");
+    assert_eq(TTY_BG_CYAN, 46, "TTY_BG_CYAN");
+    assert_eq(TTY_BG_WHITE, 47, "TTY_BG_WHITE");
+    assert_eq(TTY_BG_BRIGHT_BLACK, 100, "TTY_BG_BRIGHT_BLACK");
+    assert_eq(TTY_BG_BRIGHT_RED, 101, "TTY_BG_BRIGHT_RED");
+    assert_eq(TTY_BG_BRIGHT_GREEN, 102, "TTY_BG_BRIGHT_GREEN");
+    assert_eq(TTY_BG_BRIGHT_YELLOW, 103, "TTY_BG_BRIGHT_YELLOW");
+    assert_eq(TTY_BG_BRIGHT_BLUE, 104, "TTY_BG_BRIGHT_BLUE");
+    assert_eq(TTY_BG_BRIGHT_MAGENTA, 105, "TTY_BG_BRIGHT_MAGENTA");
+    assert_eq(TTY_BG_BRIGHT_CYAN, 106, "TTY_BG_BRIGHT_CYAN");
+    assert_eq(TTY_BG_BRIGHT_WHITE, 107, "TTY_BG_BRIGHT_WHITE");
+    assert_eq(TTY_SIGMASK_PIPE, 0x1000, "TTY_SIGMASK_PIPE (Linux)");
+    assert_eq(TTY_SIGMASK_PIPE, 1 << (13 - 1), "PIPE mask is exactly SIGPIPE(13) under 1<<(sig-1)");
+    assert_eq(TTY_SIGMASK_PIPE & (TTY_SIGMASK_EXIT | TTY_SIGMASK_WINCH), 0, "PIPE is disjoint from EXIT and WINCH");
+
+    test_group("v1.3.0 — _buf composers, exact bytes");
+    var ob[96];
+    _buf_case("tty_clear_to_eol_buf is CSI K", &ob, tty_clear_to_eol_buf(&ob, 0), "\x1b[K", 3);
+    assert_eq(tty_clear_to_eol_buf(&ob, 0 - 1), 0 - 1, "tty_clear_to_eol_buf rejects pos < 0");
+    _buf_case("tty_move_buf (1, 1)", &ob, tty_move_buf(&ob, 0, 1, 1), "\x1b[1;1H", 6);
+    _buf_case("tty_move_buf (65535, 80)", &ob, tty_move_buf(&ob, 0, 65535, 80), "\x1b[65535;80H", 11);
+    assert_eq(tty_move_buf(&ob, 0, 0, 1), 0 - 1, "tty_move_buf rejects row 0");
+    assert_eq(tty_move_buf(&ob, 0, 1, 65536), 0 - 1, "tty_move_buf rejects col 65536");
+    assert_eq(tty_move_buf(&ob, 0 - 1, 1, 1), 0 - 1, "tty_move_buf rejects pos < 0");
+    var codes[136];
+    store64(&codes, TTY_SGR_BOLD); store64(&codes + 8, TTY_FG_YELLOW); store64(&codes + 16, TTY_BG_BLUE);
+    _buf_case("tty_sgr_list_buf bold yellow on blue", &ob, tty_sgr_list_buf(&ob, 0, &codes, 3), "\x1b[1;33;44m", 10);
+    _buf_case("tty_sgr_list_buf one code is tty_sgr_buf's bytes", &ob, tty_sgr_list_buf(&ob, 0, &codes, 1), "\x1b[1m", 4);
+    assert_eq(tty_sgr_list_buf(&ob, 0, &codes, 0), 0 - 1, "tty_sgr_list_buf rejects n = 0");
+    assert_eq(tty_sgr_list_buf(&ob, 0, &codes, 17), 0 - 1, "tty_sgr_list_buf rejects n = 17");
+    store64(&codes + 8, 1000);
+    assert_eq(tty_sgr_list_buf(&ob, 0, &codes, 3), 0 - 1, "tty_sgr_list_buf rejects a code above 999");
+    _buf_case("tty_title_buf", &ob, tty_title_buf(&ob, 0, "hi", 2), "\x1b]0;hi\x07", 7);
+    _buf_case("tty_title_buf: a BEL or ESC cannot end the title early", &ob, tty_title_buf(&ob, 0, "a\x07b\x1b]0;x", 8), "\x1b]0;a?b?]0;x\x07", 13);
+    assert_eq(tty_title_buf(&ob, 0, "x", 0 - 1), 0 - 1, "tty_title_buf rejects len < 0");
+    _buf_case("OSC 52 base64 of \"\" (RFC 4648 §10)", &ob, tty_clipboard_buf(&ob, 0, "", 0), "\x1b]52;c;\x07", 8);
+    _buf_case("OSC 52 base64 of \"f\" (RFC 4648 §10)", &ob, tty_clipboard_buf(&ob, 0, "f", 1), "\x1b]52;c;Zg==\x07", 12);
+    _buf_case("OSC 52 base64 of \"fo\" (RFC 4648 §10)", &ob, tty_clipboard_buf(&ob, 0, "fo", 2), "\x1b]52;c;Zm8=\x07", 12);
+    _buf_case("OSC 52 base64 of \"foo\" (RFC 4648 §10)", &ob, tty_clipboard_buf(&ob, 0, "foo", 3), "\x1b]52;c;Zm9v\x07", 12);
+    _buf_case("OSC 52 base64 of \"foob\" (RFC 4648 §10)", &ob, tty_clipboard_buf(&ob, 0, "foob", 4), "\x1b]52;c;Zm9vYg==\x07", 16);
+    _buf_case("OSC 52 base64 of \"fooba\" (RFC 4648 §10)", &ob, tty_clipboard_buf(&ob, 0, "fooba", 5), "\x1b]52;c;Zm9vYmE=\x07", 16);
+    _buf_case("OSC 52 base64 of \"foobar\" (RFC 4648 §10)", &ob, tty_clipboard_buf(&ob, 0, "foobar", 6), "\x1b]52;c;Zm9vYmFy\x07", 16);
+    assert_eq(tty_clipboard_buf(&ob, 0 - 1, "f", 1), 0 - 1, "tty_clipboard_buf rejects pos < 0");
+
+    test_group("v1.3.0 — tty_has_ctl");
+    assert_eq(tty_has_ctl("hello", 5, TTY_SANITIZE_UTF8, 0), 0, "plain ASCII is clean");
+    assert_eq(tty_has_ctl("", 0, TTY_SANITIZE_UTF8, 0), 0, "empty input is clean");
+    assert_eq(tty_has_ctl("a\x1b[31m", 6, TTY_SANITIZE_UTF8, 0), 1, "ESC is a control");
+    assert_eq(tty_has_ctl("\x1b", 1, TTY_SANITIZE_UTF8, 0 - 1), 1, "ESC is a control whatever keep says");
+    assert_eq(tty_has_ctl("a\tb", 3, TTY_SANITIZE_UTF8, 0), 1, "TAB is a control by default");
+    assert_eq(tty_has_ctl("a\tb\n", 4, TTY_SANITIZE_UTF8, TTY_KEEP_TAB | TTY_KEEP_LF), 0, "TAB and LF kept: clean (kii's rule)");
+    assert_eq(tty_has_ctl("\xe2\x82\xac", 3, TTY_SANITIZE_UTF8, 0), 0, "well-formed UTF-8 is clean");
+    assert_eq(tty_has_ctl("\xc2\x85", 2, TTY_SANITIZE_UTF8, 0), 1, "encoded C1 is a control");
+    assert_eq(tty_has_ctl("\xe0\x80\xaf", 3, TTY_SANITIZE_UTF8, 0), 1, "an overlong form is rejected");
+    assert_eq(tty_has_ctl("\x85", 1, TTY_SANITIZE_LATIN1, 0), 1, "raw 0x85 is a C1 control in Latin-1 mode");
+    assert_eq(tty_has_ctl("\xe9", 1, TTY_SANITIZE_LATIN1, 0), 0, "0xE9 is text in Latin-1 mode");
+    assert_eq(tty_has_ctl("x", 0 - 1, TTY_SANITIZE_UTF8, 0), 0 - 1, "len < 0 is -1");
+    assert_eq(tty_has_ctl("x", 1, 2, 0), 0 - 1, "an unknown mode is -1");
+
+    test_group("v1.3.0 — rejected before anything is written");
+    assert_eq(tty_scroll_region(0, 5), 0 - 1, "tty_scroll_region rejects top 0");
+    assert_eq(tty_scroll_region(5, 5), 0 - 1, "tty_scroll_region rejects top == bot");
+    assert_eq(tty_scroll_region(6, 5), 0 - 1, "tty_scroll_region rejects top > bot");
+    assert_eq(tty_scroll_region(1, 65536), 0 - 1, "tty_scroll_region rejects bot above 65535");
+    assert_eq(tty_title("x", 0 - 1), 0 - 1, "tty_title rejects len < 0");
+    assert_eq(tty_title("x", 257), 0 - 1, "tty_title rejects len above 256");
+    assert_eq(tty_clipboard_set("x", 0 - 1), 0 - 1, "tty_clipboard_set rejects len < 0");
+    assert_eq(tty_sgr_list(&codes, 0), 0 - 1, "tty_sgr_list rejects n = 0");
+    assert_eq(tty_flush_input(0 - 1), 0 - 1, "tty_flush_input rejects fd -1");
+    assert_eq(tty_flush_input(1 << 32), 0 - 1, "tty_flush_input rejects an fd above 0x7FFFFFFF");
+    assert_eq(tty_echo_off(0 - 1), 0 - 1, "tty_echo_off rejects fd -1");
+    var nt_dn = sys_open("/dev/null", 2, 0);
+    if (nt_dn >= 0) {
+        assert_eq(tty_flush_input(nt_dn), 0 - 1, "tty_flush_input on a non-TTY is -1");
+        assert_eq(tty_echo_off(nt_dn), 0 - 1, "tty_echo_off on a non-TTY is -1");
+        assert_eq(_tty_in_raw, 0, "a failed tty_echo_off holds no slot");
+        file_close(nt_dn);
+    }
+    assert_eq(tty_forget(), 0, "tty_forget with nothing held is 0");
 
     return assert_summary();
 }

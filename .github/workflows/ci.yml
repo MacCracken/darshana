@@ -92,7 +92,9 @@ jobs:
       - name: Install qemu-user (for the aarch64 arm)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-user-static
+          # qemu-user, not qemu-user-static: both ship qemu-aarch64 on
+          # Ubuntu 24.04, and 26.04 drops qemu-user-static.
+          sudo apt-get install -y -qq qemu-user
 
       - name: Cross-build + test the aarch64 arm
         run: bash scripts/ci.sh aarch64

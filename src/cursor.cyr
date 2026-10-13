@@ -71,39 +71,62 @@ fn tty_dec_buf(buf, pos, val) {
     return pos + d;
 }
 
+# Append `CSI row;col H` — move the cursor to (row, col), 1-indexed — to
+# `buf` at `pos` (v1.3.0). Returns the new write position, or -1 if `pos`
+# is negative or either coordinate is outside [1, 65535]; a rejection
+# writes nothing. Byte budget: 14 (ESC [ + 5 digits + ';' + 5 digits + H).
+# The `_buf` form of `tty_move`, which writes exactly these bytes.
+fn tty_move_buf(buf, pos, row, col) {
+    if (pos < 0) { return 0 - 1; }
+    if (row < 1 || row > 65535) { return 0 - 1; }
+    if (col < 1 || col > 65535) { return 0 - 1; }
+    store16(buf + pos, 0x5B1B);          # ESC [
+    var p = tty_dec_buf(buf, pos + 2, row);
+    store8(buf + p, 0x3b);               # ';'
+    p = tty_dec_buf(buf, p + 1, col);
+    store8(buf + p, 0x48);               # 'H'
+    return p + 1;
+}
+
 # Move cursor to (row, col), 1-indexed, via CSI row;colH. Returns 0
 # on success, -1 if either coordinate is outside [1, 65535] — rejected
 # *before* any byte reaches fd 1, matching the fail-before-emit
 # discipline of tty_sgr ([0,999]) and tty_fg_rgb ([0,255]). The bound
-# is the u16 winsize envelope every real caller draws from; an out-of-
-# range coordinate would otherwise feed tty_dec_buf up to 19 digits and
-# a malformed CSI to the terminal.
+# is the u16 winsize envelope every real caller draws from.
 #
-# Composes the escape into a stack buf and writes it in one syscall —
-# no intermediate allocations, no flush concerns. buf is sized past the
-# true worst case: ESC[ (2) + up to 19 digits + ';' (1) + up to 19
-# digits + 'H' (1) = 42 bytes, so the compose cannot overrun the stack
-# even if the [1,65535] guard above is ever loosened. The declared 44
-# leaves 2 bytes spare; through v1.0.1 this comment said "20 digits"
-# per coordinate and arithmetic'd to exactly 44, which overstated
-# `tty_dec_buf`'s maximum — an i64 is at most 19 decimal digits, as
-# that function's own byte budget says.
+# Composes with `tty_move_buf` into a stack buffer sized to its 14-byte
+# budget and writes it in one syscall.
 fn tty_move(row, col) {
-    if (row < 1 || row > 65535) { return 0 - 1; }
-    if (col < 1 || col > 65535) { return 0 - 1; }
-    var buf[44];
-    store8(&buf, 0x1b);          # ESC
-    store8(&buf + 1, 0x5b);      # '['
-    var pos = 2;
-    pos = tty_dec_buf(&buf, pos, row);
-    if (pos < 0) { return 0 - 1; }
-    store8(&buf + pos, 0x3b);    # ';'
-    pos = pos + 1;
-    pos = tty_dec_buf(&buf, pos, col);
-    if (pos < 0) { return 0 - 1; }
-    store8(&buf + pos, 0x48);    # 'H'
-    pos = pos + 1;
-    sys_write(1, &buf, pos);
+    var buf[14];
+    var n = tty_move_buf(&buf, 0, row, col);
+    if (n < 0) { return 0 - 1; }
+    sys_write(1, &buf, n);
+    return 0;
+}
+
+# Confine scrolling to rows `top` through `bot` (DECSTBM, `CSI top;bot r`),
+# 1-indexed and inclusive — for a fixed header or status line above or below
+# a scrolling area (v1.3.0). Text that reaches `bot` scrolls the region only.
+# ⚠ The terminal also moves the cursor to row 1, column 1. Returns 0, or -1
+# unless 1 <= top < bot <= 65535 — before anything is written. Undo it with
+# `tty_scroll_region_reset()` before leaving the screen.
+fn tty_scroll_region(top, bot) {
+    if (top < 1 || bot > 65535 || top >= bot) { return 0 - 1; }
+    var buf[14];
+    store16(&buf, 0x5B1B);               # ESC [
+    var p = tty_dec_buf(&buf, 2, top);
+    store8(&buf + p, 0x3b);              # ';'
+    p = tty_dec_buf(&buf, p + 1, bot);
+    store8(&buf + p, 0x72);              # 'r'
+    sys_write(1, &buf, p + 1);
+    return 0;
+}
+
+# Scroll the whole screen again (`CSI r`, DECSTBM with no parameters),
+# undoing `tty_scroll_region` (v1.3.0). Also moves the cursor to row 1,
+# column 1. Returns 0.
+fn tty_scroll_region_reset() {
+    sys_write(1, "\x1b[r", 3);
     return 0;
 }
 

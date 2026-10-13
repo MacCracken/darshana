@@ -62,6 +62,17 @@ fn tty_clear_to_eol() {
     return 0;
 }
 
+# Append `CSI K` — clear from the cursor to the end of the line — to `buf`
+# at `pos` (v1.3.0). The `_buf` form of `tty_clear_to_eol`, for a frame
+# composed into one write. Returns the new write position, or -1 if `pos`
+# is negative (a rejection writes nothing). Byte budget: 3.
+fn tty_clear_to_eol_buf(buf, pos) {
+    if (pos < 0) { return 0 - 1; }
+    store16(buf + pos, 0x5B1B);         # ESC [
+    store8(buf + pos + 2, 0x4B);        # 'K'
+    return pos + 3;
+}
+
 # Clear from cursor to end of screen. CSI J. Used at the bottom of a
 # frame to wipe rows that were populated last tick but not this one
 # (e.g., process count dropped between frames).
@@ -98,6 +109,57 @@ fn tty_cursor_show() {
 # Returns 0.
 fn tty_cursor_home() {
     sys_write(1, "\x1b[H", 3);
+    return 0;
+}
+
+# Save the cursor position and attributes (DECSC, `ESC 7`) so
+# `tty_cursor_restore()` can put them back — for painting a status line or
+# spinner elsewhere on the screen and returning (v1.3.0). The terminal keeps
+# ONE saved position; a second save overwrites the first. `ESC 7` rather
+# than `CSI s`, which some terminals read as a margin setting. Returns 0.
+fn tty_cursor_save() {
+    sys_write(1, "\x1b7", 2);
+    return 0;
+}
+
+# Restore the position and attributes `tty_cursor_save()` saved (DECRC,
+# `ESC 8`). Returns 0.
+fn tty_cursor_restore() {
+    sys_write(1, "\x1b8", 2);
+    return 0;
+}
+
+# Turn mouse reporting on: button press and release (mode 1000) in SGR
+# encoding (mode 1006, which has no 223-column limit) — `CSI ?1000h
+# CSI ?1006h` (v1.3.0). The terminal then sends a report for every click
+# as INPUT; decoding those reports is the consumer's (darshana does not
+# decode input). Pair with `tty_mouse_disable()` on every exit path, or
+# the user's shell receives the reports. Returns 0.
+fn tty_mouse_enable() {
+    sys_write(1, "\x1b[?1000h\x1b[?1006h", 16);
+    return 0;
+}
+
+# Turn mouse reporting off — `CSI ?1006l CSI ?1000l`, the reverse of
+# `tty_mouse_enable`. Returns 0.
+fn tty_mouse_disable() {
+    sys_write(1, "\x1b[?1006l\x1b[?1000l", 16);
+    return 0;
+}
+
+# Turn bracketed paste on — `CSI ?2004h` (v1.3.0): the terminal wraps
+# pasted text in `CSI 200~` ... `CSI 201~`, so a program can tell a paste
+# from typing (and not run a pasted newline as Enter). Those markers arrive
+# as INPUT; recognizing them is the consumer's. Pair with
+# `tty_paste_disable()` on every exit path. Returns 0.
+fn tty_paste_enable() {
+    sys_write(1, "\x1b[?2004h", 8);
+    return 0;
+}
+
+# Turn bracketed paste off — `CSI ?2004l`. Returns 0.
+fn tty_paste_disable() {
+    sys_write(1, "\x1b[?2004l", 8);
     return 0;
 }
 
@@ -139,6 +201,26 @@ var TTY_FG_BRIGHT_BLUE    = 94;
 var TTY_FG_BRIGHT_MAGENTA = 95;
 var TTY_FG_BRIGHT_CYAN    = 96;
 var TTY_FG_BRIGHT_WHITE   = 97;
+
+# Background color SGR parameter values (v1.3.0): the foreground set plus
+# 10 — 40–47 base, 100–107 bright. Pass them to `tty_sgr` / `tty_sgr_buf`
+# or `tty_sgr_list_buf`, like the TTY_FG_* codes.
+var TTY_BG_BLACK   = 40;
+var TTY_BG_RED     = 41;
+var TTY_BG_GREEN   = 42;
+var TTY_BG_YELLOW  = 43;
+var TTY_BG_BLUE    = 44;
+var TTY_BG_MAGENTA = 45;
+var TTY_BG_CYAN    = 46;
+var TTY_BG_WHITE   = 47;
+var TTY_BG_BRIGHT_BLACK   = 100;
+var TTY_BG_BRIGHT_RED     = 101;
+var TTY_BG_BRIGHT_GREEN   = 102;
+var TTY_BG_BRIGHT_YELLOW  = 103;
+var TTY_BG_BRIGHT_BLUE    = 104;
+var TTY_BG_BRIGHT_MAGENTA = 105;
+var TTY_BG_BRIGHT_CYAN    = 106;
+var TTY_BG_BRIGHT_WHITE   = 107;
 
 # SGR attribute codes (v1.2.0) — pass them to `tty_sgr` / `tty_sgr_buf`,
 # e.g. `tty_sgr(TTY_SGR_REVERSE)` for a selection highlight. Only the
@@ -352,6 +434,147 @@ fn tty_sgr_reset_buf(buf, pos) {
     # is needed, because the escape is exactly 4 bytes long.
     store32(buf + pos, 0x6D305B1B);      # ESC [ 0 m, as one literal (v1.2.0)
     return pos + 4;
+}
+
+# Append ONE SGR escape setting several attributes at once — `CSI a;b;c m`
+# for the `n` codes in the i64 array `codes` (8 bytes per entry) — to `buf`
+# at `pos` (v1.3.0). `codes` are SGR parameters as `tty_sgr` takes them:
+# TTY_FG_*, TTY_BG_*, TTY_SGR_*, or any code in [0, 999], e.g. bold yellow
+# on blue is { TTY_SGR_BOLD, TTY_FG_YELLOW, TTY_BG_BLUE } → `ESC[1;33;44m`.
+# Returns the new write position, or -1 if `pos` is negative, `n` is outside
+# [1, 16], or any code is outside [0, 999]; every code is checked before
+# anything is written, so a rejection writes nothing. Byte budget: 2 + 4·n
+# (66 at n = 16).
+fn tty_sgr_list_buf(buf, pos, codes, n) {
+    if (pos < 0 || n < 1 || n > 16) { return 0 - 1; }
+    var i = 0;
+    while (i < n) {
+        var c = load64(codes + i * 8);
+        if (c < 0 || c > 999) { return 0 - 1; }
+        i = i + 1;
+    }
+    store16(buf + pos, 0x5B1B);         # ESC [
+    var p = pos + 2;
+    i = 0;
+    while (i < n) {
+        p = tty_dec_buf(buf, p, load64(codes + i * 8));
+        store8(buf + p, 59);            # ';' — the last one becomes 'm'
+        p = p + 1;
+        i = i + 1;
+    }
+    store8(buf + p - 1, 0x6D);          # 'm'
+    return p;
+}
+
+# Write the `tty_sgr_list_buf` escape for `n` codes to fd 1 in one write
+# (v1.3.0). Returns 0, or -1 on the same rejections, before anything is
+# written.
+fn tty_sgr_list(codes, n) {
+    var buf[66];
+    var len = tty_sgr_list_buf(&buf, 0, codes, n);
+    if (len < 0) { return 0 - 1; }
+    sys_write(1, &buf, len);
+    return 0;
+}
+
+# ---- OSC: window title and clipboard (v1.3.0) -----------------------
+#
+# Both are terminated with BEL rather than ST (`ESC \`): more terminals
+# accept it, and thoth (their first user) chose it for that reason.
+
+# Append an OSC 0 escape setting the window and icon title to the `len`
+# bytes at `src` — `ESC ] 0 ; <title> BEL` — to `buf` at `pos`. The title is
+# untrusted text by default, so it goes through `tty_sanitize_buf` in UTF-8
+# mode with nothing kept: a BEL or ESC in it cannot end the sequence early
+# and smuggle in another one. Returns the new write position, or -1 if
+# `pos` or `len` is negative (a rejection writes nothing). Byte budget:
+# `len` + 5.
+fn tty_title_buf(buf, pos, src, len) {
+    if (pos < 0 || len < 0) { return 0 - 1; }
+    store32(buf + pos, 0x3B305D1B);     # ESC ] 0 ;
+    var p = tty_sanitize_buf(buf, pos + 4, src, len, TTY_SANITIZE_UTF8, 0);
+    store8(buf + p, 7);                 # BEL
+    return p + 1;
+}
+
+# Set the window title to the `len` bytes at `src` (see `tty_title_buf`),
+# in one write to fd 1. Returns 0, or -1 if `len` is negative or above 256
+# — before anything is written. Longer titles: compose with
+# `tty_title_buf` into your own buffer.
+fn tty_title(src, len) {
+    if (len < 0 || len > 256) { return 0 - 1; }
+    var buf[261];
+    var n = tty_title_buf(&buf, 0, src, len);
+    sys_write(1, &buf, n);
+    return 0;
+}
+
+# The RFC 4648 base64 alphabet, for OSC 52.
+const _B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+# Append the standard base64 encoding (RFC 4648 §4, `=`-padded) of the
+# `len` bytes at `src` to `buf` at `pos`; returns the new position. Writes
+# 4 · ceil(len / 3) bytes.
+fn _b64_buf(buf, pos, src, len) {
+    var p = buf + pos;
+    var i = 0;
+    while (i + 3 <= len) {
+        var v = (load8(src + i) << 16) | (load8(src + i + 1) << 8) | load8(src + i + 2);
+        store8(p, load8(_B64 + ((v >> 18) & 63)));
+        store8(p + 1, load8(_B64 + ((v >> 12) & 63)));
+        store8(p + 2, load8(_B64 + ((v >> 6) & 63)));
+        store8(p + 3, load8(_B64 + (v & 63)));
+        p = p + 4;
+        i = i + 3;
+    }
+    var r = len - i;
+    if (r > 0) {
+        var w = load8(src + i) << 16;
+        if (r == 2) { w = w | (load8(src + i + 1) << 8); }
+        store8(p, load8(_B64 + ((w >> 18) & 63)));
+        store8(p + 1, load8(_B64 + ((w >> 12) & 63)));
+        if (r == 2) { store8(p + 2, load8(_B64 + ((w >> 6) & 63))); }
+        else { store8(p + 2, 61); }     # '='
+        store8(p + 3, 61);              # '='
+        p = p + 4;
+    }
+    return p - buf;
+}
+
+# Append an OSC 52 escape that puts the `len` bytes at `src` on the
+# terminal's clipboard — `ESC ] 52 ; c ; <base64> BEL` — to `buf` at `pos`.
+# Any bytes may be copied: base64 leaves nothing a terminal could read as a
+# control. Terminals cap what they accept (often around 100 KB of base64)
+# and many ask the user first or refuse OSC 52 outright; the escape says
+# nothing back. Returns the new write position, or -1 if `pos` or `len` is
+# negative (a rejection writes nothing). Byte budget: 8 + 4 · ceil(len / 3).
+fn tty_clipboard_buf(buf, pos, src, len) {
+    if (pos < 0 || len < 0) { return 0 - 1; }
+    store32(buf + pos, 0x32355D1B);     # ESC ] 5 2
+    store16(buf + pos + 4, 0x633B);     # ; c
+    store8(buf + pos + 6, 59);          # ;
+    var p = _b64_buf(buf, pos + 7, src, len);
+    store8(buf + p, 7);                 # BEL
+    return p + 1;
+}
+
+# Put the `len` bytes at `src` on the terminal's clipboard (see
+# `tty_clipboard_buf`), writing to fd 1 in 64-byte pieces so no buffer
+# needs to fit the whole payload. Returns 0, or -1 if `len` is negative —
+# before anything is written.
+fn tty_clipboard_set(src, len) {
+    if (len < 0) { return 0 - 1; }
+    sys_write(1, "\x1b]52;c;", 7);
+    var chunk[64];
+    var i = 0;
+    while (i < len) {
+        var n = len - i;
+        if (n > 48) { n = 48; }         # 48 is a multiple of 3: only the last piece pads
+        sys_write(1, &chunk, _b64_buf(&chunk, 0, src + i, n));
+        i = i + n;
+    }
+    sys_write(1, "\x07", 1);
+    return 0;
 }
 
 # Append `CSI <code>m` to `buf` at `pos`. Returns new `pos`, or -1

@@ -60,6 +60,7 @@ var PTY_TIOCGPTN     = 0x80045430;  # _IOR('T',0x30,uint) — slave number
 var PTY_TIOCSPTLCK   = 0x40045431;  # _IOW('T',0x31,int)  — (un)lock slave
 var PTY_TIOCSWINSZ   = 0x5414;      # set window size
 var PTY_ONLCR        = 0x4;         # c_oflag: map \n -> \r\n on output
+var PTY_FIONREAD     = 0x541B;      # bytes waiting to be read (v1.3.0)
 # nanosleep and prlimit64 have no stdlib constant on either arch, so they
 # are gated by hand. Getting these wrong is not harmless: aarch64 syscall
 # 35 is `unlinkat`, not `nanosleep`.
@@ -88,6 +89,27 @@ fn _pty_dup2(oldfd, newfd) {
 #ifdef CYRIUS_ARCH_AARCH64
     return syscall(SYS_DUP3, oldfd, newfd, 0);
 #endif
+}
+
+# Bytes waiting on `fd`'s input queue, or -1 if FIONREAD fails (v1.3.0).
+fn _pty_pending(fd) {
+    var cnt[8];
+    store64(&cnt, 0);
+    if (sys_ioctl(fd, PTY_FIONREAD, &cnt) < 0) { return 0 - 1; }
+    return tio_load32(&cnt, 0);
+}
+
+# Poll until something is waiting on `fd` (bounded, ~200 ms); returns the
+# count, or 0 if nothing arrived.
+fn _pty_wait_pending(fd) {
+    var it = 0;
+    while (it < 200) {
+        var n = _pty_pending(fd);
+        if (n != 0) { return n; }
+        _pty_nap();
+        it = it + 1;
+    }
+    return 0;
 }
 
 fn _pty_nap() {
@@ -570,6 +592,70 @@ fn main() {
                 while (nbi < 60) { if (load8(&nb_now + nbi) != load8(&nb_snap + nbi)) { nb_diff = nb_diff + 1; } nbi = nbi + 1; }
                 assert_eq(nb_diff, 0, "termios restored byte-for-byte after the mode switches");
 
+                # v1.3.0 — tty_flush_input: typeahead the terminal holds is
+                # discarded, without touching the slot.
+                test_group("pty.tcyr — tty_flush_input (v1.3.0)");
+                file_write(master, "abc\n", 4);
+                assert(_pty_wait_pending(slave) > 0, "fixture: typed input is waiting on the slave");
+                assert_eq(tty_flush_input(slave), 0, "tty_flush_input(slave) = 0");
+                assert_eq(_pty_pending(slave), 0, "nothing is waiting after the flush");
+                assert_eq(_tty_in_raw, 0, "the flush took no slot");
+                _pty_flush(master);                     # drop the echo of "abc"
+
+                # v1.3.0 — tty_echo_off: ECHO and ECHONL off, line editing on,
+                # pending input discarded, the same slot and restore.
+                test_group("pty.tcyr — tty_echo_off (v1.3.0)");
+                var eo_snap[60];
+                var eo_now[60];
+                var eoi = 0;
+                while (eoi < 60) { store8(&eo_snap + eoi, 0); store8(&eo_now + eoi, 0); eoi = eoi + 1; }
+                # A pty starts with ECHONL off, so clearing it would prove
+                # nothing: turn it on first, and put the original back after.
+                var eo_orig[60];
+                sys_ioctl(slave, TCGETS, &eo_orig);
+                sys_ioctl(slave, TCGETS, &eo_now);
+                tio_store32(&eo_now, 12, tio_load32(&eo_now, 12) | _TIO_ECHONL);
+                sys_ioctl(slave, TCSETS, &eo_now);
+                sys_ioctl(slave, TCGETS, &eo_snap);
+                var eo_want = tio_load32(&eo_snap, 12) & ~(TIO_ECHO | _TIO_ECHONL);
+                file_write(master, "pw\n", 3);
+                assert(_pty_wait_pending(slave) > 0, "fixture: typeahead is waiting before the prompt");
+                _pty_flush(master);
+                assert_eq(tty_echo_off(slave), 0, "tty_echo_off(slave) = 0");
+                assert_eq(_pty_pending(slave), 0, "the typeahead was discarded (TCSETSF)");
+                sys_ioctl(slave, TCGETS, &eo_now);
+                assert_eq(tio_load32(&eo_now, 12), eo_want, "c_lflag is the cooked one minus ECHO and ECHONL");
+                assert_eq(tio_load32(&eo_now, 12) & TIO_ICANON, TIO_ICANON, "line editing stays on (ICANON)");
+                assert_eq(tio_load32(&eo_now, 12) & _TIO_ECHONL, 0, "ECHONL off, though the cooked state had it on");
+                var eo_other = 0;
+                eoi = 0;
+                while (eoi < 60) {
+                    if (eoi < 12 || eoi > 15) { if (load8(&eo_now + eoi) != load8(&eo_snap + eoi)) { eo_other = eo_other + 1; } }
+                    eoi = eoi + 1;
+                }
+                assert_eq(eo_other, 0, "nothing but c_lflag changed");
+                file_write(master, "s3cret\n", 7);
+                assert(_pty_wait_pending(slave) > 0, "fixture: the typed line arrived");
+                var eo_echo[16];
+                assert_eq(_pty_drain(master, &eo_echo, 16, 30), 0, "the typed line is not echoed back");
+                var eo_line[16];
+                assert_eq(sys_read(slave, &eo_line, 16), 7, "the whole line is read, newline included");
+                assert_eq(tty_echo_off(slave), 0, "a repeat on the same fd is a no-op success");
+                assert_eq(tty_echo_off(master), 0 - 1, "a different fd is refused while the slot is held");
+                assert_eq(tty_raw(slave), 0, "tty_raw on the same fd switches to raw");
+                sys_ioctl(slave, TCGETS, &eo_now);
+                assert_eq(tio_load32(&eo_now, 12) & TIO_ICANON, 0, "...ICANON off in raw");
+                assert_eq(tty_echo_off(slave), 0, "and back to echo-off");
+                sys_ioctl(slave, TCGETS, &eo_now);
+                assert_eq(tio_load32(&eo_now, 12), eo_want, "...re-derived from the saved cooked state");
+                assert_eq(tty_cooked(), 0, "tty_cooked() restores from echo-off");
+                sys_ioctl(slave, TCGETS, &eo_now);
+                var eo_diff = 0;
+                eoi = 0;
+                while (eoi < 60) { if (load8(&eo_now + eoi) != load8(&eo_snap + eoi)) { eo_diff = eo_diff + 1; } eoi = eoi + 1; }
+                assert_eq(eo_diff, 0, "termios restored byte-for-byte after echo-off");
+                sys_ioctl(slave, TCSETS, &eo_orig);     # undo the ECHONL fixture
+
                 # v1.1.4 — the kernel reads an fd as a 32-bit unsigned int,
                 # so through v1.1.3 any i64 outside [0, 0x7FFFFFFF] aliased
                 # the descriptor in its low 32 bits.
@@ -611,6 +697,13 @@ fn main() {
                 assert_eq(tty_raw(slave), 0, "tty_raw(slave) before hangup");
                 file_close(master);
                 master_closed = 1;
+                # A mode switch on the fd that holds the slot skips TCGETS (the
+                # cooked state is already saved), so this is the one call whose
+                # TCSETS can fail alone — and after the hangup it does (EIO).
+                # It must be refused, not recorded (v1.3.0: dropping the TCSETS
+                # check passed every suite through 1.2.1).
+                assert_eq(tty_raw_nonblock(slave), 0 - 1, "a mode switch whose TCSETS fails returns -1");
+                assert_eq(_tty_mode, _TTY_RAW, "the refused switch leaves the recorded mode unchanged");
                 assert_eq(tty_cooked(), 0 - 1, "tty_cooked() = -1 after the master hangs up");
                 assert_eq(_tty_in_raw, 1, "the slot stays held after a failed restore");
                 var hup_dn = sys_open("/dev/null", 2, 0);
@@ -618,7 +711,10 @@ fn main() {
                     assert_eq(tty_raw(hup_dn), 0 - 1, "a different fd is refused while the slot is stranded");
                     file_close(hup_dn);
                 }
-                _tty_in_raw = 0;
+                # v1.3.0 — tty_forget frees the stranded slot without a restore.
+                assert_eq(tty_forget(), 0, "tty_forget() = 0 on a stranded slot");
+                assert_eq(_tty_in_raw, 0, "the slot is free again");
+                assert_eq(tty_cooked(), 0, "tty_cooked() is the no-op success once nothing is held");
 
                 file_close(slave);
             } else {

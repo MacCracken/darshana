@@ -88,6 +88,43 @@ for the two v1.0 tables.
 | 1.2.0 | `TTY_SANITIZE_LATIN1` |
 | 1.2.0 | `TTY_KEEP_TAB` |
 | 1.2.0 | `TTY_KEEP_LF` |
+| 1.3.0 | `tty_forget` |
+| 1.3.0 | `tty_flush_input` |
+| 1.3.0 | `tty_echo_off` |
+| 1.3.0 | `tty_has_ctl` |
+| 1.3.0 | `tty_sgr_list_buf` |
+| 1.3.0 | `tty_sgr_list` |
+| 1.3.0 | `tty_cursor_save` |
+| 1.3.0 | `tty_cursor_restore` |
+| 1.3.0 | `tty_scroll_region` |
+| 1.3.0 | `tty_scroll_region_reset` |
+| 1.3.0 | `tty_title` |
+| 1.3.0 | `tty_title_buf` |
+| 1.3.0 | `tty_clipboard_set` |
+| 1.3.0 | `tty_clipboard_buf` |
+| 1.3.0 | `tty_move_buf` |
+| 1.3.0 | `tty_clear_to_eol_buf` |
+| 1.3.0 | `tty_mouse_enable` |
+| 1.3.0 | `tty_mouse_disable` |
+| 1.3.0 | `tty_paste_enable` |
+| 1.3.0 | `tty_paste_disable` |
+| 1.3.0 | `TTY_SIGMASK_PIPE` |
+| 1.3.0 | `TTY_BG_BLACK` |
+| 1.3.0 | `TTY_BG_RED` |
+| 1.3.0 | `TTY_BG_GREEN` |
+| 1.3.0 | `TTY_BG_YELLOW` |
+| 1.3.0 | `TTY_BG_BLUE` |
+| 1.3.0 | `TTY_BG_MAGENTA` |
+| 1.3.0 | `TTY_BG_CYAN` |
+| 1.3.0 | `TTY_BG_WHITE` |
+| 1.3.0 | `TTY_BG_BRIGHT_BLACK` |
+| 1.3.0 | `TTY_BG_BRIGHT_RED` |
+| 1.3.0 | `TTY_BG_BRIGHT_GREEN` |
+| 1.3.0 | `TTY_BG_BRIGHT_YELLOW` |
+| 1.3.0 | `TTY_BG_BRIGHT_BLUE` |
+| 1.3.0 | `TTY_BG_BRIGHT_MAGENTA` |
+| 1.3.0 | `TTY_BG_BRIGHT_CYAN` |
+| 1.3.0 | `TTY_BG_BRIGHT_WHITE` |
 
 ### What "frozen" covers
 
@@ -152,7 +189,9 @@ for the two v1.0 tables.
     ([architecture note 001](../architecture/001-module-global-termios-state.md)).
     Adding `tty_forget()` was considered at v0.9.3 and rejected as a
     speculative knob; if a consumer ever hits this for real, it is a **minor**
-    addition, not a break.
+    addition, not a break. *(It shipped in 1.3.0 as that minor addition —
+    [ADR 0005](0005-candidates-ahead-of-second-consumer.md). The model it
+    resets is unchanged.)*
 - "Consumers drive the API" now has a harder edge: a consumer asking for a
   *changed* symbol gets a v2 discussion, not a patch.
 
@@ -161,6 +200,7 @@ for the two v1.0 tables.
 - Additive change stays cheap. New functions, new constants, new platform peers,
   and new `_`-prefixed internals are all minor bumps. The extract-on-2nd-consumer
   rule (`tty_bg_256_buf` is the standing example) is unaffected by the freeze.
+  (1.3.0 is the one recorded exception: [ADR 0005](0005-candidates-ahead-of-second-consumer.md).)
 
 ## Post-1.0 change policy
 

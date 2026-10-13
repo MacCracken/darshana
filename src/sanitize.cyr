@@ -31,7 +31,7 @@ var TTY_KEEP_TAB = 0x200;               # 1 << 9
 var TTY_KEEP_LF  = 0x400;               # 1 << 10
 
 # The replacement for every neutralized byte or sequence: '?'.
-var _SAN_REPL = 63;
+const _SAN_REPL = 63;
 
 # Append a sanitized copy of `len` bytes at `src` to `buf` at `pos`.
 # Returns the new write position, or -1 if `pos` or `len` is negative or
@@ -105,6 +105,44 @@ fn tty_sanitize_buf(buf, pos, src, len, mode, keep) {
         }
     }
     return p - buf;
+}
+
+# Returns 1 if the `len` bytes at `src` contain anything `tty_sanitize_buf`
+# would neutralize with the same `mode` and `keep`, 0 if it would copy them
+# unchanged, and -1 if `len` is negative or `mode` is neither
+# TTY_SANITIZE_UTF8 nor TTY_SANITIZE_LATIN1 (v1.3.0).
+#
+# The reject-only form, for a caller that refuses a whole string rather
+# than display a sanitized copy — a name, a key, a header value. Same rule
+# as `tty_sanitize_buf`, byte for byte: it answers 1 exactly when
+# sanitizing would change the input. Reads nothing past `src + len`, writes
+# nothing, and stops at the first control it finds.
+fn tty_has_ctl(src, len, mode, keep) {
+    if (len < 0) { return 0 - 1; }
+    if (mode != TTY_SANITIZE_UTF8 && mode != TTY_SANITIZE_LATIN1) { return 0 - 1; }
+    var i = 0;
+    while (i < len) {
+        var c = load8(src + i);
+        if (c < 0x80) {
+            if (c < 0x20) {
+                if (c == 27 || ((keep >> c) & 1) == 0) { return 1; }
+            } else {
+                if (c == 0x7F) { return 1; }
+            }
+            i = i + 1;
+        } else {
+            if (mode == TTY_SANITIZE_LATIN1) {
+                if (c < 0xA0) { return 1; }
+                i = i + 1;
+            } else {
+                var n = _san_utf8_len(src + i, len - i);
+                if (n == 0) { return 1; }                   # malformed
+                if (n == 2 && c == 0xC2 && load8(src + i + 1) < 0xA0) { return 1; }   # encoded C1
+                i = i + n;
+            }
+        }
+    }
+    return 0;
 }
 
 # Length of the well-formed UTF-8 sequence starting at `s` (lead byte

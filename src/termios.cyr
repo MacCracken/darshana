@@ -16,29 +16,35 @@
 # five buckets. (Four through v1.0.1 — which left `tio_load32`,
 # `tio_store32` and `tty_close_signalfd` in none of them while the
 # sentence claimed all 29 were covered. The codec bucket is the fix.)
-#   • validating side-effecting ops — tty_raw, tty_cooked,
-#     tty_winsize, tty_move, tty_sgr, tty_fg_rgb, tty_bg_rgb — 0 on
-#     success, -1 on failure or out-of-range reject (rejected before
-#     any byte reaches fd 1).
-#   • unconditional emitters — tty_alt_enter/leave, tty_clear,
-#     tty_clear_to_eol/eos, tty_cursor_hide/show/home, tty_sgr_reset,
-#     tty_cursor_up/down — ALWAYS 0. The write(2) result is not
-#     checked (rationale in ansi.cyr's header). `n <= 0` on
-#     tty_cursor_up/down is a documented no-op, not a reject: these
-#     never return -1.
-#   • `_buf` composers (tty_dec_buf, tty_sgr_buf, tty_sgr_reset_buf,
-#     tty_fg_rgb_buf, tty_bg_rgb_buf, tty_fg_256_buf) — the new write
-#     position, or -1 on out-of-range input OR on a negative incoming
-#     `pos` — so a -1 from an earlier link poisons the rest of the
-#     chain rather than being laundered into a write below the buffer.
-#     tty_dec_buf additionally clamps `val <= 0` to a single '0'.
-#     Each composer documents its own byte budget; none takes a
-#     capacity argument, so sizing the buffer is the caller's job.
-#   • predicates / fd openers — tty_isatty returns 1/0;
-#     tty_open_signalfd returns an fd (>= 0) or exactly -1, never a
-#     raw -errno. tty_close_signalfd is the teardown counterpart:
-#     0 on success, exactly -1 on failure (also never a raw -errno —
-#     normalized in v1.0.2; see its docstring).
+#   • validating side-effecting ops — tty_raw, tty_raw_nonblock,
+#     tty_echo_off, tty_cooked, tty_flush_input, tty_winsize, tty_move,
+#     tty_scroll_region, tty_sgr, tty_sgr_list, tty_fg_rgb, tty_bg_rgb,
+#     tty_title, tty_clipboard_set — 0 on success, -1 on failure or
+#     out-of-range reject (rejected before any byte reaches fd 1).
+#   • unconditional ops — the emitters tty_alt_enter/leave, tty_clear,
+#     tty_clear_to_eol/eos, tty_cursor_hide/show/home,
+#     tty_cursor_save/restore, tty_sgr_reset, tty_cursor_up/down,
+#     tty_scroll_region_reset, tty_mouse_enable/disable,
+#     tty_paste_enable/disable, plus tty_winsize_or and tty_forget —
+#     ALWAYS 0. The write(2) result is not checked (rationale in ansi.cyr's
+#     header). `n <= 0` on tty_cursor_up/down is a documented no-op, not a
+#     reject: these never return -1.
+#   • `_buf` composers (tty_dec_buf, tty_sgr_buf, tty_sgr_list_buf,
+#     tty_sgr_reset_buf, tty_fg_rgb_buf, tty_bg_rgb_buf, tty_fg_256_buf,
+#     tty_bg_256_buf, tty_move_buf, tty_clear_to_eol_buf, tty_title_buf,
+#     tty_clipboard_buf, tty_sanitize_buf) — the new write position, or -1
+#     on out-of-range input OR on a negative incoming `pos` — so a -1 from
+#     an earlier link poisons the rest of the chain rather than being
+#     laundered into a write below the buffer. tty_dec_buf additionally
+#     clamps `val <= 0` to a single '0'. Each composer documents its own
+#     byte budget; none takes a capacity argument, so sizing the buffer is
+#     the caller's job.
+#   • predicates / fd openers / readers — tty_isatty returns 1/0;
+#     tty_has_ctl 1/0, or -1 on bad arguments; tty_open_signalfd returns
+#     an fd (>= 0) or exactly -1, never a raw -errno; tty_read_signal the
+#     signal number, 0 when none is pending, or -1. tty_close_signalfd is
+#     the teardown counterpart: 0 on success, exactly -1 on failure (also
+#     never a raw -errno — normalized in v1.0.2; see its docstring).
 #   • termios field codec — tio_load32 returns the zero-extended
 #     32-bit field at `off` (never negative, never a failure code);
 #     tio_store32 always returns 0. Neither bounds-checks: `buf` and
@@ -47,9 +53,14 @@
 #     with no failure mode at all.
 #
 # Modules in this bundle, by concern:
-#   termios.cyr  — termios raw/cooked, winsize, isatty, signalfd, TIO_*
-#   ansi.cyr     — alt-screen / clear / cursor-visibility / SGR color
-#   cursor.cyr   — tty_dec_buf (decimal formatter), cursor positioning
+#   termios.cyr  — termios modes (raw, non-blocking raw, echo-off) and
+#                  their restore, input flush, winsize, isatty, signalfd,
+#                  TIO_*
+#   ansi.cyr     — alt-screen / clear / cursor visibility and save /
+#                  SGR color / mouse and paste modes / OSC title and
+#                  clipboard
+#   cursor.cyr   — tty_dec_buf (decimal formatter), cursor positioning,
+#                  scroll region
 #   sanitize.cyr — making untrusted bytes safe for the terminal (v1.2.0)
 #
 # Symbols prefixed `_` are private by convention — they ship in this
@@ -242,10 +253,18 @@ var TIOCGWINSZ = 0x5413;
 # u64 with bit (signum - 1) set per signal in the mask.
 #   TTY_SIGMASK_EXIT  = SIGHUP(1) | SIGINT(2) | SIGTERM(15) → bits 0,1,14 → 0x4003
 #   TTY_SIGMASK_WINCH = SIGWINCH(28)                         → bit  27     → 0x08000000
+#   TTY_SIGMASK_PIPE  = SIGPIPE(13)                          → bit  12     → 0x1000
 # Callers can OR these or build custom masks; the primitive itself is
 # mask-agnostic. v0.3.0 — promoted from chakshu's _tui_open_exit_signalfd.
+#
+# TTY_SIGMASK_PIPE (v1.3.0): a write to a pipe whose reader has gone raises
+# SIGPIPE, whose default action kills the process mid-teardown (ADR 0002).
+# Blocking it through a signalfd turns that into a readable event and the
+# write into an EPIPE return. The three masks are disjoint, so each can have
+# its own signalfd.
 var TTY_SIGMASK_EXIT  = 0x4003;
 var TTY_SIGMASK_WINCH = 0x08000000;
+var TTY_SIGMASK_PIPE  = 0x1000;
 
 # Saved cooked-mode termios. Populated on `tty_raw`; consumed by `tty_cooked`.
 # Module-global rather than caller-owned so any exit path (including
@@ -277,23 +296,36 @@ fn _tty_fd_ok(fd) {
     return 1;
 }
 
-# The VMIN `tty_raw` / `tty_raw_nonblock` last applied while raw: 1 for
-# blocking reads, 0 for reads that return at once. v1.2.0 — only
-# meaningful while `_tty_in_raw` is 1.
-var _tty_raw_vmin = 1;
+# The mode the slot's fd is in while `_tty_in_raw` is 1 (v1.3.0; through
+# 1.2.1 this was `_tty_raw_vmin`, the raw VMIN): raw with blocking reads
+# (`tty_raw`), raw with reads that return at once (`tty_raw_nonblock`), or
+# cooked with echo off (`tty_echo_off`). All three share the one save slot,
+# so `tty_cooked()` restores whichever is on.
+const _TTY_RAW    = 1;
+const _TTY_RAW_NB = 2;
+const _TTY_NOECHO = 3;
+var _tty_mode = _TTY_RAW;
 
-# Shared body of `tty_raw` (vmin 1) and `tty_raw_nonblock` (vmin 0).
-# Private (v1.2.0). Enters raw from cooked, saving the cooked termios; or,
-# on the fd that already holds the raw slot, switches between the two
-# read modes by re-deriving from the SAVED cooked state, which it never
-# overwrites — so `tty_cooked()` restores exactly, whichever mode is on.
-# A same-fd call in the mode already applied is a no-op success, exactly
-# as `tty_raw` has always been. Returns 0, or -1.
-fn _tty_raw_mode(fd, vmin) {
+# ioctl requests and flags only the slot's modes and `tty_flush_input` use.
+# Arch-stable across both Linux targets (asm-generic/ioctls.h, termbits.h).
+const _TCSETSF    = 0x5404;    # TCSETS, discarding unread input first
+const _TCFLSH     = 0x540B;
+const _TCIFLUSH   = 0;         # TCFLSH argument: the input queue
+const _TIO_ECHONL = 0x040;     # c_lflag: echo NL even when ECHO is off
+
+# Shared body of `tty_raw`, `tty_raw_nonblock` and `tty_echo_off`.
+# Private (v1.2.0 as `_tty_raw_mode`; v1.3.0 gained the echo-off mode).
+# Enters a mode from cooked, saving the cooked termios; or, on the fd that
+# already holds the slot, switches between modes by re-deriving from the
+# SAVED cooked state, which it never overwrites — so `tty_cooked()`
+# restores exactly, whichever mode is on. A same-fd call in the mode
+# already applied is a no-op success, exactly as `tty_raw` has always
+# been. Returns 0, or -1.
+fn _tty_set_mode(fd, mode) {
     if (_tty_fd_ok(fd) == 0) { return 0 - 1; }
     if (_tty_in_raw == 1) {
         if (fd != _tty_raw_fd) { return 0 - 1; }
-        if (vmin == _tty_raw_vmin) { return 0; }
+        if (mode == _tty_mode) { return 0; }
     } else {
         if (sys_ioctl(fd, TCGETS, &_tty_saved) < 0) { return 0 - 1; }
     }
@@ -304,16 +336,22 @@ fn _tty_raw_mode(fd, vmin) {
         store8(&work + i, load8(&_tty_saved + i));
         i = i + 1;
     }
-    _tty_apply_raw_flags(&work);
-    # _tty_apply_raw_flags sets VMIN = 1 / VTIME = 0, so for tty_raw this
-    # store rewrites the value already there and the TCSETS bytes are the
-    # same as before v1.2.0.
-    store8(&work + TIO_CC_BASE + TIO_VMIN, vmin);
+    var req = TCSETS;
+    if (mode == _TTY_NOECHO) {
+        # Line editing stays on (ICANON); only what the user types is no
+        # longer shown, including the newline that ends the line.
+        tio_store32(&work, 12, tio_load32(&work, 12) & ~(TIO_ECHO | _TIO_ECHONL));
+        req = _TCSETSF;
+    } else {
+        # _tty_apply_raw_flags sets VMIN = 1 / VTIME = 0: tty_raw's bytes.
+        _tty_apply_raw_flags(&work);
+        if (mode == _TTY_RAW_NB) { store8(&work + TIO_CC_BASE + TIO_VMIN, 0); }
+    }
 
-    if (sys_ioctl(fd, TCSETS, &work) < 0) { return 0 - 1; }
+    if (sys_ioctl(fd, req, &work) < 0) { return 0 - 1; }
     _tty_raw_fd = fd;
     _tty_in_raw = 1;
-    _tty_raw_vmin = vmin;
+    _tty_mode = mode;
     return 0;
 }
 
@@ -337,7 +375,7 @@ fn _tty_raw_mode(fd, vmin) {
 # (v1.1.4) — the kernel would otherwise read its low 32 bits as a
 # different descriptor. See `_tty_fd_ok`.
 fn tty_raw(fd) {
-    return _tty_raw_mode(fd, 1);
+    return _tty_set_mode(fd, _TTY_RAW);
 }
 
 # Enter raw mode on `fd` with reads that return at once: VMIN = 0 and
@@ -355,7 +393,34 @@ fn tty_raw(fd) {
 # patching VMIN / VTIME itself; five other AGNOS projects hand-roll the
 # same termios edit without depending on darshana.
 fn tty_raw_nonblock(fd) {
-    return _tty_raw_mode(fd, 0);
+    return _tty_set_mode(fd, _TTY_RAW_NB);
+}
+
+# Turn echo off on `fd` for a password or passphrase prompt, keeping line
+# editing: the user types a whole line, backspace works, and nothing they
+# type is shown — not even the newline, so print one yourself once the
+# line is read. Input already waiting on the terminal is discarded first
+# (TCSETSF), so keys typed before the prompt cannot become the secret.
+# `tty_cooked()` restores the terminal. Returns 0 on success, -1 on ioctl
+# failure (most often: fd is not a TTY) or an `fd` outside [0, 0x7FFFFFFF].
+#
+# The same single slot as `tty_raw` (v1.3.0): a different fd while the
+# slot is held is refused with -1, and on the fd that holds it this
+# switches to echo-off from either raw mode — `tty_raw` switches back.
+# The saved state is always the cooked one from before the first call.
+fn tty_echo_off(fd) {
+    return _tty_set_mode(fd, _TTY_NOECHO);
+}
+
+# Discard input the terminal on `fd` has received but nobody has read
+# (TCFLSH, TCIFLUSH) — so keys pressed before a confirmation prompt cannot
+# answer it. Output is untouched, and so is the slot: this works in any
+# mode, raw or not. Returns 0 on success, -1 on ioctl failure (most
+# often: fd is not a TTY) or an `fd` outside [0, 0x7FFFFFFF] (v1.3.0).
+fn tty_flush_input(fd) {
+    if (_tty_fd_ok(fd) == 0) { return 0 - 1; }
+    if (sys_ioctl(fd, _TCFLSH, _TCIFLUSH) < 0) { return 0 - 1; }
+    return 0;
 }
 
 # Restore cooked mode onto the fd `tty_raw` saved (`_tty_raw_fd`).
@@ -381,6 +446,25 @@ fn tty_cooked() {
     if (_tty_in_raw == 0) { return 0; }
     var rc = sys_ioctl(_tty_raw_fd, TCSETS, &_tty_saved);
     if (rc < 0) { return 0 - 1; }
+    _tty_in_raw = 0;
+    return 0;
+}
+
+# Free the single raw slot WITHOUT restoring the terminal (v1.3.0).
+#
+# For the one case `tty_cooked()` cannot recover from: its TCSETS fails
+# for good — the terminal hung up, the fd was closed underneath it — so
+# the slot stays held and every later `tty_raw` / `tty_raw_nonblock` /
+# `tty_echo_off` on any other fd is refused for the life of the process
+# (architecture note 001). After `tty_forget()` the next mode call saves
+# fresh state from its own fd.
+#
+# The terminal is left exactly as it is. Call `tty_cooked()` first, and
+# `tty_forget()` only when that returned -1; on a live terminal, forgetting
+# instead of restoring leaves the user's shell raw.
+#
+# Always returns 0. Idempotent; a no-op when nothing is held.
+fn tty_forget() {
     _tty_in_raw = 0;
     return 0;
 }
@@ -544,8 +628,7 @@ fn tty_open_signalfd(sigmask) {
     # v1.0.1 behaviour) than read stack garbage.
     var prev[8];
     store64(&prev, 0);
-    # SIG_BLOCK = 0 (the `how` arg to sigprocmask)
-    var rc = sys_sigprocmask(0, &mask, &prev);
+    var rc = sys_sigprocmask(SIG_BLOCK, &mask, &prev);
     if (rc < 0) { return 0 - 1; }
     # signalfd(fd=-1, mask, SFD_CLOEXEC) → new fd. CLOEXEC so the
     # signalfd does not leak across an execve — a consumer that takes
@@ -556,7 +639,7 @@ fn tty_open_signalfd(sigmask) {
     # mask is inherited regardless (see the docstring).
     var sfd = sys_signalfd(0 - 1, &mask, SFD_CLOEXEC);
     if (sfd < 0) {
-        # SIG_UNBLOCK = 1. Roll the block back: the caller gets no fd,
+        # Roll the block back: the caller gets no fd,
         # so it has nothing to hand `tty_close_signalfd` and would
         # otherwise run with these signals blocked for the whole
         # process lifetime. This also normalizes the raw `-errno` the
@@ -567,7 +650,7 @@ fn tty_open_signalfd(sigmask) {
         # live signalfd owns — is left blocked. See the docstring.
         var added[8];
         store64(&added, sigmask & ~load64(&prev));
-        sys_sigprocmask(1, &added, 0);
+        sys_sigprocmask(SIG_UNBLOCK, &added, 0);
         return 0 - 1;
     }
     return sfd;
@@ -626,8 +709,7 @@ fn tty_close_signalfd(fd, sigmask) {
     if (_tty_fd_ok(fd) == 1) { file_close(fd); }
     var mask[8];
     store64(&mask, sigmask);
-    # SIG_UNBLOCK = 1 (the `how` arg to sigprocmask)
-    var rc = sys_sigprocmask(1, &mask, 0);
+    var rc = sys_sigprocmask(SIG_UNBLOCK, &mask, 0);
     if (rc < 0) { return 0 - 1; }
     return 0;
 }
@@ -741,12 +823,35 @@ fn tty_raw_nonblock(fd) {
     return 0 - 1;
 }
 
+# AGNOS peer of `tty_echo_off`. Returns -1, always. The agnos console echoes every
+# printable key from the kernel's own line reader (ABI O1) and has no
+# switch to stop it, so a password typed here is shown whatever this
+# returns — and a silent 0 would tell the caller the opposite.
+fn tty_echo_off(fd) {
+    return 0 - 1;
+}
+
+# AGNOS peer of `tty_flush_input`. Returns -1, always: the kernel's
+# keyboard buffer has no flush call, so pending keys cannot be discarded
+# from ring 3.
+fn tty_flush_input(fd) {
+    return 0 - 1;
+}
+
 # AGNOS cooked-mode restore. The no-op counterpart to the agnos `tty_raw`: raw
 # was never entered (no termios state to restore), so this is an idempotent
 # success — matching the Linux `tty_cooked` "no-op when not raw" contract.
 #
 # Always returns 0; there is no failure mode on this arm.
 fn tty_cooked() {
+    return 0;
+}
+
+# AGNOS peer of `tty_forget`. There is no raw slot on this arm (`tty_raw`
+# never succeeds), so there is nothing to free.
+#
+# Always returns 0.
+fn tty_forget() {
     return 0;
 }
 
@@ -759,26 +864,33 @@ fn tty_cooked() {
 # Linux 0x4003 / 0x08000000 here would silently watch the wrong signals.
 #   TTY_SIGMASK_EXIT  = SIGHUP(1) | SIGINT(2) | SIGTERM(15) → bits 1,2,15 → 0x8006
 #   TTY_SIGMASK_WINCH = SIGWINCH(28)                        → bit  28     → 0x10000000
+#   TTY_SIGMASK_PIPE  = SIGPIPE(13)                         → bit  13     → 0x2000
 #
 # ⚠ Nothing on agnos raises SIGWINCH today — neither the kernel nor mirshi
 # generates it (checked 2026-10-12) — so a WINCH signalfd opens fine and never
 # fires. Detect a console resize by polling `tty_winsize`. The value stays
 # correct for the day agnos starts sending it.
+#
+# ⚠ agnos has no SIGPIPE: a write with no reader left returns its partial
+# count or -1 instead (the stdlib's agnos `sys_write`). TTY_SIGMASK_PIPE is
+# here so a consumer stays platform-blind; its signalfd never fires.
 var TTY_SIGMASK_EXIT  = 0x8006;
 var TTY_SIGMASK_WINCH = 0x10000000;
+var TTY_SIGMASK_PIPE  = 0x2000;
 
 # The signalfd path calls the agnos stdlib's `sys_sigprocmask` (#17) and
 # `sys_signalfd` (#18), which own the syscall numbers — the same wrapper
-# names the Linux arm calls, each resolving to its own target's syscall.
+# names the Linux arm calls, each resolving to its own target's syscall —
+# and the stdlib's `SIG_BLOCK` / `SIG_UNBLOCK` / `SFD_CLOEXEC`, which have
+# the same values on agnos as on Linux.
 #
-# SFD_CLOEXEC — carried for intent parity with the Linux peer's CLOEXEC
+# SFD_CLOEXEC is passed for parity with the Linux peer's CLOEXEC
 # discipline. mirshi's MVP signalfd is an opaque supervisor-side fd (no execve
 # fd-inheritance across the ptrace boundary) and is always non-blocking, so it
-# stores `flags` but does not act on them; the value is preserved for honesty.
-var _AGNOS_SFD_CLOEXEC = 0x80000;
+# stores `flags` but does not act on them.
 
 # AGNOS peer of `tty_open_signalfd`. Blocks the signals in `sigmask` on this
-# thread (sigprocmask#17, SIG_BLOCK=0) then creates an emulated signalfd
+# thread (sigprocmask#17, SIG_BLOCK) then creates an emulated signalfd
 # (signalfd#18, fd=-1 → allocate a new slot). Returns the emulated fd (>= 0) or
 # -1 on failure. Preserves the Linux peer's contract EXACTLY so consumers call
 # one `tty_open_signalfd` and the platform branch is invisible to them.
@@ -803,13 +915,12 @@ fn tty_open_signalfd(sigmask) {
     # Pre-zeroed for the same reason as the Linux peer.
     var prev[8];
     store64(&prev, 0);
-    # SIG_BLOCK = 0 (the `how` arg to sigprocmask)
-    var rc = sys_sigprocmask(0, &mask, &prev);
+    var rc = sys_sigprocmask(SIG_BLOCK, &mask, &prev);
     if (rc < 0) { return 0 - 1; }
     # signalfd(fd=-1, mask, SFD_CLOEXEC) → new emulated fd.
-    var sfd = sys_signalfd(0 - 1, &mask, _AGNOS_SFD_CLOEXEC);
+    var sfd = sys_signalfd(0 - 1, &mask, SFD_CLOEXEC);
     if (sfd < 0) {
-        # SIG_UNBLOCK = 1 — roll the block back, exactly as the Linux
+        # Roll the block back, exactly as the Linux
         # peer does. mirshi already normalizes its failures to -1, so
         # only the rollback is substantive here; the shape is kept
         # identical so the two peers stay readable side by side.
@@ -820,14 +931,14 @@ fn tty_open_signalfd(sigmask) {
         # only honour as an unnamed store-verbatim fall-through.
         var added[8];
         store64(&added, sigmask & ~load64(&prev));
-        sys_sigprocmask(1, &added, 0);
+        sys_sigprocmask(SIG_UNBLOCK, &added, 0);
         return 0 - 1;
     }
     return sfd;
 }
 
 # AGNOS peer of `tty_close_signalfd`: close `fd` and UNblock the signals in
-# `sigmask` (sigprocmask#17, SIG_UNBLOCK=1). Closing the fd alone is not enough
+# `sigmask` (sigprocmask#17, SIG_UNBLOCK). Closing the fd alone is not enough
 # — the SIG_BLOCK would persist and the consumer's signals stay silently
 # blocked after its UI exits. Like the Linux peer this UNBLOCKS rather than
 # restoring a captured mask, needs DISJOINT masks across live signalfds, and
@@ -853,8 +964,7 @@ fn tty_close_signalfd(fd, sigmask) {
     if (fd >= 0) { file_close(fd); }      # v1.1.4 — see the docstring
     var mask[8];
     store64(&mask, sigmask);
-    # SIG_UNBLOCK = 1 (the `how` arg to sigprocmask)
-    var rc = sys_sigprocmask(1, &mask, 0);
+    var rc = sys_sigprocmask(SIG_UNBLOCK, &mask, 0);
     if (rc < 0) { return 0 - 1; }
     return 0;
 }

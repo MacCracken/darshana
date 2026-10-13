@@ -279,6 +279,7 @@ fn _id_dec_group() {
 var _id_san_in[8];
 var _id_san_again[16];
 var _id_san_bad = 0;
+var _id_hc_bad = 0;       # tty_has_ctl disagreeing with tty_sanitize_buf (v1.3.0)
 
 # 1 if p[0..n) is safe output: no C0 byte unless `keep` names it (and
 # never ESC), no DEL, and — UTF-8 mode — well-formed UTF-8 with no
@@ -342,6 +343,12 @@ fn _id_san(h, mode, keep, len) {
         while (same == 1 && j < len) { if (load8(out + j) != load8(&_id_san_in + j)) { same = 0; } j = j + 1; }
         if (same == 0) { _id_san_bad = _id_san_bad + 1; }
     }
+    # v1.3.0: tty_has_ctl answers 1 exactly when sanitizing changed the input.
+    var changed = 0;
+    if (n != len) { changed = 1; }
+    var q = 0;
+    while (changed == 0 && q < len) { if (load8(out + q) != load8(&_id_san_in + q)) { changed = 1; } q = q + 1; }
+    if (tty_has_ctl(&_id_san_in, len, mode, keep) != changed) { _id_hc_bad = _id_hc_bad + 1; }
     return h;
 }
 
@@ -389,6 +396,283 @@ fn _id_san_group() {
     _id_poison(); h = _id_account(h, 3, tty_sanitize_buf(&_id_region + ID_BASE, 0 - 1, &_id_san_in, 1, 0, 0), 1, 1);
     _id_poison(); h = _id_account(h, 3, tty_sanitize_buf(&_id_region + ID_BASE, 3, &_id_san_in, 0 - 1, 0, 0), 1, 1);
     _id_poison(); h = _id_account(h, 3, tty_sanitize_buf(&_id_region + ID_BASE, 3, &_id_san_in, 1, 2, 0), 1, 1);
+    if (tty_has_ctl(&_id_san_in, 0 - 1, 0, 0) != 0 - 1) { _id_hc_bad = _id_hc_bad + 1; }
+    if (tty_has_ctl(&_id_san_in, 1, 2, 0) != 0 - 1) { _id_hc_bad = _id_hc_bad + 1; }
+    if (tty_has_ctl(&_id_san_in, 0, 0, 0) != 0) { _id_hc_bad = _id_hc_bad + 1; }
+    return h;
+}
+
+# ---- v1.3.0 composers: a 1 KiB guard region ---------------------------
+#
+# The composers added in 1.3.0 can write far past the 80-byte region above
+# (tty_sgr_list_buf up to 66 bytes, tty_title_buf len + 5, tty_clipboard_buf
+# 8 + 4·ceil(len/3)), and resizing that region would move every frozen digest
+# before it. So they get their own. Same contract — nothing outside
+# [pos, ret) changes, every call stays inside its budget, a rejection
+# touches nothing — but the fold takes the return and each OUTPUT byte,
+# not every word of the region.
+
+var ID_BBASE = 64;
+var _id_big[1024];
+
+fn _id_bpoison() {
+    var i = 0;
+    while (i < 1024) { store64(&_id_big + i, _id_aa); i = i + 8; }
+    return 0;
+}
+
+fn _id_bguard_ok(lo, hi) {
+    var w = 0;
+    while (w < 1024) {
+        if (w + 8 <= lo || w >= hi) {
+            if (load64(&_id_big + w) != _id_aa) { return 0; }
+        } else {
+            var b = w;
+            while (b < w + 8) {
+                if (b < lo || b >= hi) { if (load8(&_id_big + b) != 0xAA) { return 0; } }
+                b = b + 1;
+            }
+        }
+        w = w + 8;
+    }
+    return 1;
+}
+
+fn _id_baccount(h, pos, ret, minlen, maxlen) {
+    _id_records = _id_records + 1;
+    h = _id_mix(h, ret);
+    if (ret == 0 - 1) {
+        if (_id_bguard_ok(0, 0) == 0) { _id_bad = _id_bad + 1; }
+        return h;
+    }
+    var len = ret - pos;
+    if (len < minlen || len > maxlen) { _id_bad = _id_bad + 1; }
+    if (_id_bguard_ok(ID_BBASE + pos, ID_BBASE + ret) == 0) { _id_bad = _id_bad + 1; }
+    var i = ID_BBASE + pos;
+    while (i < ID_BBASE + ret) { h = _id_mix(h, load8(&_id_big + i)); i = i + 1; }
+    return h;
+}
+
+# A deterministic byte stream (64-bit LCG) for inputs no closed form covers.
+var _id_lcg = 88172645463325252;
+fn _id_rand() {
+    _id_lcg = _id_lcg * 6364136223846793005 + 1442695040888963407;
+    return (_id_lcg >> 33) & 0x7FFFFFFF;
+}
+
+fn _id_eol_group() {
+    var h = ID_SEED + 13;
+    var pos = 0;
+    while (pos < 8) {
+        _id_bpoison(); h = _id_baccount(h, pos, tty_clear_to_eol_buf(&_id_big + ID_BBASE, pos), 3, 3);
+        pos = pos + 1;
+    }
+    _id_bpoison(); h = _id_baccount(h, 3, tty_clear_to_eol_buf(&_id_big + ID_BBASE, 0 - 1), 3, 3);
+    return h;
+}
+
+fn _id_move_buf(h, pos, row, col) {
+    _id_bpoison();
+    return _id_baccount(h, pos, tty_move_buf(&_id_big + ID_BBASE, pos, row, col), 6, 14);
+}
+
+# tty_move's own domain (see _id_move_group), so the two cover the same
+# coordinates; tty_move is built on tty_move_buf and its digest is frozen.
+fn _id_move_buf_group() {
+    var h = ID_SEED + 14;
+    var vals[128];
+    store64(&vals,       0);     store64(&vals + 8,   1);
+    store64(&vals + 16,  2);     store64(&vals + 24,  9);
+    store64(&vals + 32,  10);    store64(&vals + 40,  99);
+    store64(&vals + 48,  100);   store64(&vals + 56,  999);
+    store64(&vals + 64,  1000);  store64(&vals + 72,  9999);
+    store64(&vals + 80,  10000); store64(&vals + 88,  65534);
+    store64(&vals + 96,  65535); store64(&vals + 104, 65536);
+    store64(&vals + 112, ID_IMIN); store64(&vals + 120, ID_IMAX);
+    var i = 0;
+    while (i < 16) {
+        var j = 0;
+        while (j < 16) { h = _id_move_buf(h, 3, load64(&vals + i * 8), load64(&vals + j * 8)); j = j + 1; }
+        i = i + 1;
+    }
+    var n = 1;
+    while (n <= 1100) { h = _id_move_buf(h, 3, n, 1); h = _id_move_buf(h, 3, 1, n); n = n + 1; }
+    var pos = 0;
+    while (pos < 8) { h = _id_move_buf(h, pos, 65535, 65535); pos = pos + 1; }
+    h = _id_move_buf(h, 0 - 1, 1, 1);
+    return h;
+}
+
+var _id_codes[136];       # 17 i64 entries
+
+fn _id_sgr_list(h, pos, n) {
+    _id_bpoison();
+    return _id_baccount(h, pos, tty_sgr_list_buf(&_id_big + ID_BBASE, pos, &_id_codes, n), 2 + 2 * n, 2 + 4 * n);
+}
+
+fn _id_sgr_list_group() {
+    var h = ID_SEED + 15;
+    var edges[64];
+    store64(&edges, 0);       store64(&edges + 8, 1);    store64(&edges + 16, 9);
+    store64(&edges + 24, 10); store64(&edges + 32, 99);  store64(&edges + 40, 100);
+    store64(&edges + 48, 999); store64(&edges + 56, 47);
+    var n = 1;
+    while (n <= 16) {
+        var e = 0;
+        while (e < 8) {                                  # every code the same edge value
+            var k = 0;
+            while (k < n) { store64(&_id_codes + k * 8, load64(&edges + e * 8)); k = k + 1; }
+            h = _id_sgr_list(h, 3, n);
+            e = e + 1;
+        }
+        var r = 0;
+        while (r < 64) {                                 # mixed lengths
+            var k2 = 0;
+            while (k2 < n) { store64(&_id_codes + k2 * 8, _id_rand() % 1000); k2 = k2 + 1; }
+            h = _id_sgr_list(h, 3, n);
+            r = r + 1;
+        }
+        var bad = 0;
+        while (bad < n) {                                # one out-of-range code anywhere
+            var k3 = 0;
+            while (k3 < n) { store64(&_id_codes + k3 * 8, 5); k3 = k3 + 1; }
+            store64(&_id_codes + bad * 8, 0 - 1);   h = _id_sgr_list(h, 3, n);
+            store64(&_id_codes + bad * 8, 1000);    h = _id_sgr_list(h, 3, n);
+            store64(&_id_codes + bad * 8, ID_IMIN); h = _id_sgr_list(h, 3, n);
+            bad = bad + 1;
+        }
+        n = n + 1;
+    }
+    var k4 = 0;
+    while (k4 < 17) { store64(&_id_codes + k4 * 8, 999); k4 = k4 + 1; }
+    var pos = 0;
+    while (pos < 8) { h = _id_sgr_list(h, pos, 16); pos = pos + 1; }
+    _id_bpoison(); h = _id_baccount(h, 3, tty_sgr_list_buf(&_id_big + ID_BBASE, 3, &_id_codes, 0), 2, 2);
+    _id_bpoison(); h = _id_baccount(h, 3, tty_sgr_list_buf(&_id_big + ID_BBASE, 3, &_id_codes, 17), 2, 2);
+    _id_bpoison(); h = _id_baccount(h, 3, tty_sgr_list_buf(&_id_big + ID_BBASE, 0 - 1, &_id_codes, 1), 2, 2);
+    return h;
+}
+
+var _id_title_bad = 0;
+var _id_text[512];
+
+# The title between `ESC ] 0 ;` and BEL must be clean UTF-8 with nothing kept.
+fn _id_title(h, pos, len) {
+    _id_bpoison();
+    var ret = tty_title_buf(&_id_big + ID_BBASE, pos, &_id_text, len);
+    h = _id_baccount(h, pos, ret, 5, len + 5);
+    if (ret < 0) { return h; }
+    var out = &_id_big + ID_BBASE + pos;
+    var n = ret - pos;
+    if (load32(out) != 0x3B305D1B || load8(out + n - 1) != 7) { _id_title_bad = _id_title_bad + 1; }
+    if (_id_clean(out + 4, n - 5, 0, 0) == 0) { _id_title_bad = _id_title_bad + 1; }
+    return h;
+}
+
+fn _id_title_group() {
+    var h = ID_SEED + 16;
+    h = _id_title(h, 3, 0);
+    var a = 0;
+    while (a < 256) {
+        store8(&_id_text, a);
+        h = _id_title(h, 3, 1);
+        var b = 0;
+        while (b < 256) { store8(&_id_text + 1, b); h = _id_title(h, 3, 2); b = b + 1; }
+        a = a + 1;
+    }
+    var len = 3;
+    while (len <= 300) {
+        var i = 0;
+        while (i < len) { store8(&_id_text + i, _id_rand() & 0xFF); i = i + 1; }
+        h = _id_title(h, (len & 7), len);
+        len = len + 1;
+    }
+    _id_bpoison(); h = _id_baccount(h, 3, tty_title_buf(&_id_big + ID_BBASE, 0 - 1, &_id_text, 1), 5, 6);
+    _id_bpoison(); h = _id_baccount(h, 3, tty_title_buf(&_id_big + ID_BBASE, 3, &_id_text, 0 - 1), 5, 6);
+    return h;
+}
+
+# An independent base64 decoder (RFC 4648 §4), by character range rather
+# than the implementation's alphabet table. Returns the decoded length, or
+# -1 on any character outside the alphabet or misplaced padding.
+var _id_dec_out[512];
+fn _id_b64_val(c) {
+    if (c >= 65 && c <= 90) { return c - 65; }
+    if (c >= 97 && c <= 122) { return c - 71; }
+    if (c >= 48 && c <= 57) { return c + 4; }
+    if (c == 43) { return 62; }
+    if (c == 47) { return 63; }
+    return 0 - 1;
+}
+fn _id_b64_decode(p, n) {
+    if ((n % 4) != 0) { return 0 - 1; }
+    var o = 0;
+    var i = 0;
+    while (i < n) {
+        var pad = 0;
+        if (load8(p + i + 3) == 61) { pad = 1; }
+        if (load8(p + i + 2) == 61) { pad = 2; }
+        if (pad > 0 && i + 4 != n) { return 0 - 1; }
+        var v = 0;
+        var k = 0;
+        while (k < 4) {
+            var c = load8(p + i + k);
+            var d = 0;
+            if (k >= 4 - pad) { if (c != 61) { return 0 - 1; } }
+            else { d = _id_b64_val(c); if (d < 0) { return 0 - 1; } }
+            v = (v << 6) | d;
+            k = k + 1;
+        }
+        store8(&_id_dec_out + o, (v >> 16) & 0xFF); o = o + 1;
+        if (pad < 2) { store8(&_id_dec_out + o, (v >> 8) & 0xFF); o = o + 1; }
+        if (pad < 1) { store8(&_id_dec_out + o, v & 0xFF); o = o + 1; }
+        i = i + 4;
+    }
+    return o;
+}
+
+var _id_b64_bad = 0;
+
+# The payload must decode back to exactly the input.
+fn _id_clip(h, pos, len) {
+    _id_bpoison();
+    var exact = 8 + 4 * ((len + 2) / 3);
+    var ret = tty_clipboard_buf(&_id_big + ID_BBASE, pos, &_id_text, len);
+    h = _id_baccount(h, pos, ret, exact, exact);
+    if (ret < 0) { return h; }
+    var out = &_id_big + ID_BBASE + pos;
+    var n = ret - pos;
+    if (load32(out) != 0x32355D1B || load16(out + 4) != 0x633B || load8(out + 6) != 59 || load8(out + n - 1) != 7) {
+        _id_b64_bad = _id_b64_bad + 1;
+        return h;
+    }
+    var d = _id_b64_decode(out + 7, n - 8);
+    if (d != len) { _id_b64_bad = _id_b64_bad + 1; return h; }
+    var i = 0;
+    while (i < len) { if (load8(&_id_dec_out + i) != load8(&_id_text + i)) { _id_b64_bad = _id_b64_bad + 1; i = len; } i = i + 1; }
+    return h;
+}
+
+fn _id_clip_group() {
+    var h = ID_SEED + 17;
+    h = _id_clip(h, 3, 0);
+    var a = 0;
+    while (a < 256) {
+        store8(&_id_text, a);
+        h = _id_clip(h, 3, 1);
+        var b = 0;
+        while (b < 256) { store8(&_id_text + 1, b); h = _id_clip(h, 3, 2); b = b + 1; }
+        a = a + 1;
+    }
+    var len = 3;
+    while (len <= 300) {
+        var i = 0;
+        while (i < len) { store8(&_id_text + i, _id_rand() & 0xFF); i = i + 1; }
+        h = _id_clip(h, (len & 7), len);
+        len = len + 1;
+    }
+    _id_bpoison(); h = _id_baccount(h, 3, tty_clipboard_buf(&_id_big + ID_BBASE, 0 - 1, &_id_text, 1), 12, 12);
+    _id_bpoison(); h = _id_baccount(h, 3, tty_clipboard_buf(&_id_big + ID_BBASE, 3, &_id_text, 0 - 1), 12, 12);
     return h;
 }
 
@@ -421,6 +705,14 @@ fn _id_emit(h, id, a, b, c) {
     if (id == 12) { ret = tty_move(a, b); }
     if (id == 13) { ret = tty_cursor_up(a); }
     if (id == 14) { ret = tty_cursor_down(a); }
+    if (id == 15) { ret = tty_cursor_save(); }
+    if (id == 16) { ret = tty_cursor_restore(); }
+    if (id == 17) { ret = tty_mouse_enable(); }
+    if (id == 18) { ret = tty_mouse_disable(); }
+    if (id == 19) { ret = tty_paste_enable(); }
+    if (id == 20) { ret = tty_paste_disable(); }
+    if (id == 21) { ret = tty_scroll_region_reset(); }
+    if (id == 22) { ret = tty_scroll_region(a, b); }
     sys_dup2(saved, 1);
     sys_close(saved);
     var n = sys_read(_id_rfd, &_id_cap, 512);
@@ -434,6 +726,83 @@ fn _id_emit(h, id, a, b, c) {
     h = _id_mix(h, n);
     var i = 0;
     while (i < n) { h = _id_mix(h, load8(&_id_cap + i)); i = i + 1; }
+    return h;
+}
+
+# Emitters that take a pointer (v1.3.0). The pointer is NOT folded — it is
+# an address, not an input — only the length, the return and the bytes.
+# Each capture must also equal what the matching `_buf` composer writes.
+var _id_xbad = 0;
+fn _id_emit_ptr(h, id, len) {
+    var saved = syscall(SYS_DUP, 1);
+    if (saved < 0) { _id_capture_fail = _id_capture_fail + 1; return h; }
+    sys_dup2(_id_wfd, 1);
+    var ret = 0;
+    if (id == 30) { ret = tty_title(&_id_text, len); }
+    if (id == 31) { ret = tty_clipboard_set(&_id_text, len); }
+    if (id == 32) { ret = tty_sgr_list(&_id_codes, len); }
+    sys_dup2(saved, 1);
+    sys_close(saved);
+    var n = sys_read(_id_rfd, &_id_cap, 512);
+    if (n < 0) { n = 0; }
+    _id_records = _id_records + 1;
+    h = _id_mix(h, id);
+    h = _id_mix(h, len);
+    h = _id_mix(h, ret);
+    h = _id_mix(h, n);
+    var i = 0;
+    while (i < n) { h = _id_mix(h, load8(&_id_cap + i)); i = i + 1; }
+    var want = 0 - 1;
+    if (id == 30) { want = tty_title_buf(&_id_big, 0, &_id_text, len); }
+    if (id == 31) { want = tty_clipboard_buf(&_id_big, 0, &_id_text, len); }
+    if (id == 32) { want = tty_sgr_list_buf(&_id_big, 0, &_id_codes, len); }
+    if (ret < 0) {
+        if (n != 0) { _id_xbad = _id_xbad + 1; }      # a rejection writes nothing
+    } else {
+        if (n != want) { _id_xbad = _id_xbad + 1; }
+        else {
+            var k = 0;
+            while (k < n) { if (load8(&_id_cap + k) != load8(&_id_big + k)) { _id_xbad = _id_xbad + 1; k = n; } k = k + 1; }
+        }
+    }
+    return h;
+}
+
+fn _id_emit_130_group() {
+    var h = ID_SEED + 18;
+    var id = 15;
+    while (id <= 21) { h = _id_emit(h, id, 0, 0, 0); id = id + 1; }
+    var vals[64];
+    store64(&vals, 0);       store64(&vals + 8, 1);     store64(&vals + 16, 2);
+    store64(&vals + 24, 9);  store64(&vals + 32, 10);   store64(&vals + 40, 999);
+    store64(&vals + 48, 65535); store64(&vals + 56, 65536);
+    var i = 0;
+    while (i < 8) {
+        var j = 0;
+        while (j < 8) { h = _id_emit(h, 22, load64(&vals + i * 8), load64(&vals + j * 8), 0); j = j + 1; }
+        i = i + 1;
+    }
+    h = _id_emit(h, 22, ID_IMIN, 5, 0);
+    h = _id_emit(h, 22, 1, ID_IMAX, 0);
+    var len = 0;
+    while (len <= 300) {                               # same stream for title and clipboard
+        var t = 0;
+        while (t < len) { store8(&_id_text + t, _id_rand() & 0xFF); t = t + 1; }
+        if (len <= 257) { h = _id_emit_ptr(h, 30, len); }
+        h = _id_emit_ptr(h, 31, len);
+        len = len + 1;
+    }
+    h = _id_emit_ptr(h, 30, 0 - 1);
+    h = _id_emit_ptr(h, 31, 0 - 1);
+    var n = 0;
+    while (n <= 17) {
+        var k = 0;
+        while (k < 17) { store64(&_id_codes + k * 8, _id_rand() % 1000); k = k + 1; }
+        h = _id_emit_ptr(h, 32, n);
+        n = n + 1;
+    }
+    store64(&_id_codes, 1000);
+    h = _id_emit_ptr(h, 32, 3);
     return h;
 }
 
@@ -551,6 +920,13 @@ var EXPECT_MOVE      = (0 - 1328405259568562800);   # 0xed908e7461a7bd90
 var EXPECT_BG_256    = 7610589541642282858;   # 0x699e3edd90e4276a
 var EXPECT_SANITIZE  = (0 - 1680589921240263252);   # 0xe8ad585eeb5f55ac
 var EXPECT_REL       = (0 - 3644634539072174773);   # 0xcd6ba832627bc54b
+# Added in v1.3.0 — frozen from 1.3.0 on.
+var EXPECT_EOL_BUF   = (0 - 5630754300113926763);   # 0xb1db8acc0c34c595
+var EXPECT_MOVE_BUF  = 2840524110178067170;   # 0x276b91a0e318a2e2
+var EXPECT_SGR_LIST  = (0 - 3061249612748115144);   # 0xd58441b24758b338
+var EXPECT_TITLE_BUF = 6023335987000168218;   # 0x5397302acbf8cf1a
+var EXPECT_CLIP_BUF  = 2537488908216174099;   # 0x2336f8b7c3b80613
+var EXPECT_EMIT_130  = 1272850605130756487;   # 0x11aa12e1aaf5b187
 
 fn _id_report(name, got, want) {
     sys_write(1, "  ", 2);
@@ -576,6 +952,14 @@ fn main() {
     var d_dec = _id_dec_group();
     var d_san = _id_san_group();
     assert_eq(_id_san_bad, 0, "every sanitized output is clean, idempotent, and unchanged when already clean");
+    assert_eq(_id_hc_bad, 0, "tty_has_ctl is 1 exactly when tty_sanitize_buf changes the input");
+    var d_eol = _id_eol_group();
+    var d_mvb = _id_move_buf_group();
+    var d_sgl = _id_sgr_list_group();
+    var d_ttl = _id_title_group();
+    assert_eq(_id_title_bad, 0, "every title is ESC ] 0 ; <clean UTF-8> BEL");
+    var d_clp = _id_clip_group();
+    assert_eq(_id_b64_bad, 0, "every OSC 52 payload decodes back to exactly its input");
     assert_eq(_id_bad, 0, "every composer call stayed in budget and inside [pos, ret)");
 
     println("=== identity.tcyr — fd-1 emitters, captured ===");
@@ -591,6 +975,8 @@ fn main() {
     var d_rgb = _id_rgb_emit_group();
     var d_mov = _id_move_group();
     var d_rel = _id_rel_group();
+    var d_e130 = _id_emit_130_group();
+    assert_eq(_id_xbad, 0, "tty_title / tty_clipboard_set / tty_sgr_list write exactly their _buf bytes");
     assert_eq(_id_capture_fail, 0, "every fd-1 capture could dup fd 1");
     sys_close(_id_rfd);
     sys_close(_id_wfd);
@@ -609,6 +995,12 @@ fn main() {
     _id_report("tty_fg_rgb / tty_bg_rgb", d_rgb, EXPECT_RGB_EMIT);
     _id_report("tty_move", d_mov, EXPECT_MOVE);
     _id_report("tty_cursor_up / tty_cursor_down", d_rel, EXPECT_REL);
+    _id_report("tty_clear_to_eol_buf (v1.3.0)", d_eol, EXPECT_EOL_BUF);
+    _id_report("tty_move_buf (v1.3.0)", d_mvb, EXPECT_MOVE_BUF);
+    _id_report("tty_sgr_list_buf (v1.3.0)", d_sgl, EXPECT_SGR_LIST);
+    _id_report("tty_title_buf (v1.3.0)", d_ttl, EXPECT_TITLE_BUF);
+    _id_report("tty_clipboard_buf (v1.3.0)", d_clp, EXPECT_CLIP_BUF);
+    _id_report("v1.3.0 emitters", d_e130, EXPECT_EMIT_130);
     sys_write(1, "  records: ", 11);
     fmt_int(_id_records);
     sys_write(1, "\n", 1);

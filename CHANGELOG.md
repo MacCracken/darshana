@@ -4,6 +4,166 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-10-12
+
+A minor: **20 functions and 17 constants added, the toolchain moved to cyrius
+6.7.9, and nothing already shipped changed.** The 13 digests `tests/identity.tcyr`
+froze at 1.2.0 are unchanged, and 6 new ones freeze the additions. All of them
+are identical on x86_64, under qemu-aarch64 and on a real Raspberry Pi 4. The
+additions are the seven candidates the roadmap held after 1.2.0. They ship ahead
+of their second consumer by owner decision; [ADR 0005](docs/adr/0005-candidates-ahead-of-second-consumer.md)
+records why, and how each shape was copied from the code that hand-rolls it.
+
+⚠ **The bundle now needs cyrius ≥ 6.7.2.** It declares private constants with
+`const`, which arrived in 6.7.2. Measured: the 1.3.0 bundle fails to compile
+under 6.6.20 and 6.7.1 (`expected '=', got identifier`) and compiles under 6.7.2
+and 6.7.9, while 1.2.1's compiles under all four. All nine consumers pin 6.6.x,
+so each needs a toolchain bump before it can take 1.3.0. That was the owner's
+choice, made against keeping 6.6.x compatibility. A consumer that resolves
+darshana by `path` (kii, anuenue) meets it on its next `cyrius deps`.
+
+### Added
+
+- **Terminal modes.**
+  - **`tty_echo_off(fd)`**: echo off for a password prompt. Line editing stays
+    on, ECHO and ECHONL are cleared, and typeahead is discarded (TCSETSF). It
+    takes the same single slot as `tty_raw`, and `tty_cooked()` restores it.
+  - **`tty_flush_input(fd)`**: discard unread input (TCFLSH / TCIFLUSH).
+  - **`tty_forget()`**: free a slot stranded by a `tty_cooked()` that cannot
+    succeed. It issues no ioctl.
+- **Screen controls:**
+  - `tty_cursor_save` / `tty_cursor_restore` (`ESC 7` / `ESC 8`);
+  - `tty_scroll_region(top, bot)` / `tty_scroll_region_reset()` (DECSTBM);
+  - `tty_mouse_enable` / `_disable` (modes 1000 + 1006);
+  - `tty_paste_enable` / `_disable` (2004);
+  - the `_buf` forms `tty_move_buf` and `tty_clear_to_eol_buf`.
+- **OSC.**
+  - **`tty_title` / `tty_title_buf`** set the window title. It goes through
+    `tty_sanitize_buf`, so a BEL or ESC in it cannot end the escape.
+  - **`tty_clipboard_set` / `tty_clipboard_buf`** use OSC 52 with RFC 4648
+    base64. The emitter streams in 48-byte pieces, so it has no length cap.
+  - Both are terminated with BEL.
+- **SGR.**
+  - **`TTY_BG_*`**: the sixteen background codes, 40–47 and 100–107.
+  - **`tty_sgr_list_buf(buf, pos, codes, n)` / `tty_sgr_list(codes, n)`**: one
+    `CSI a;b;c m` for 1–16 codes. Every code is checked before anything is
+    written.
+- **`tty_has_ctl(src, len, mode, keep)`**: the reject-only form of
+  `tty_sanitize_buf`. It returns 1 exactly when sanitizing would change the
+  input, which is proven over the sanitizer's whole test domain.
+- **`TTY_SIGMASK_PIPE`**: route SIGPIPE through a signalfd, so a write to a
+  vanished reader returns EPIPE instead of killing the process mid-teardown.
+  The value is `0x1000` on Linux and `0x2000` on AGNOS, where agnos has no
+  SIGPIPE and the mask never fires.
+- AGNOS peers: `tty_echo_off` and `tty_flush_input` return **-1**. The agnos
+  console always echoes and cannot flush, and a 0 would claim otherwise.
+  `tty_forget` is a 0 no-op.
+- ADR 0003's "Added since 1.0" table gains all 37; `scripts/smoke.sh` requires
+  them.
+
+### Changed — toolchain `6.6.20` → `6.7.9`
+
+- `lib/` re-vendored with `rm -rf lib/ && cyrius deps`: still 23 modules, each
+  byte-identical to the 6.7.9 snapshot, and `deps --verify` reports 23 verified.
+  Before any source edit, every suite and every digest was unchanged on 6.7.9,
+  and no target emitted a build warning.
+
+### Changed — internal, identical output
+
+- **The 6.7 features in use: `const`** for darshana's private constants (the
+  slot modes, the termios requests only the new calls use, the sanitizer's
+  replacement byte, the base64 alphabet). Public constants stay `var`: they are
+  frozen, and a `const` refuses the address-of, assignment and redeclaration a
+  consumer may rely on.
+- Both signalfd arms take the stdlib's `SIG_BLOCK` / `SIG_UNBLOCK` instead of the
+  literals 0 / 1. The AGNOS arm takes the stdlib's `SFD_CLOEXEC`, and
+  `_AGNOS_SFD_CLOEXEC` is deleted. The values are the same on every target, and
+  `tests/agnos.tcyr` pins them.
+- `_tty_raw_mode(fd, vmin)` became `_tty_set_mode(fd, mode)` with a third mode,
+  and `_tty_raw_vmin` became `_tty_mode`. `tty_raw`'s TCSETS bytes are unchanged.
+- `tty_move` is built on `tty_move_buf`; its frozen digest is unchanged. Its
+  stack buffer drops from 44 bytes to its real 14-byte budget.
+
+### Changed — gates
+
+- **Platform gate.** `SFD_CLOEXEC` left the Linux token list because the AGNOS
+  arm now uses it too; the peer rule (1.2.1) is what catches the Linux
+  `tty_open_signalfd` escaping its gate. The agnos tokens are the agnos-only
+  wrappers, `sys_winsize` and `sys_read_nb`. The self-test probe that planted
+  `SFD_CLOEXEC` now plants an ungated `sys_ioctl`.
+- **`.github/workflows/ci.yml`** installs `qemu-user` instead of
+  `qemu-user-static`. Ubuntu 26.04 drops the static package, and both provide
+  `qemu-aarch64` on 24.04. This change has not yet run on a GitHub runner.
+
+### Fixed
+
+- **A test gap: `tty_raw` ignoring a failed TCSETS passed every suite** through
+  1.2.1. On the fd that holds the slot, a mode switch skips TCGETS, so after a
+  hangup its TCSETS fails alone. Two PTY assertions now catch the planted defect.
+- **The bundle's return-convention buckets now name all 54 public functions.**
+  1.2.0 left `tty_read_signal`, `tty_winsize_or`, `tty_bg_256_buf` and
+  `tty_sanitize_buf` out of every bucket, while the front matter said every
+  function was in one.
+
+### Tests
+
+- Unit 312 → **382**, PTY 100 → **127**, identity 18 → **28**, AGNOS 20 → **27**,
+  pinned in `scripts/ci.sh`.
+- `tests/identity.tcyr`:
+  - a 1 KiB guard region for the new composers. The 80-byte one stays as it was,
+    so no earlier digest moved.
+  - Six new digests: `tty_clear_to_eol_buf`, `tty_move_buf` over `tty_move`'s
+    domain, `tty_sgr_list_buf` over every count and digit edge,
+    `tty_title_buf`, `tty_clipboard_buf`, and the new emitters.
+  - Every OSC 52 payload is decoded by an independently written decoder back to
+    exactly its input, over every 0–2-byte input and lengths up to 300.
+  - Every title is checked clean.
+  - `tty_clipboard_set` / `tty_title` / `tty_sgr_list` must write exactly their
+    `_buf` bytes.
+- **Fourteen planted defects, one per new rule, are each caught.** The first
+  pass caught thirteen. "Echo-off keeps ECHONL" survived because a pty starts
+  with ECHONL off; the fixture now turns it on first.
+
+### Changed — documentation
+
+- **ADR 0005** (new). ADR 0003 gains the table rows and notes that `tty_forget`
+  shipped and that 1.3.0 is the one exception to the second-consumer rule.
+- Architecture note 001 covers the three-mode slot and `tty_forget`.
+- The README scope table, the upgrade guide (1.3.0, with the toolchain floor
+  first) and the roadmap were updated. The roadmap's candidate list is gone,
+  since everything in it shipped.
+- `docs/development/state.md` is rewritten as a snapshot of where the project
+  is, without the release history the CHANGELOG already holds.
+- CLAUDE.md gains a rule: a newer cyrius language feature in `src/` raises every
+  consumer's toolchain floor, so measure it and record it before adopting.
+
+### Filed upstream
+
+- **cyrius** (`docs/development/issues/`), each re-verified on 6.7.9:
+  - agnos `sys_close` / `sys_read` / `sys_write` take any negative fd for socket
+    slot `fd & 7`. `sys_write(-1, …)` sends on slot 7's live connection, and
+    `sys_close(-1)` returns 0 after freeing it. Run as a repro.
+  - the stale "no 16 → 29 row" comment, proven by a run under qemu-aarch64;
+  - `cyrius deps` keeping a removed leaf vendored and locked.
+- **agnos**:
+  - the console line discipline has no ring-3 control, which is why the AGNOS
+    `tty_echo_off` / `tty_flush_input` return -1;
+  - nothing can ask what an fd is, which is why the AGNOS `tty_isatty` is
+    console-wide.
+- **The nine consumer roadmaps** each record the 6.7.2 floor.
+
+### Upgrade notes
+
+Move the toolchain pin to cyrius ≥ 6.7.2 first. After that, no code change.
+
+### Verification
+
+- `bash scripts/ci.sh all`: all 15 gates green. On x86_64: 382 + 127 + 28 + 27.
+  The same unit, PTY and identity totals pass under qemu-aarch64 and under
+  `CYRIUS_DCE=1`. No build warning on any target.
+- **Raspberry Pi 4 (Linux 7.0)**: smoke ok, 382/382 unit, 127/127 PTY, 28/28
+  identity, and all 19 digests identical to x86_64.
+
 ## [1.2.1] — 2026-10-12
 
 **darshana no longer issues a raw syscall.** Every escape emitter writes

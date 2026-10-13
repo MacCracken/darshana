@@ -47,6 +47,12 @@
 # escaping its gate now is the PEER rule, which needs no token list at all:
 # a function defined more than once in a file is a platform peer, and must
 # have exactly one definition inside each target gate and none outside.
+#
+# v1.3.0: the AGNOS arm also takes the stdlib's `SFD_CLOEXEC`, so that name
+# left the Linux token list too; the peer rule is what catches the Linux
+# `tty_open_signalfd` escaping. The Linux tokens are now the ones that mean
+# nothing on agnos (ioctl and its requests), the agnos tokens the agnos-only
+# wrappers (`sys_winsize`, `sys_read_nb`).
 
 set -eu
 
@@ -102,9 +108,9 @@ run() {
     lin_report=""; agn_report=""
     for f in "$SRC_DIR"/*.cyr; do
         check_peers "$f"
-        r=$(check_gate "$f" '(SYS_IOCTL|sys_ioctl|TCGETS|TCSETS|TIOCGWINSZ|\bSFD_CLOEXEC)' CYRIUS_TARGET_LINUX "Linux ioctl")
+        r=$(check_gate "$f" '(SYS_IOCTL|sys_ioctl|TCGETS|TCSETS|TIOCGWINSZ)' CYRIUS_TARGET_LINUX "Linux ioctl")
         [ -n "$r" ] && lin_report="$lin_report $r"
-        r=$(check_gate "$f" '_AGNOS_SFD_|sys_winsize|sys_read_nb' CYRIUS_TARGET_AGNOS "agnos syscall")
+        r=$(check_gate "$f" 'sys_winsize|sys_read_nb' CYRIUS_TARGET_AGNOS "agnos syscall")
         [ -n "$r" ] && agn_report="$agn_report $r"
     done
     # The gates must exist SOMEWHERE — a corpus-driven check that finds no
@@ -138,10 +144,10 @@ if [ "${1:-}" = "--self-test" ]; then
     # token sits after its #endif.
     probe "ioctl token after termios.cyr's own Linux #endif (positional)" "outside the CYRIUS_TARGET_LINUX gate" \
         termios.cyr 'var _probe_pos = TCGETS;'
-    # The Linux signalfd flag outside the gate (v1.1.4; the wrapper names
-    # stopped being Linux-only in v1.2.1).
-    probe "Linux SFD_CLOEXEC outside the gate" "outside the CYRIUS_TARGET_LINUX gate" \
-        termios.cyr 'var _probe_sfd = SFD_CLOEXEC;'
+    # The Linux ioctl wrapper called outside the gate (v1.3.0; through 1.2.1
+    # this probe planted SFD_CLOEXEC, which the AGNOS arm now uses too).
+    probe "Linux sys_ioctl outside the gate" "outside the CYRIUS_TARGET_LINUX gate" \
+        termios.cyr 'fn _probe_io(fd) { return sys_ioctl(fd, 0, 0); }'
     # An agnos-only wrapper after the AGNOS #endif (v1.2.1).
     probe "agnos sys_winsize outside the AGNOS gate" "outside the CYRIUS_TARGET_AGNOS gate" \
         termios.cyr 'fn _probe_ws() { return sys_winsize(); }'

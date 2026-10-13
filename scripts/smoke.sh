@@ -80,7 +80,7 @@ pass "dist/darshana.cyr and dist/darshana.deps match src/ — no drift"
 # ============================================================
 echo "[smoke] public surface"
 
-required_syms="tty_raw tty_cooked tty_alt_enter tty_alt_leave tty_clear tty_cursor_hide tty_cursor_show tty_cursor_home tty_cursor_up tty_cursor_down tty_move tty_dec_buf tio_load32 tio_store32 tty_winsize tty_open_signalfd tty_close_signalfd tty_clear_to_eol tty_clear_to_eos tty_sgr tty_sgr_reset tty_fg_rgb tty_bg_rgb tty_fg_rgb_buf tty_bg_rgb_buf tty_sgr_reset_buf tty_isatty tty_sgr_buf tty_fg_256_buf tty_bg_256_buf tty_read_signal tty_winsize_or tty_raw_nonblock tty_sanitize_buf"
+required_syms="tty_raw tty_cooked tty_alt_enter tty_alt_leave tty_clear tty_cursor_hide tty_cursor_show tty_cursor_home tty_cursor_up tty_cursor_down tty_move tty_dec_buf tio_load32 tio_store32 tty_winsize tty_open_signalfd tty_close_signalfd tty_clear_to_eol tty_clear_to_eos tty_sgr tty_sgr_reset tty_fg_rgb tty_bg_rgb tty_fg_rgb_buf tty_bg_rgb_buf tty_sgr_reset_buf tty_isatty tty_sgr_buf tty_fg_256_buf tty_bg_256_buf tty_read_signal tty_winsize_or tty_raw_nonblock tty_sanitize_buf tty_forget tty_flush_input tty_echo_off tty_has_ctl tty_sgr_list_buf tty_sgr_list tty_cursor_save tty_cursor_restore tty_scroll_region tty_scroll_region_reset tty_title tty_title_buf tty_clipboard_set tty_clipboard_buf tty_move_buf tty_clear_to_eol_buf tty_mouse_enable tty_mouse_disable tty_paste_enable tty_paste_disable"
 for sym in $required_syms; do
     grep -qE "^fn ${sym}\b" dist/darshana.cyr \
         || fail "dist/darshana.cyr missing 'fn ${sym}' (cyim API contract)"
@@ -104,7 +104,7 @@ for fn in $actual_fns; do
 done
 pass "required_syms covers every public fn symbol in dist ($(echo "$actual_fns" | wc -w) total — no lag)"
 
-required_flags="TCGETS TCSETS TIO_ECHO TIO_ICANON TIO_ISIG TIO_IEXTEN TIO_ICRNL TIO_IXON TIO_OPOST TIO_CSIZE TIO_CS8 TIO_BRKINT TIO_INPCK TIO_ISTRIP TIO_CC_BASE TIO_VTIME TIO_VMIN TIO_BUF_SIZE TIOCGWINSZ TTY_SIGMASK_EXIT TTY_SIGMASK_WINCH TTY_FG_BLACK TTY_FG_RED TTY_FG_GREEN TTY_FG_YELLOW TTY_FG_BLUE TTY_FG_MAGENTA TTY_FG_CYAN TTY_FG_WHITE TTY_FG_BRIGHT_BLACK TTY_FG_BRIGHT_RED TTY_FG_BRIGHT_GREEN TTY_FG_BRIGHT_YELLOW TTY_FG_BRIGHT_BLUE TTY_FG_BRIGHT_MAGENTA TTY_FG_BRIGHT_CYAN TTY_FG_BRIGHT_WHITE TTY_SGR_BOLD TTY_SGR_DIM TTY_SGR_UNDERLINE TTY_SGR_REVERSE TTY_SANITIZE_UTF8 TTY_SANITIZE_LATIN1 TTY_KEEP_TAB TTY_KEEP_LF"
+required_flags="TCGETS TCSETS TIO_ECHO TIO_ICANON TIO_ISIG TIO_IEXTEN TIO_ICRNL TIO_IXON TIO_OPOST TIO_CSIZE TIO_CS8 TIO_BRKINT TIO_INPCK TIO_ISTRIP TIO_CC_BASE TIO_VTIME TIO_VMIN TIO_BUF_SIZE TIOCGWINSZ TTY_SIGMASK_EXIT TTY_SIGMASK_WINCH TTY_FG_BLACK TTY_FG_RED TTY_FG_GREEN TTY_FG_YELLOW TTY_FG_BLUE TTY_FG_MAGENTA TTY_FG_CYAN TTY_FG_WHITE TTY_FG_BRIGHT_BLACK TTY_FG_BRIGHT_RED TTY_FG_BRIGHT_GREEN TTY_FG_BRIGHT_YELLOW TTY_FG_BRIGHT_BLUE TTY_FG_BRIGHT_MAGENTA TTY_FG_BRIGHT_CYAN TTY_FG_BRIGHT_WHITE TTY_SGR_BOLD TTY_SGR_DIM TTY_SGR_UNDERLINE TTY_SGR_REVERSE TTY_SANITIZE_UTF8 TTY_SANITIZE_LATIN1 TTY_KEEP_TAB TTY_KEEP_LF TTY_SIGMASK_PIPE TTY_BG_BLACK TTY_BG_RED TTY_BG_GREEN TTY_BG_YELLOW TTY_BG_BLUE TTY_BG_MAGENTA TTY_BG_CYAN TTY_BG_WHITE TTY_BG_BRIGHT_BLACK TTY_BG_BRIGHT_RED TTY_BG_BRIGHT_GREEN TTY_BG_BRIGHT_YELLOW TTY_BG_BRIGHT_BLUE TTY_BG_BRIGHT_MAGENTA TTY_BG_BRIGHT_CYAN TTY_BG_BRIGHT_WHITE"
 for flag in $required_flags; do
     grep -qE "^var ${flag} " dist/darshana.cyr \
         || fail "dist/darshana.cyr missing 'var ${flag}' (cyim API contract)"
@@ -174,9 +174,13 @@ pass "every ADR 0003 frozen name is still in dist (29 fns, 37 constants, $(echo 
 #   fn                  buffer  min  worst case
 #   _ansi_rgb_write     buf     19   CSI 38;2;255;255;255m
 #   tty_sgr             buf      6   ESC [ + 3 digits + m
-#   tty_move            buf     42   ESC [ + 19 digits + ; + 19 digits + H
+#   tty_move            buf     14   ESC [ + 5 digits + ; + 5 digits + H (tty_move_buf)
+#   tty_scroll_region   buf     14   ESC [ + 5 digits + ; + 5 digits + r
 #   _cursor_rel         buf     22   ESC [ + 19 digits + final
-#   _tty_raw_mode       work    60   TIO_BUF_SIZE (the copy loop runs to it)
+#   _tty_set_mode       work    60   TIO_BUF_SIZE (the copy loop runs to it)
+#   tty_sgr_list        buf     66   ESC [ + 16 x (3 digits + ;/m)
+#   tty_title           buf    261   ESC ] 0 ; + 256 title bytes + BEL
+#   tty_clipboard_set   chunk   64   base64 of one 48-byte piece
 #   tty_winsize         ws       8   struct winsize
 #   tty_isatty          ws       8   struct winsize
 #   tty_open_signalfd   mask     8   one u64 sigset (both peers)
@@ -187,7 +191,7 @@ pass "every ADR 0003 frozen name is still in dist (29 fns, 37 constants, $(echo 
 #   tty_read_signal     rec      8   agnos record: 4 B kernel, 8 B mirshi
 # ============================================================
 echo "[smoke] stack-buffer budgets"
-stack_budgets="_ansi_rgb_write:buf:19 tty_sgr:buf:6 tty_move:buf:42 _cursor_rel:buf:22 _tty_raw_mode:work:60 tty_winsize:ws:8 tty_isatty:ws:8 tty_open_signalfd:mask:8 tty_open_signalfd:prev:8 tty_open_signalfd:added:8 tty_close_signalfd:mask:8 tty_read_signal:info:128 tty_read_signal:rec:8"
+stack_budgets="_ansi_rgb_write:buf:19 tty_sgr:buf:6 tty_move:buf:14 tty_scroll_region:buf:14 _cursor_rel:buf:22 _tty_set_mode:work:60 tty_sgr_list:buf:66 tty_title:buf:261 tty_clipboard_set:chunk:64 tty_winsize:ws:8 tty_isatty:ws:8 tty_open_signalfd:mask:8 tty_open_signalfd:prev:8 tty_open_signalfd:added:8 tty_close_signalfd:mask:8 tty_read_signal:info:128 tty_read_signal:rec:8"
 actual_bufs=$(awk '/^fn /{ f = $2; sub(/\(.*/, "", f) }
     /^[[:space:]]+var [A-Za-z_][A-Za-z0-9_]*\[[0-9]+\];/ {
         b = $2; n = b; sub(/\[.*/, "", b); sub(/.*\[/, "", n); sub(/\].*/, "", n)

@@ -59,6 +59,9 @@ fn main() {
         "EXIT mask is exactly SIGHUP(1), SIGINT(2), SIGTERM(15) under 1<<sig");
     assert_eq(TTY_SIGMASK_WINCH, 1 << 28,
         "WINCH mask is exactly SIGWINCH(28) under 1<<sig");
+    # v1.3.0 — inert on agnos (no SIGPIPE), but laid out like the others.
+    assert_eq(TTY_SIGMASK_PIPE, 1 << 13, "PIPE mask is SIGPIPE(13) under 1<<sig = 0x2000");
+    assert_eq(TTY_SIGMASK_PIPE & (TTY_SIGMASK_EXIT | TTY_SIGMASK_WINCH), 0, "PIPE is disjoint from EXIT and WINCH");
 
     # ---- the agnos syscall numbers this arm relies on --------------
     # The arm calls the stdlib's agnos wrappers, which own the numbers.
@@ -70,7 +73,9 @@ fn main() {
     assert_eq(SYS_WINSIZE, 60, "framebuffer console grid is winsize#60");
     assert_eq(SYS_SIGPROCMASK, 17, "sigprocmask is #17");
     assert_eq(SYS_SIGNALFD, 18, "signalfd is #18");
-    assert_eq(_AGNOS_SFD_CLOEXEC, 0x80000, "SFD_CLOEXEC value carried for intent parity");
+    assert_eq(SFD_CLOEXEC, 0x80000, "SFD_CLOEXEC is 0x80000, as on Linux");
+    assert_eq(SIG_BLOCK, 0, "sigprocmask how: SIG_BLOCK is 0");
+    assert_eq(SIG_UNBLOCK, 1, "sigprocmask how: SIG_UNBLOCK is 1");
 
     # ---- the no-termios contract -----------------------------------
     # agnos has no TCGETS/TCSETS, so there is no raw/cooked toggle. The
@@ -95,6 +100,12 @@ fn main() {
     assert_eq(tty_raw(1), 0 - 1, "tty_raw is fd-independent on AGNOS");
     assert_eq(tty_cooked(), 0, "tty_cooked is an idempotent no-op success");
     assert_eq(tty_cooked(), 0, "tty_cooked stays 0 when called again");
+    # v1.3.0 — the console has no echo switch and no input flush, so both
+    # are -1 rather than a 0 that claims they happened; there is no slot to
+    # forget. None issues a syscall.
+    assert_eq(tty_echo_off(0), 0 - 1, "tty_echo_off always -1 on AGNOS (the kernel always echoes)");
+    assert_eq(tty_flush_input(0), 0 - 1, "tty_flush_input always -1 on AGNOS (no flush call)");
+    assert_eq(tty_forget(), 0, "tty_forget is a 0 no-op on AGNOS");
 
     # ---- Linux constants must NOT leak into this arm ---------------
     # A copy-paste of the Linux block would define TCGETS/TCSETS here.
