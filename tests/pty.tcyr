@@ -241,6 +241,31 @@ fn main() {
                         "tty_winsize succeeds on live slave");
                     assert_eq(rows, 24, "tty_winsize read back rows = 24");
                     assert_eq(cols, 80, "tty_winsize read back cols = 80");
+
+                    # v1.2.0 — tty_winsize_or: the real size when there is
+                    # one; the caller's default for the "successful zero".
+                    test_group("pty.tcyr — tty_winsize_or (v1.2.0)");
+                    var wo_r = 0;
+                    var wo_c = 0;
+                    assert_eq(tty_winsize_or(slave, &wo_r, &wo_c, 25, 81), 0, "winsize_or returns 0");
+                    assert_eq(wo_r, 24, "winsize_or: a real size wins over the default (rows)");
+                    assert_eq(wo_c, 80, "winsize_or: a real size wins over the default (cols)");
+                    var wszero[8];
+                    store64(&wszero, 0);
+                    if (syscall(SYS_IOCTL, slave, PTY_TIOCSWINSZ, &wszero) >= 0) {
+                        assert_eq(tty_winsize(slave, &rows, &cols), 0, "a 0x0 pty still answers TIOCGWINSZ successfully");
+                        assert_eq(rows + cols, 0, "...with 0 rows and 0 cols — the case winsize_or exists for");
+                        tty_winsize_or(slave, &wo_r, &wo_c, 25, 81);
+                        assert_eq(wo_r, 25, "winsize_or: 0x0 → the default rows");
+                        assert_eq(wo_c, 81, "winsize_or: 0x0 → the default cols");
+                        syscall(SYS_IOCTL, slave, PTY_TIOCSWINSZ, &wsset);   # back to 24x80
+                    }
+                    var wo_dn = sys_open("/dev/null", 2, 0);
+                    if (wo_dn >= 0) {
+                        tty_winsize_or(wo_dn, &wo_r, &wo_c, 25, 81);
+                        assert_eq(wo_r * 1000 + wo_c, 25081, "winsize_or: a non-TTY → both defaults");
+                        file_close(wo_dn);
+                    }
                 }
 
                 # ----- u16 HIGH-BYTE decode (v1.0.2) -----------------
@@ -509,6 +534,41 @@ fn main() {
                 syscall(SYS_IOCTL, slave, TCGETS, &rr_t);
                 assert_eq(tio_load32(&rr_t, 12) & TIO_ECHO, 0, "...and the slave really is raw again (ECHO clear)");
                 assert_eq(tty_cooked(), 0, "tty_cooked() after the re-raw");
+
+                # v1.2.0 — tty_raw_nonblock: the raw mask with VMIN = 0 and
+                # VTIME = 0, the same slot, the same restore, and a mode
+                # switch on the fd that holds the slot.
+                test_group("pty.tcyr — tty_raw_nonblock (v1.2.0)");
+                var nb_snap[60];
+                var nb_now[60];
+                var nbi = 0;
+                while (nbi < 60) { store8(&nb_snap + nbi, 0); store8(&nb_now + nbi, 0); nbi = nbi + 1; }
+                syscall(SYS_IOCTL, slave, TCGETS, &nb_snap);
+                assert_eq(tty_raw_nonblock(slave), 0, "tty_raw_nonblock(slave) enters raw");
+                syscall(SYS_IOCTL, slave, TCGETS, &nb_now);
+                assert_eq(load8(&nb_now + TIO_CC_BASE + TIO_VMIN), 0, "non-blocking raw: VMIN = 0");
+                assert_eq(load8(&nb_now + TIO_CC_BASE + TIO_VTIME), 0, "non-blocking raw: VTIME = 0");
+                assert_eq(tio_load32(&nb_now, 12) & TIO_ECHO, 0, "non-blocking raw: the raw mask applies (ECHO clear)");
+                if (load8(&nb_now + TIO_CC_BASE + TIO_VMIN) == 0) {
+                    # Only safe because VMIN = 0 was just asserted — with
+                    # VMIN = 1 this read would block rather than fail.
+                    var nb_b[4];
+                    assert_eq(sys_read(slave, &nb_b, 1), 0, "a read with nothing waiting returns 0 at once");
+                }
+                assert_eq(tty_raw_nonblock(master), 0 - 1, "a different fd is refused while the slot is held");
+                assert_eq(tty_raw(slave), 0, "tty_raw on the same fd switches to blocking reads");
+                syscall(SYS_IOCTL, slave, TCGETS, &nb_now);
+                assert_eq(load8(&nb_now + TIO_CC_BASE + TIO_VMIN), 1, "...VMIN back to 1");
+                assert_eq(tty_raw_nonblock(slave), 0, "and back to non-blocking");
+                syscall(SYS_IOCTL, slave, TCGETS, &nb_now);
+                assert_eq(load8(&nb_now + TIO_CC_BASE + TIO_VMIN), 0, "...VMIN 0 again");
+                assert_eq(tty_raw_nonblock(slave + (1 << 32)), 0 - 1, "an out-of-range fd is refused");
+                assert_eq(tty_cooked(), 0, "tty_cooked() restores from either mode");
+                syscall(SYS_IOCTL, slave, TCGETS, &nb_now);
+                var nb_diff = 0;
+                nbi = 0;
+                while (nbi < 60) { if (load8(&nb_now + nbi) != load8(&nb_snap + nbi)) { nb_diff = nb_diff + 1; } nbi = nbi + 1; }
+                assert_eq(nb_diff, 0, "termios restored byte-for-byte after the mode switches");
 
                 # v1.1.4 — the kernel reads an fd as a 32-bit unsigned int,
                 # so through v1.1.3 any i64 outside [0, 0x7FFFFFFF] aliased

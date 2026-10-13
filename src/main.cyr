@@ -1,4 +1,4 @@
-# darshana — library entry. Re-exports the three domain modules so
+# darshana — library entry. Re-exports the four domain modules so
 # consumers (smoke.cyr, tests/darshana.tcyr) can pull the whole API
 # surface via a single include. `cyrius distlib` reads [lib].modules
 # from cyrius.cyml directly and bundles termios/ansi/cursor into
@@ -25,3 +25,4 @@
 include "src/termios.cyr"
 include "src/ansi.cyr"
 include "src/cursor.cyr"
+include "src/sanitize.cyr"

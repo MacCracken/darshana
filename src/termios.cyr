@@ -50,6 +50,7 @@
 #   termios.cyr  — termios raw/cooked, winsize, isatty, signalfd, TIO_*
 #   ansi.cyr     — alt-screen / clear / cursor-visibility / SGR color
 #   cursor.cyr   — tty_dec_buf (decimal formatter), cursor positioning
+#   sanitize.cyr — making untrusted bytes safe for the terminal (v1.2.0)
 #
 # Symbols prefixed `_` are private by convention — they ship in this
 # bundle because it is one compilation unit, but they are NOT public
@@ -114,9 +115,10 @@ var TIO_VMIN     = 6;
 # (e.g., a consumer that wants to read termios state without taking it raw).
 # Cyrius requires array sizes to be literals or enum constants, not `var`
 # constants, so the internal `_tty_saved[60]` and `work[60]` declarations
-# below use the matching literal, as does `tty_raw`'s copy-loop bound. If
-# this value ever changes, all four sites (this constant, the two arrays,
-# the loop bound) must move together.
+# below use the matching literal. If this value ever changes, all three
+# sites (this constant and the two arrays) must move together. (`tty_raw`'s
+# copy loop was a fourth literal `60` through v1.1.4; it reads this
+# constant since v1.2.0.)
 var TIO_BUF_SIZE = 60;
 
 # Read the 32-bit little-endian field at byte offset `off` inside the
@@ -204,9 +206,10 @@ fn _tty_apply_raw_flags(buf) {
 
 #ifdef CYRIUS_TARGET_LINUX
 
-# `SYS_IOCTL` is deliberately NOT defined here — it comes from the stdlib
-# (`lib/syscalls.cyr` → the per-arch peer), which is arch-aware: 16 on
-# x86_64, 29 on aarch64. This gate is `CYRIUS_TARGET_LINUX`, which is
+# `SYS_IOCTL` is deliberately NOT defined here. Since v1.2.0 darshana
+# calls the stdlib's `sys_ioctl` wrapper (`lib/syscalls_linux_common.cyr`,
+# filed by kybernet, whose own comment cites this file), which issues the
+# stdlib's arch-aware `SYS_IOCTL`: 16 on x86_64, 29 on aarch64. This gate is `CYRIUS_TARGET_LINUX`, which is
 # arch-BLIND, so a local `var SYS_IOCTL = 16` shadowed the stdlib's value
 # on aarch64 (last definition wins) and every ioctl below issued 16 —
 # which on aarch64-Linux is `fremovexattr`, not `ioctl`. Through cyrius
@@ -221,8 +224,8 @@ fn _tty_apply_raw_flags(buf) {
 # bare include of it) and the stdlib does not define them.
 # ioctl request codes for reading and writing termios. Public surface:
 # a consumer that wants termios state without going raw does
-# `syscall(SYS_IOCTL, fd, TCGETS, &buf)` with a `TIO_BUF_SIZE` buffer,
-# and can write it back with `TCSETS`. Arch-stable across both Linux
+# `sys_ioctl(fd, TCGETS, &buf)` with a `TIO_BUF_SIZE` buffer, and can
+# write it back with `TCSETS`. Arch-stable across both Linux
 # targets (asm-generic/ioctls.h).
 #
 # Writing termios yourself is outside darshana's state-restore model:
@@ -274,6 +277,46 @@ fn _tty_fd_ok(fd) {
     return 1;
 }
 
+# The VMIN `tty_raw` / `tty_raw_nonblock` last applied while raw: 1 for
+# blocking reads, 0 for reads that return at once. v1.2.0 — only
+# meaningful while `_tty_in_raw` is 1.
+var _tty_raw_vmin = 1;
+
+# Shared body of `tty_raw` (vmin 1) and `tty_raw_nonblock` (vmin 0).
+# Private (v1.2.0). Enters raw from cooked, saving the cooked termios; or,
+# on the fd that already holds the raw slot, switches between the two
+# read modes by re-deriving from the SAVED cooked state, which it never
+# overwrites — so `tty_cooked()` restores exactly, whichever mode is on.
+# A same-fd call in the mode already applied is a no-op success, exactly
+# as `tty_raw` has always been. Returns 0, or -1.
+fn _tty_raw_mode(fd, vmin) {
+    if (_tty_fd_ok(fd) == 0) { return 0 - 1; }
+    if (_tty_in_raw == 1) {
+        if (fd != _tty_raw_fd) { return 0 - 1; }
+        if (vmin == _tty_raw_vmin) { return 0; }
+    } else {
+        if (sys_ioctl(fd, TCGETS, &_tty_saved) < 0) { return 0 - 1; }
+    }
+
+    var work[60];                       # size mirrors TIO_BUF_SIZE
+    var i = 0;
+    while (i < TIO_BUF_SIZE) {
+        store8(&work + i, load8(&_tty_saved + i));
+        i = i + 1;
+    }
+    _tty_apply_raw_flags(&work);
+    # _tty_apply_raw_flags sets VMIN = 1 / VTIME = 0, so for tty_raw this
+    # store rewrites the value already there and the TCSETS bytes are the
+    # same as before v1.2.0.
+    store8(&work + TIO_CC_BASE + TIO_VMIN, vmin);
+
+    if (sys_ioctl(fd, TCSETS, &work) < 0) { return 0 - 1; }
+    _tty_raw_fd = fd;
+    _tty_in_raw = 1;
+    _tty_raw_vmin = vmin;
+    return 0;
+}
+
 # Enter raw mode on `fd`. Saves the current termios so `tty_cooked()`
 # can restore it, and records `fd` as the owning raw fd. Returns 0 on
 # success, -1 on ioctl failure (most often: fd is not a TTY).
@@ -285,31 +328,34 @@ fn _tty_fd_ok(fd) {
 # saved state — overwriting would strand the first fd in raw mode with
 # no way to restore it. Call `tty_cooked()` first to release the fd.
 #
+# v1.2.0: if the same fd was made raw by `tty_raw_nonblock`, this
+# switches it back to blocking reads (VMIN = 1) and returns 0, without
+# touching the saved cooked state. (No sequence before v1.2.0 could
+# reach that case; every earlier one behaves exactly as it did.)
+#
 # An `fd` outside [0, 0x7FFFFFFF] is rejected with -1 before any syscall
 # (v1.1.4) — the kernel would otherwise read its low 32 bits as a
 # different descriptor. See `_tty_fd_ok`.
 fn tty_raw(fd) {
-    if (_tty_fd_ok(fd) == 0) { return 0 - 1; }
-    if (_tty_in_raw == 1) {
-        if (fd == _tty_raw_fd) { return 0; }
-        return 0 - 1;
-    }
-    var rc = syscall(SYS_IOCTL, fd, TCGETS, &_tty_saved);
-    if (rc < 0) { return 0 - 1; }
+    return _tty_raw_mode(fd, 1);
+}
 
-    var work[60];                       # size mirrors TIO_BUF_SIZE
-    var i = 0;
-    while (i < 60) {
-        store8(&work + i, load8(&_tty_saved + i));
-        i = i + 1;
-    }
-    _tty_apply_raw_flags(&work);
-
-    var rc2 = syscall(SYS_IOCTL, fd, TCSETS, &work);
-    if (rc2 < 0) { return 0 - 1; }
-    _tty_raw_fd = fd;
-    _tty_in_raw = 1;
-    return 0;
+# Enter raw mode on `fd` with reads that return at once: VMIN = 0 and
+# VTIME = 0, so read(2) answers 0 immediately when no byte is waiting,
+# instead of blocking for one. Everything else is `tty_raw`'s mask and
+# `tty_raw`'s contract: the same single raw slot (a different fd while
+# raw is refused with -1), the same saved cooked state, the same
+# `tty_cooked()` restore. On the fd already raw via `tty_raw`, this
+# switches it to non-blocking reads and returns 0; `tty_raw` switches
+# back. Returns 0 on success, -1 on ioctl failure or an `fd` outside
+# [0, 0x7FFFFFFF].
+#
+# v1.2.0. For poll and game loops that must not block on `read(0)`.
+# thoth reached this by calling the private `_tty_apply_raw_flags` and
+# patching VMIN / VTIME itself; five other AGNOS projects hand-roll the
+# same termios edit without depending on darshana.
+fn tty_raw_nonblock(fd) {
+    return _tty_raw_mode(fd, 0);
 }
 
 # Restore cooked mode onto the fd `tty_raw` saved (`_tty_raw_fd`).
@@ -333,7 +379,7 @@ fn tty_raw(fd) {
 # that descriptor.
 fn tty_cooked() {
     if (_tty_in_raw == 0) { return 0; }
-    var rc = syscall(SYS_IOCTL, _tty_raw_fd, TCSETS, &_tty_saved);
+    var rc = sys_ioctl(_tty_raw_fd, TCSETS, &_tty_saved);
     if (rc < 0) { return 0 - 1; }
     _tty_in_raw = 0;
     return 0;
@@ -386,7 +432,7 @@ fn tty_cooked() {
 fn tty_winsize(fd, out_rows, out_cols) {
     if (_tty_fd_ok(fd) == 0) { return 0 - 1; }       # v1.1.4 — see _tty_fd_ok
     var ws[8];
-    var rc = syscall(SYS_IOCTL, fd, TIOCGWINSZ, &ws);
+    var rc = sys_ioctl(fd, TIOCGWINSZ, &ws);
     if (rc < 0) { return 0 - 1; }
     var rows = load8(&ws + 0) | (load8(&ws + 1) << 8);
     var cols = load8(&ws + 2) | (load8(&ws + 3) << 8);
@@ -412,7 +458,7 @@ fn tty_winsize(fd, out_rows, out_cols) {
 fn tty_isatty(fd) {
     if (_tty_fd_ok(fd) == 0) { return 0; }           # v1.1.4 — see _tty_fd_ok
     var ws[8];
-    var rc = syscall(SYS_IOCTL, fd, TIOCGWINSZ, &ws);
+    var rc = sys_ioctl(fd, TIOCGWINSZ, &ws);
     if (rc < 0) { return 0; }
     return 1;
 }
@@ -586,6 +632,27 @@ fn tty_close_signalfd(fd, sigmask) {
     return 0;
 }
 
+# Read the next signal from a signalfd opened by `tty_open_signalfd`,
+# consuming it. Returns the signal number (> 0); 0 if nothing is pending
+# on a NON-blocking fd (see `tty_open_signalfd` for `fd_set_nonblocking`);
+# or -1 on any other failure, including an `fd` outside [0, 0x7FFFFFFF]
+# and a descriptor that is not a signalfd. On a blocking fd it waits for
+# a signal, like read(2). Never a raw `-errno`.
+#
+# v1.2.0. Three consumers (chakshu, cyim, anuenue) each read the kernel's
+# 128-byte `struct signalfd_siginfo` by hand to learn which signal woke
+# them; the signal number is its first field, a u32 at offset 0. The
+# number is the platform's own: SIGINT 2, SIGTERM 15, SIGWINCH 28 on both
+# Linux arches and on AGNOS.
+fn tty_read_signal(fd) {
+    if (_tty_fd_ok(fd) == 0) { return 0 - 1; }
+    var info[128];
+    var n = sys_read(fd, &info, 128);
+    if (n == 128) { return tio_load32(&info, 0); }
+    if (n == 0 - EAGAIN) { return 0; }         # non-blocking, nothing pending
+    return 0 - 1;
+}
+
 #endif
 
 #ifdef CYRIUS_TARGET_AGNOS
@@ -637,10 +704,19 @@ var _AGNOS_SYS_WINSIZE = 60;
 fn tty_winsize(fd, out_rows, out_cols) {
     var packed = syscall(_AGNOS_SYS_WINSIZE, 0);
     if (packed < 0) { return 0 - 1; }
-    var rows = packed & 0xFFFF;
-    var cols = (packed >> 16) & 0xFFFF;
-    store64(out_rows, rows);
-    store64(out_cols, cols);
+    return _agnos_winsize_unpack(packed, out_rows, out_cols);
+}
+
+# Decode winsize#60's packed reply — bits 0-15 rows, bits 16-31 cols —
+# through the caller's out-pointers. Always returns 0.
+#
+# Private (v1.2.0), and pure, so tests/agnos.tcyr can exercise the AGNOS
+# decode on a Linux host, where the syscall itself is uncallable (agnos 60
+# is Linux `exit`). Through v1.1.4 the decode was inline in tty_winsize and
+# had compile coverage only: swapping rows and cols survived every gate.
+fn _agnos_winsize_unpack(packed, out_rows, out_cols) {
+    store64(out_rows, packed & 0xFFFF);
+    store64(out_cols, (packed >> 16) & 0xFFFF);
     return 0;
 }
 
@@ -675,6 +751,13 @@ fn tty_isatty(fd) {
 # decoder. A silent success here would strand the caller waiting on per-key
 # input that never arrives.
 fn tty_raw(fd) {
+    return 0 - 1;
+}
+
+# AGNOS peer of `tty_raw_nonblock`. agnos has no termios, so there is no
+# VMIN to set: returns -1, exactly like the AGNOS `tty_raw` and for the
+# same reason (see its docstring).
+fn tty_raw_nonblock(fd) {
     return 0 - 1;
 }
 
@@ -728,6 +811,14 @@ var _AGNOS_SFD_CLOEXEC = 0x80000;
 # epoll_wait#21 / read#5 rather than blocking on the fd — the same poll-driven
 # usage the Linux peer's consumers already follow. `sigmask` is an agnos
 # `1<<sig` set (see TTY_SIGMASK_* above), an 8-byte word like the Linux path.
+#
+# ⚠ Under mirshi (the agnos-on-Linux supervisor) this fd receives NOTHING
+# today: mirshi delivers only signals that are pending AND unblocked through
+# a signalfd, and this function — correctly, as on Linux and on the agnos
+# kernel — blocks them first. A signal from the host (a terminal Ctrl-C, a
+# host kill) also bypasses mirshi's agnos signal model and arrives as a real
+# Linux signal with its default action. Both are filed in mirshi's roadmap
+# (2026-10-12, confirmed by run); on the agnos kernel itself the fd works.
 fn tty_open_signalfd(sigmask) {
     var mask[8];
     store64(&mask, sigmask);
@@ -792,4 +883,55 @@ fn tty_close_signalfd(fd, sigmask) {
     return 0;
 }
 
+# AGNOS peer of `tty_read_signal`: the next pending signal's number (> 0),
+# consuming it; 0 if nothing is pending; -1 on failure or a negative `fd`.
+# An agnos signalfd is always non-blocking, so this never waits.
+#
+# The kernel's `vfs_read_signalfd` answers a 4-byte signal number and 0
+# when nothing is pending; mirshi answers an 8-byte one, and -1 when
+# nothing is pending (filed in mirshi's roadmap, 2026-10-12). Reading the
+# low 32 bits of a zeroed 8-byte buffer is right for both records. Under
+# mirshi an empty read therefore returns -1, not 0 — and mirshi never
+# delivers a blocked signal through a signalfd at all, so the call cannot
+# yet see anything there.
+fn tty_read_signal(fd) {
+    if (fd < 0) { return 0 - 1; }
+    var rec[8];
+    store64(&rec, 0);
+    var n = sys_read_nb(fd, &rec, 8);            # -2 = WOULD_BLOCK: nothing yet
+    if (n > 0) { return tio_load32(&rec, 0); }
+    if (n == 0 || n == 0 - 2) { return 0; }
+    return 0 - 1;
+}
+
 #endif
+
+# ---- platform-independent helpers over the peers above ---------------
+
+# `tty_winsize`, but never 0 x 0: writes the terminal's rows and columns
+# through the caller's out-pointers (each an i64 via `store64`), or the
+# caller's `def_rows` / `def_cols` when the query fails OR answers a zero
+# dimension. Always returns 0 — the out-pointers always receive a usable
+# size, which is the point of the call.
+#
+# v1.2.0. A pty whose size was never set answers TIOCGWINSZ successfully
+# with 0 x 0 (see `tty_winsize`), and four consumers each wrote this guard
+# themselves (chakshu, cyim, kii, bannermanor). The defaults are the
+# caller's because the consumers disagree on them (24x80 vs 80x24); any
+# clamp — cyim's minimum 2x20, bannermanor's 4096 cap — stays in the
+# consumer too. Both dimensions come from the same source: a 0 in either
+# means the size is unknown, so both defaults are written.
+fn tty_winsize_or(fd, out_rows, out_cols, def_rows, def_cols) {
+    var r = 0;
+    var c = 0;
+    if (tty_winsize(fd, &r, &c) == 0) {
+        if (r > 0 && c > 0) {
+            store64(out_rows, r);
+            store64(out_cols, c);
+            return 0;
+        }
+    }
+    store64(out_rows, def_rows);
+    store64(out_cols, def_cols);
+    return 0;
+}

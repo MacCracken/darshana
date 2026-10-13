@@ -11,13 +11,14 @@ entry = "programs/smoke.cyr"
 output = "build/darshana-smoke"
 
 [lib]
-# Three domain modules per ADR/M1 design — termios / ansi / cursor.
+# Four domain modules — termios / ansi / cursor per the M1 design, plus
+# sanitize (v1.2.0, output sanitization; docs/adr/0004).
 # `cyrius distlib` concatenates these (in order) into dist/darshana.cyr;
 # consumers `include "lib/darshana.cyr"` after `cyrius deps` resolves
 # the dep. src/main.cyr is the in-tree convenience entry that includes
-# all three for smoke.cyr + tests, but is intentionally NOT in this
+# all four for smoke.cyr + tests, but is intentionally NOT in this
 # list — it would duplicate the module bodies in the dist bundle.
-modules = ["src/termios.cyr", "src/ansi.cyr", "src/cursor.cyr"]
+modules = ["src/termios.cyr", "src/ansi.cyr", "src/cursor.cyr", "src/sanitize.cyr"]
 
 [deps]
 # Footprint: tighter than the init default. termios + ANSI helpers

@@ -4,6 +4,144 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-10-12
+
+A minor: **five functions and eight constants added, the composers 35–49%
+faster, and nothing already shipped changed.** Every frozen name, arity,
+return contract and constant value is as it was, and the emitted bytes are
+proven identical — all eleven digests `tests/identity.tcyr` has frozen since
+1.1.4 are unchanged, on x86_64, under qemu-aarch64 and on a real Raspberry
+Pi 4. The additions are the consumer-driven candidates whose
+extract-on-second-consumer trigger fired in the 2026-10-12 surveys, plus the
+output sanitizer the owner ruled into the charter; ADR 0003 now tabulates them,
+frozen from this release.
+
+### Added
+
+- **`tty_sanitize_buf(buf, pos, src, len, mode, keep)`** — neutralize the
+  control bytes in untrusted text before it reaches the terminal, in a new
+  module `src/sanitize.cyr`. `TTY_SANITIZE_UTF8` keeps well-formed UTF-8
+  byte-for-byte and neutralizes C1 controls written as UTF-8 and every
+  malformed byte (strict RFC 3629: no overlongs, surrogates or code points
+  above U+10FFFF); `TTY_SANITIZE_LATIN1` neutralizes every raw 0x80–0x9F byte
+  for single-byte terminals. Both neutralize C0 and DEL; `TTY_KEEP_TAB` /
+  `TTY_KEEP_LF` keep those, and **ESC is never kept**. Every neutralized byte or
+  sequence becomes one `?`, so the byte budget is `len` and sanitizing in place
+  is safe. Seven consumers and nine other projects had each written their own;
+  of the four consumer rules read in full, two passed C1 controls. Design and
+  trade-offs: **ADR 0004**.
+- **`tty_bg_256_buf`** — the 256-color background composer, deferred since
+  v0.5.3 under the extract-on-second-consumer rule; kii and thoth both hand-wrote
+  it. `tty_fg_256_buf` now shares its body (its digest is unchanged).
+- **`tty_read_signal(fd)`** — read one signal from a darshana signalfd: the
+  signal number, 0 when nothing is pending on a non-blocking fd, -1 otherwise.
+  chakshu, cyim and anuenue each read the 128-byte `signalfd_siginfo` by hand.
+  The AGNOS peer reads the kernel's 4-byte record (and mirshi's 8-byte one).
+- **`tty_winsize_or(fd, out_rows, out_cols, def_rows, def_cols)`** — a window
+  size that is never 0 × 0: the terminal's size, or the caller's defaults when
+  the query fails or a pty answers 0 × 0. Always returns 0. Four consumers wrote
+  this guard; the defaults are the caller's because they disagree on them.
+- **`tty_raw_nonblock(fd)`** — raw mode with VMIN = 0 / VTIME = 0, so reads
+  return at once. The same single raw slot and the same `tty_cooked()` restore
+  as `tty_raw`; on the fd that holds the slot, either function switches modes
+  without touching the saved cooked state. thoth reached this by calling the
+  private `_tty_apply_raw_flags`; five other projects hand-roll it.
+- **`TTY_SGR_BOLD` / `TTY_SGR_DIM` / `TTY_SGR_UNDERLINE` / `TTY_SGR_REVERSE`**
+  for `tty_sgr` / `tty_sgr_buf` — only the attributes consumers hand-wrote.
+- **ADR 0004** (output sanitization) and ADR 0003's **"Added since 1.0"**
+  table; `scripts/smoke.sh` requires every name in it to stay in the bundle.
+
+### Changed — performance, byte-identical
+
+Measured on the landed code against v1.1.4: 20M calls, whole process, median
+of 5.
+
+| Composer | v1.1.4 | v1.2.0 | |
+|---|---:|---:|---:|
+| `tty_fg_rgb_buf` | 758 ms | 486 ms | **−36%** |
+| `tty_fg_256_buf` | 326 ms | 191 ms | **−41%** |
+| `tty_sgr_buf` | 307 ms | 201 ms | **−35%** |
+| `tty_dec_buf` (0–1023) | 380 ms | 195 ms | **−49%** |
+
+- The composers write their constant prefix as **one literal store** — cycc
+  6.6.20 does not fold `27 | (91 << 8) | …`, so the v1.1.0 "one store" was
+  costing ~45 instructions — and each digit field as **exact-width packed
+  stores** (`store32` for `ddd;`, `store16` + `store8` for `dd;`, `store16` for
+  `d;`) through a pointer cursor, with one range test `((r | g | b) >> 8)`
+  for the three RGB channels.
+- `tty_dec_buf` writes 1–3 digits inline and longer values right-to-left
+  straight into `buf`, without its 24-byte scratch array; the digit count stops
+  at 19 before its limit can overflow.
+- The new `store16`, and `store32` at data-dependent unaligned offsets, were
+  licensed the way v1.1.0's `store64` was: every digest identical on a real Pi 4.
+
+### Changed — internal refactors, identical output
+
+- The five Linux ioctls go through the stdlib's `sys_ioctl` (filed by kybernet;
+  its comment cites darshana's hand-rolled call). `SYS_IOCTL` leaves the
+  syscall allowlist and `sys_ioctl` joins the wrapper allowlist; the platform
+  gate polices `sys_ioctl` as a Linux-only token.
+- `tty_raw`'s copy loop reads `TIO_BUF_SIZE` — one fewer literal `60` to keep in
+  step.
+- `tty_raw` / `tty_raw_nonblock` share `_tty_raw_mode(fd, vmin)`. `tty_raw`
+  issues the same TCSETS bytes as before, and a same-fd repeat is still a no-op;
+  only `tty_raw_nonblock` can reach the new mode switch.
+- The AGNOS winsize decode is the pure `_agnos_winsize_unpack`, so
+  `tests/agnos.tcyr` tests it on a Linux host. A rows/cols swap there survived
+  every 1.1.4 gate; it is caught now.
+
+### Tests
+
+- Unit 245 → **312**, PTY 79 → **100**, identity 15 → **18**, AGNOS 15 →
+  **20** — pinned in `scripts/ci.sh`, on every architecture.
+- `tests/identity.tcyr` gains two frozen groups. **`tty_bg_256_buf`** over its
+  whole domain. **`tty_sanitize_buf`** over every 1- and 2-byte input, the 3-byte
+  space over leads E0–F4, and every 4-byte lead, in both modes: each output must
+  be clean by an independently written validator (code points and bit masks, not
+  the implementation's lead-byte table), idempotent, unchanged when the input
+  was already clean, and inside its budget. Five planted sanitizer bugs — encoded
+  C1 let through, an overlong E0 lead accepted, ESC keepable, Latin-1 keeping
+  0x9B, two bytes per replacement — are each caught by those checks alone.
+
+### Changed — documentation
+
+- The AGNOS `tty_open_signalfd` docstring now says that under mirshi the fd
+  receives nothing. mirshi delivers only pending-and-UNBLOCKED signals through a
+  signalfd, where the agnos kernel (and Linux) deliver blocked ones, and host
+  signals bypass its agnos signal model. Both were confirmed by run and **filed
+  in mirshi's roadmap** with three further divergences (the read record's width
+  and empty-return, the slot leak on close, and `sigprocmask` edge cases).
+- ADR 0003, the composer design notes, README, getting-started, `state.md` and
+  the roadmap updated for the additions.
+
+### Confirmed but deliberately not taken
+
+- **Flattening `tty_fg_rgb_buf` / `tty_bg_rgb_buf`** into two copies of the
+  packed body — another ~4–5 ns per call, for two hand-maintained 30-line copies
+  no consumer is bound by.
+- **Moving the AGNOS arm onto the stdlib's agnos `sys_sigprocmask` /
+  `sys_signalfd`.** They share their names with the Linux wrappers, which the
+  platform gate (since 1.1.4) polices as Linux-only tokens; adopting them would
+  mean weakening the check that catches the Linux signalfd pair escaping its
+  gate. The private `_AGNOS_SYS_*` constants are gated and audited.
+- **A reject-only sanitizer predicate and a configurable replacement byte** — see
+  ADR 0004. The predicate is an addition if a second consumer wants it.
+
+### Upgrade notes
+
+**No consumer code change is required.** Everything above is additive, and
+every byte darshana already emitted is unchanged. A consumer adopting the
+sanitizer chooses its mode by the terminal it writes to; one adopting
+`tty_read_signal` on a non-blocking fd gets 0, not -1, when nothing is pending.
+
+### Verification
+
+- `bash scripts/ci.sh all`: every gate green — x86_64 312 + 100 + 18 + 20; the
+  same unit, PTY and identity totals under qemu-aarch64 and under `CYRIUS_DCE=1`;
+  the example's TTY path; no build warning on any target.
+- **Raspberry Pi 4 (Linux 7.0)**: smoke ok, 312/312 unit, 100/100 PTY, 18/18
+  identity — all thirteen digests identical to x86_64.
+
 ## [1.1.4] — 2026-10-12
 
 The third audit, repair and security sweep (after v0.9.3 and v1.0.2), and a

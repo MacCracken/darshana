@@ -15,8 +15,8 @@ only builds `--agnos`, and fails on it.
 
 ## Layout
 
-- `src/termios.cyr` / `src/ansi.cyr` / `src/cursor.cyr` — the three domain modules. These are `[lib].modules` in `cyrius.cyml`; they are exactly what `cyrius distlib` concatenates into `dist/darshana.cyr`. **New public code goes in one of these.**
-- `src/main.cyr` — in-tree convenience entry. Re-exports the three domain modules so the tests and `programs/smoke.cyr` pull the whole surface via one `include`. **Not part of the dist bundle** — a symbol added here compiles and tests green locally but ships to nobody.
+- `src/termios.cyr` / `src/ansi.cyr` / `src/cursor.cyr` / `src/sanitize.cyr` — the four domain modules (`sanitize.cyr` since v1.2.0). These are `[lib].modules` in `cyrius.cyml`; they are exactly what `cyrius distlib` concatenates into `dist/darshana.cyr`. **New public code goes in one of these.**
+- `src/main.cyr` — in-tree convenience entry. Re-exports the four domain modules so the tests and `programs/smoke.cyr` pull the whole surface via one `include`. **Not part of the dist bundle** — a symbol added here compiles and tests green locally but ships to nobody.
 - `programs/smoke.cyr` — minimal end-to-end smoke. CI builds this on every push.
 - `tests/darshana.tcyr` — the pure-function surface. Use `assert_eq` / `assert` and exit with `assert_summary()`.
 - `tests/pty.tcyr` — the PTY harness (v0.6.0). Manufactures its own pseudo-terminal to cover the syscall-touching and escape-emitting surface deterministically.

@@ -48,10 +48,10 @@ pin() {
 # runs on. Adding or removing an assertion means updating its pin in the
 # same change, which is the point: a count that moves by itself is a test
 # that stopped running.
-EXPECT_UNIT=245
-EXPECT_PTY=79
-EXPECT_IDENTITY=15
-EXPECT_AGNOS=15
+EXPECT_UNIT=312
+EXPECT_PTY=100
+EXPECT_IDENTITY=18
+EXPECT_AGNOS=20
 
 # check_total <label> <expected> <file-with-suite-output>
 check_total() {

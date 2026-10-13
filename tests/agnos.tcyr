@@ -76,6 +76,18 @@ fn main() {
     # fallback (chakshu/thoth drop to a line REPL); tty_cooked is an
     # idempotent no-op success, matching the Linux "no-op when not raw".
     # Neither issues a syscall, so both are safe to execute here.
+    # v1.2.0 — the AGNOS winsize decode, pure and so testable here. A real
+    # 80x24 console packs as (80 << 16) | 24. Bits above 31 are ignored.
+    test_group("AGNOS arm — winsize#60 decode");
+    var ws_r = 0;
+    var ws_c = 0;
+    assert_eq(_agnos_winsize_unpack((80 << 16) | 24, &ws_r, &ws_c), 0, "unpack returns 0");
+    assert_eq(ws_r, 24, "rows are bits 0-15");
+    assert_eq(ws_c, 80, "cols are bits 16-31 (not swapped)");
+    _agnos_winsize_unpack((7 << 32) | (0xFFFF << 16) | 0xFFFF, &ws_r, &ws_c);
+    assert_eq(ws_r, 0xFFFF, "rows: full u16, high bits ignored");
+    assert_eq(ws_c, 0xFFFF, "cols: full u16, bits above 31 ignored");
+
     test_group("AGNOS arm — no-termios contract");
     assert_eq(tty_raw(0), 0 - 1, "tty_raw always -1 on AGNOS (no termios)");
     assert_eq(tty_raw(1), 0 - 1, "tty_raw is fd-independent on AGNOS");

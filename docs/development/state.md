@@ -5,6 +5,35 @@
 
 ## Version
 
+**1.2.0** — *open cycle*. **A minor: five functions and eight constants
+added, the composers 35–49% faster, and nothing already shipped changed.**
+All eleven digests `tests/identity.tcyr` froze at 1.1.4 are unchanged on
+x86_64, qemu-aarch64 and a real Pi 4; the two new ones (`tty_bg_256_buf`,
+`tty_sanitize_buf`) are frozen from here.
+
+⭐ **Added**, each the consumer-driven candidate whose second-consumer trigger
+fired in the 2026-10-12 surveys: `tty_sanitize_buf` (+ `TTY_SANITIZE_UTF8` /
+`_LATIN1`, `TTY_KEEP_TAB` / `_LF`; the output sanitizer the owner ruled into
+the charter — ADR 0004), `tty_bg_256_buf`, `tty_read_signal`, `tty_winsize_or`,
+`tty_raw_nonblock`, and `TTY_SGR_BOLD` / `_DIM` / `_UNDERLINE` / `_REVERSE`.
+ADR 0003's new "Added since 1.0" table freezes them, and `scripts/smoke.sh`
+checks it.
+
+**Faster, byte-identically**: every composer writes its prefix as one literal
+store (cycc 6.6.20 does not fold the OR chain the v1.1.0 store was built from)
+and each digit field as exact-width packed stores. `tty_fg_rgb_buf` −36%,
+`tty_fg_256_buf` −41%, `tty_sgr_buf` −35%, `tty_dec_buf` −49% (0–1023). The new
+unaligned `store16` / `store32` were licensed on the Pi, as v1.1.0's `store64`
+was.
+
+**Refactors**: the ioctls go through the stdlib's `sys_ioctl`; `tty_raw`'s loop
+reads `TIO_BUF_SIZE`; the AGNOS winsize decode is a pure, tested helper (the
+rows/cols-swap mutant that survived 1.1.4 is caught). **Not taken**, with
+reasons in the CHANGELOG: flattening the RGB wrappers, and moving the AGNOS arm
+onto the stdlib's same-named signal wrappers (the platform gate polices those
+names). mirshi's signal band was found broken for signalfds and filed in
+mirshi's roadmap.
+
 **1.1.4** — *open cycle*. **The third audit sweep — and the finding that
 mattered most was about the gates, not the code.** Five lenses over a frozen
 snapshot (correctness, security, tests and gates by mutation, docs truth,
@@ -553,16 +582,17 @@ TTY_SIGMASK_EXIT/WINCH, `tty_clear_to_eol/to_end`.
 
 | File | Lines | Surface |
 |------|-------|---------|
-| `src/termios.cyr` | 795 | `TIO_*` flags, `tio_load32/store32`, `tty_raw`, `tty_cooked`, **v0.3.0:** `TIOCGWINSZ`, `TTY_SIGMASK_EXIT/WINCH`, `tty_winsize`, `tty_open_signalfd`. **v0.5.3:** `tty_isatty`. **v0.7.0:** `tty_cooked` is zero-arg (single-raw-fd model, `_tty_raw_fd`); `tty_apply_raw_flags` privatized → `_tty_apply_raw_flags`; `tty_close_signalfd` added; `SFD_CLOEXEC` on the signalfd. **v0.8.0–v0.9.0:** `#ifdef CYRIUS_TARGET_AGNOS` peers for all six syscall-touching entry points (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) + agnos-specific `TTY_SIGMASK_*` values. Linux arm gated via `#ifdef CYRIUS_TARGET_LINUX`. **v0.9.2:** local `var SYS_IOCTL = 16` dropped — the Linux gate is arch-blind, so it shadowed the stdlib's arch-aware value and issued the x86_64 number on aarch64; `TCGETS`/`TCSETS`/`TIOCGWINSZ` stay local (arch-stable). **v1.1.4:** private `_tty_fd_ok` — the four Linux fd-taking peers reject an fd outside [0, 0x7FFFFFFF]; the AGNOS `tty_close_signalfd` skips a negative fd. Signalfd, winsize and AGNOS docstrings corrected. |
-| `src/ansi.cyr` | 432 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`, **v0.3.0:** `tty_clear_to_eol`, `tty_clear_to_eos` (renamed from `tty_clear_to_end` v0.7.0), **v0.3.5:** `tty_sgr`, `tty_sgr_reset`, 16 `TTY_FG_*` constants. **v0.4.0:** `tty_sgr` validates input range `[0, 999]`. **v0.5.1:** `tty_fg_rgb`, `tty_bg_rgb`, `tty_fg_rgb_buf`, `tty_bg_rgb_buf`, `tty_sgr_reset_buf`. **v0.5.3:** `tty_sgr_buf`, `tty_fg_256_buf`. Any vt100-compatible terminal. |
-| `src/cursor.cyr` | 141 | `tty_dec_buf` (decimal formatter — renamed from `tty_itoa`, returns new write position, v0.7.0), `tty_move` (with [1,65535] coord bounds + `buf[44]` v0.7.0), `tty_cursor_up/down`. Composes the CSI row;colH escape inline. |
-| `src/main.cyr` | 27 | Convenience entry — `include`s the three sub-modules; carries the authoritative surface pointer (→ `scripts/smoke.sh`). The naming/return conventions it carried from v0.7.0 moved to the head of `src/termios.cyr` at v0.9.4, so they ship as the bundle's front matter. Not in the dist bundle. |
+| `src/termios.cyr` | 937 | `TIO_*` flags, `tio_load32/store32`, `tty_raw`, `tty_cooked`, **v0.3.0:** `TIOCGWINSZ`, `TTY_SIGMASK_EXIT/WINCH`, `tty_winsize`, `tty_open_signalfd`. **v0.5.3:** `tty_isatty`. **v0.7.0:** `tty_cooked` is zero-arg (single-raw-fd model, `_tty_raw_fd`); `tty_apply_raw_flags` privatized → `_tty_apply_raw_flags`; `tty_close_signalfd` added; `SFD_CLOEXEC` on the signalfd. **v0.8.0–v0.9.0:** `#ifdef CYRIUS_TARGET_AGNOS` peers for all six syscall-touching entry points (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) + agnos-specific `TTY_SIGMASK_*` values. Linux arm gated via `#ifdef CYRIUS_TARGET_LINUX`. **v0.9.2:** local `var SYS_IOCTL = 16` dropped — the Linux gate is arch-blind, so it shadowed the stdlib's arch-aware value and issued the x86_64 number on aarch64; `TCGETS`/`TCSETS`/`TIOCGWINSZ` stay local (arch-stable). **v1.1.4:** private `_tty_fd_ok` — the four Linux fd-taking peers reject an fd outside [0, 0x7FFFFFFF]; the AGNOS `tty_close_signalfd` skips a negative fd. Signalfd, winsize and AGNOS docstrings corrected. |
+| `src/ansi.cyr` | 480 | `tty_alt_enter/leave`, `tty_clear`, `tty_cursor_hide/show/home`, **v0.3.0:** `tty_clear_to_eol`, `tty_clear_to_eos` (renamed from `tty_clear_to_end` v0.7.0), **v0.3.5:** `tty_sgr`, `tty_sgr_reset`, 16 `TTY_FG_*` constants. **v0.4.0:** `tty_sgr` validates input range `[0, 999]`. **v0.5.1:** `tty_fg_rgb`, `tty_bg_rgb`, `tty_fg_rgb_buf`, `tty_bg_rgb_buf`, `tty_sgr_reset_buf`. **v0.5.3:** `tty_sgr_buf`, `tty_fg_256_buf`. Any vt100-compatible terminal. |
+| `src/cursor.cyr` | 159 | `tty_dec_buf` (decimal formatter — renamed from `tty_itoa`, returns new write position, v0.7.0), `tty_move` (with [1,65535] coord bounds + `buf[44]` v0.7.0), `tty_cursor_up/down`. Composes the CSI row;colH escape inline. |
+| `src/sanitize.cyr` | 141 | **v1.2.0:** `tty_sanitize_buf`, `TTY_SANITIZE_UTF8` / `_LATIN1`, `TTY_KEEP_TAB` / `_LF`; the private strict-RFC-3629 sequence check `_san_utf8_len`. Pure — no syscall, no platform gate. Design: ADR 0004. |
+| `src/main.cyr` | 28 | Convenience entry — `include`s the four sub-modules; carries the authoritative surface pointer (→ `scripts/smoke.sh`). The naming/return conventions it carried from v0.7.0 moved to the head of `src/termios.cyr` at v0.9.4, so they ship as the bundle's front matter. Not in the dist bundle. |
 | `programs/smoke.cyr` | 17 | Compile-link smoke. |
-| `dist/darshana.cyr` | 1,368 | Bundled distribution — regenerate via `cyrius distlib`. What consumers `include "lib/darshana.cyr"`. (1,385 lines on disk; `distlib` reports module-body lines, excluding its 17-line generated header — 13 lines plus, since v1.1.3, the 4-line `# Requires` block that `include`s the sidecar's leaves so the bundle compiles on its own.) |
+| `dist/darshana.cyr` | 1,717 | Bundled distribution — regenerate via `cyrius distlib`. What consumers `include "lib/darshana.cyr"`. (1,737 lines on disk; `distlib` reports module-body lines, excluding its 17-line generated header — 13 lines plus, since v1.1.3, the 4-line `# Requires` block that `include`s the sidecar's leaves so the bundle compiles on its own.) |
 | `dist/darshana.deps` | 4 | Generated stdlib-leaf sidecar — **2 entries** (`syscalls`, `io`) since v1.1.3, down from 6. Derived by `distlib`'s compile-verify across six targets (cyrius 6.6.18+), not copied from `[deps].stdlib`, so darshana's test-only `assert` no longer reaches consumers. Consumed by a consumer's `cyrius deps`. |
 
-Total source ≈ 1,368 lines across the three dist modules (v1.1.4; the growth
-since 1,254 is docstrings plus the `_tty_fd_ok` guard) (grew from ~780
+Total source ≈ 1,717 lines across the four dist modules (v1.2.0: the new
+symbols and `sanitize.cyr`; 1,368 at v1.1.4, 1,254 before it) (grew from ~780
 at v0.7.0 with the v0.8.0–v0.9.0 agnos peers, and again through the v0.9.3
 refactor and the v0.9.4 docstring restoration). The line counts above were
 re-derived with `wc -l` at v1.0.1 — every row had been stale since v0.9.2, in a
@@ -575,16 +605,16 @@ self-audits bidirectionally).
 
 | File | Status |
 |------|--------|
-| `tests/darshana.tcyr` | **245 assertions** (some live-fd-gated; the total is pinned in `scripts/ci.sh`, so a guard that stops holding fails by name): pure-function coverage of `tio_load32/store32`, `_tty_apply_raw_flags` (every flag bit + idempotence), `tty_dec_buf` (zero / negative / 1–3 digits / new-position offset), `tty_move` rejection bounds (v0.7.0), `TIO_BUF_SIZE` drift guard (v0.7.0), the v0.3.0 constant set (`TTY_SIGMASK_*`, `TIOCGWINSZ` ABI), `tty_sgr` rejection, **v0.5.x** truecolor + 256 `_buf` exact-byte + bounds coverage, and **live-fd** tests for `tty_winsize` and `tty_open_signalfd` + `tty_close_signalfd` (v0.7.0). |
-| `tests/pty.tcyr` | **79 assertions (v0.6.0; hardened v0.7.0, v0.9.3 and v1.1.4)** — v1.1.4 added the raw-mode iflag bits, out-of-range-fd aliasing, a failed `tty_raw` leaving no state, the re-raw after `tty_cooked()`, and the documented hangup path. The rest: the in-repo PTY harness. Opens a real pseudo-terminal (`/dev/ptmx` → `TIOCSPTLCK` → `TIOCGPTN` → `/dev/pts/N`) and drives darshana against the slave: `tty_isatty` on a known-live fd (+ deterministic `/dev/null` negative), `tty_winsize` set/get (24×80), the `tty_raw`→`tty_cooked()` state-restore (byte-for-byte), the single-raw-fd model (2nd fd refused), the cooked-vs-raw output round-trip (OPOST/ONLCR, fail-not-skip), and fd-1 escape-byte capture (via `dup2`) for `tty_alt_*`, `tty_clear`, `tty_clear_to_eol/eos`, `tty_cursor_*`, `tty_move`, `tty_sgr`, `tty_sgr_reset`, `tty_fg_rgb`/`tty_bg_rgb`. Wired into CI (v0.7.0) with `SKIP pty:` degradation tokens. Hang-proof (`O_NONBLOCK` master, bounded drains) and skip-clean (Linux-only). |
+| `tests/darshana.tcyr` | **312 assertions** (some live-fd-gated; the total is pinned in `scripts/ci.sh`, so a guard that stops holding fails by name): pure-function coverage of `tio_load32/store32`, `_tty_apply_raw_flags` (every flag bit + idempotence), `tty_dec_buf` (zero / negative / 1–3 digits / new-position offset), `tty_move` rejection bounds (v0.7.0), `TIO_BUF_SIZE` drift guard (v0.7.0), the v0.3.0 constant set (`TTY_SIGMASK_*`, `TIOCGWINSZ` ABI), `tty_sgr` rejection, **v0.5.x** truecolor + 256 `_buf` exact-byte + bounds coverage, and **live-fd** tests for `tty_winsize` and `tty_open_signalfd` + `tty_close_signalfd` (v0.7.0). |
+| `tests/pty.tcyr` | **100 assertions (v0.6.0; hardened v0.7.0, v0.9.3 and v1.1.4; v1.2.0 added `tty_winsize_or` on a real 0×0 pty and `tty_raw_nonblock`'s modes and restore)** — v1.1.4 added the raw-mode iflag bits, out-of-range-fd aliasing, a failed `tty_raw` leaving no state, the re-raw after `tty_cooked()`, and the documented hangup path. The rest: the in-repo PTY harness. Opens a real pseudo-terminal (`/dev/ptmx` → `TIOCSPTLCK` → `TIOCGPTN` → `/dev/pts/N`) and drives darshana against the slave: `tty_isatty` on a known-live fd (+ deterministic `/dev/null` negative), `tty_winsize` set/get (24×80), the `tty_raw`→`tty_cooked()` state-restore (byte-for-byte), the single-raw-fd model (2nd fd refused), the cooked-vs-raw output round-trip (OPOST/ONLCR, fail-not-skip), and fd-1 escape-byte capture (via `dup2`) for `tty_alt_*`, `tty_clear`, `tty_clear_to_eol/eos`, `tty_cursor_*`, `tty_move`, `tty_sgr`, `tty_sgr_reset`, `tty_fg_rgb`/`tty_bg_rgb`. Wired into CI (v0.7.0) with `SKIP pty:` degradation tokens. Hang-proof (`O_NONBLOCK` master, bounded drains) and skip-clean (Linux-only). |
 
-| `tests/identity.tcyr` | **15 assertions over ~33.6M records (v1.1.4)** — every `_buf` composer over its whole input domain (the full 256³ RGB cube for both RGB composers, every code / index / digit-length boundary, every rejection edge, start positions 0–7) into a 0xAA-poisoned guard region: nothing outside `[pos, ret)` may change, every call stays within its documented byte budget, a rejection writes nothing. Plus eleven 64-bit digests over everything darshana emits, fd-1 emitters captured through a pipe. The digests are identical when the same harness is compiled against the v1.0.0, v1.0.2, v1.1.0 and v1.1.3 tags' `src/`. ~7 s native, ~80 s under qemu. Replaces the two out-of-repo harnesses under Release Process, whose formats were lost. |
-| `tests/agnos.tcyr` | **15 assertions (v1.0.2)** — the AGNOS arm's first coverage of any kind. Cross-built with `cyrius build --agnos` and RUN on the Linux host (that works: `--agnos` emits an x86_64 ELF and `write(2)` is 1 on both targets). Pins both ADR-0003-frozen AGNOS sigmask values, the four mirshi syscall numbers, and the no-termios contract. ⛔ Deliberately does NOT call `tty_isatty` / `tty_winsize` / the signalfd pair: those issue `syscall(60, ...)`, which is `exit` on Linux, so running them would terminate the harness with status 0 and fake a pass — they get compile coverage from the `--agnos` build of `programs/smoke.cyr` instead. Its own process exit uses the HOST's number for the same reason. |
+| `tests/identity.tcyr` | **18 assertions (v1.1.4; v1.2.0 added the `tty_bg_256_buf` and `tty_sanitize_buf` groups — the sanitizer over every 1- and 2-byte input and the 3-/4-byte lead space in both modes, against an independent validator)** — every `_buf` composer over its whole input domain (the full 256³ RGB cube for both RGB composers, every code / index / digit-length boundary, every rejection edge, start positions 0–7) into a 0xAA-poisoned guard region: nothing outside `[pos, ret)` may change, every call stays within its documented byte budget, a rejection writes nothing. Plus eleven 64-bit digests over everything darshana emits, fd-1 emitters captured through a pipe. The digests are identical when the same harness is compiled against the v1.0.0, v1.0.2, v1.1.0 and v1.1.3 tags' `src/`. ~7 s native, ~80 s under qemu. Replaces the two out-of-repo harnesses under Release Process, whose formats were lost. |
+| `tests/agnos.tcyr` | **20 assertions (v1.0.2; v1.2.0 added the pure winsize decode)** — the AGNOS arm's first coverage of any kind. Cross-built with `cyrius build --agnos` and RUN on the Linux host (that works: `--agnos` emits an x86_64 ELF and `write(2)` is 1 on both targets). Pins both ADR-0003-frozen AGNOS sigmask values, the four mirshi syscall numbers, and the no-termios contract. ⛔ Deliberately does NOT call `tty_isatty` / `tty_winsize` / the signalfd pair: those issue `syscall(60, ...)`, which is `exit` on Linux, so running them would terminate the harness with status 0 and fake a pass — they get compile coverage from the `--agnos` build of `programs/smoke.cyr` instead. Its own process exit uses the HOST's number for the same reason. |
 
-**354 assertions total** (245 + 79 + 15 + 15), green at cyrius 6.6.20 on x86_64,
-and under `CYRIUS_DCE=1` — and **339 on aarch64** (245 + 79 + 15; the AGNOS
-suite is x86_64-hosted by construction), under `qemu-aarch64` and on real
-hardware (a Raspberry Pi 4, Linux 7.0) at v1.1.4. Full unit parity since v1.1.1, when the four
+**450 assertions total** (312 + 100 + 18 + 20), green at cyrius 6.6.20 on
+x86_64, and under `CYRIUS_DCE=1` — and **430 on aarch64** (312 + 100 + 18; the
+AGNOS suite is x86_64-hosted by construction), under `qemu-aarch64` and on real
+hardware (a Raspberry Pi 4, Linux 7.0) at v1.2.0. Full unit parity since v1.1.1, when the four
 `prlimit64`-gated unit assertions stopped skipping there; the PTY
 harness runs its full set with no `SKIP pty:` token. Grew from 217 at v1.0.2's
 sweep — the additions target proven gaps, not coverage for its own sake: all
@@ -720,7 +750,7 @@ relies on. thoth does not read the sidecar at all; it declares `syscalls` and
   once aarch64 was buildable — the `prlimit64` guard around them used the
   x86_64 number, so the block silently skipped and looked deliberate.
 - ~~The displaced v0.8.0 doc/audit slot~~ — **closed at v0.9.4.** `docs/examples/` holds a runnable, CI-executed example; `docs/architecture/` holds notes 001 and 002; the per-symbol API audit returned zero gaps and is now enforced by `scripts/smoke.sh`.
-- ~~`cyrius lint` untracked-deferral notes in `src/ansi.cyr` / `src/termios.cyr`~~ — **closed at v0.9.3**: the bg-256 twin now cross-references roadmap.md §"Queued: 1.2.0" (candidate 4, whose lift trigger fired in 2026-10 — re-pointed at v1.1.4 after two roadmap reorganizations left it dangling), the macOS termios note cross-references CLAUDE.md's domain rule. All four src modules are deferral-note clean; keep them that way.
+- ~~`cyrius lint` untracked-deferral notes in `src/ansi.cyr` / `src/termios.cyr`~~ — **closed at v0.9.3**: the bg-256 deferral note pointed at the roadmap until `tty_bg_256_buf` shipped in v1.2.0 and the note went with it, the macOS termios note cross-references CLAUDE.md's domain rule. All four src modules are deferral-note clean; keep them that way.
 
 ## Release Process
 

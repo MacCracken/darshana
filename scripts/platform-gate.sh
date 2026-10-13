@@ -74,7 +74,7 @@ $_stray"
 run() {
     lin_report=""; agn_report=""
     for f in "$SRC_DIR"/*.cyr; do
-        r=$(check_gate "$f" '(SYS_IOCTL|TCGETS|TCSETS|TIOCGWINSZ|sys_signalfd|sys_sigprocmask|\bSFD_CLOEXEC)' CYRIUS_TARGET_LINUX "Linux ioctl")
+        r=$(check_gate "$f" '(SYS_IOCTL|sys_ioctl|TCGETS|TCSETS|TIOCGWINSZ|sys_signalfd|sys_sigprocmask|\bSFD_CLOEXEC)' CYRIUS_TARGET_LINUX "Linux ioctl")
         [ -n "$r" ] && lin_report="$lin_report $r"
         r=$(check_gate "$f" '_AGNOS_SYS_[A-Z]+|_AGNOS_SFD_' CYRIUS_TARGET_AGNOS "agnos syscall")
         [ -n "$r" ] && agn_report="$agn_report $r"

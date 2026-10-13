@@ -65,14 +65,10 @@ set -eu
 # darshana is permitted to issue, with the reason it is here.
 # ------------------------------------------------------------------
 #   1                        write(2) to fd 1 — every ANSI escape emitter
-#   SYS_IOCTL                termios TCGETS/TCSETS + TIOCGWINSZ (Linux arm).
-#                            Taken from the stdlib so it is arch-correct:
-#                            16 on x86_64, 29 on aarch64. Do NOT reintroduce
-#                            a local numeric definition (see v0.9.2).
 #   _AGNOS_SYS_WINSIZE       agnos #60, framebuffer console grid
 #   _AGNOS_SYS_SIGPROCMASK   agnos #17, mirshi-emulated
 #   _AGNOS_SYS_SIGNALFD      agnos #18, mirshi-emulated
-ALLOWED_SYSCALLS="1 SYS_IOCTL _AGNOS_SYS_WINSIZE _AGNOS_SYS_SIGPROCMASK _AGNOS_SYS_SIGNALFD"
+ALLOWED_SYSCALLS="1 _AGNOS_SYS_WINSIZE _AGNOS_SYS_SIGPROCMASK _AGNOS_SYS_SIGNALFD"
 
 # Stdlib `sys_*` / file helpers darshana is permitted to call. These are
 # thin syscall wrappers; the same allowlist discipline applies.
@@ -81,7 +77,16 @@ ALLOWED_SYSCALLS="1 SYS_IOCTL _AGNOS_SYS_WINSIZE _AGNOS_SYS_SIGPROCMASK _AGNOS_S
 #                     passthrough — returns -errno, not -1. darshana
 #                     normalizes at its own boundary.
 #   file_close        close the signalfd on teardown
-ALLOWED_WRAPPERS="sys_sigprocmask sys_signalfd file_close"
+#   sys_ioctl         termios TCGETS/TCSETS + TIOCGWINSZ (Linux arm). The
+#                     stdlib wrapper issues its arch-aware SYS_IOCTL (16 on
+#                     x86_64, 29 on aarch64). v1.2.0 — before that darshana
+#                     issued `syscall(SYS_IOCTL, ...)` itself, and SYS_IOCTL
+#                     sat on ALLOWED_SYSCALLS. Do NOT reintroduce a local
+#                     numeric definition (see v0.9.2).
+#   sys_read          read one signalfd record (Linux tty_read_signal, v1.2.0)
+#   sys_read_nb       the AGNOS stdlib's non-blocking read, for the same
+#                     (a blocking agnos sys_read waits on pipes/keyboard)
+ALLOWED_WRAPPERS="sys_sigprocmask sys_signalfd file_close sys_ioctl sys_read sys_read_nb"
 
 # Language builtins and control keywords, which are not calls to audit.
 BUILTINS="syscall load8 load16 load32 load64 store8 store16 store32 store64 if while else return for fn var"
@@ -364,11 +369,11 @@ if [ "${1:-}" = "--self-test" ]; then
     expect_reject "a # inside a string hides the rest of the line (v1.1.4)" "$ALLOW" "$0" "$tmp/src"
     put src probe.cyr 'fn f() { syscall(1 + 58, 0, 0, 0); return 0; }'
     expect_reject "arithmetic first arg  syscall(1 + 58, ...) (v1.1.4)" "EXPRESSION" "$0" "$tmp/src"
-    put src probe.cyr 'fn f(SYS_IOCTL, a) { return syscall(SYS_IOCTL, a, 0, 0); }'
+    put src probe.cyr 'fn f(_AGNOS_SYS_WINSIZE, a) { return syscall(_AGNOS_SYS_WINSIZE, a, 0, 0); }'
     expect_reject "allowlisted name re-bound as a parameter (v1.1.4)" "as a fn parameter" "$0" "$tmp/src"
     put src probe.cyr 'fn f() {
-    var SYS_IOCTL = 59;
-    return syscall(SYS_IOCTL, 0, 0, 0);
+    var _AGNOS_SYS_WINSIZE = 59;
+    return syscall(_AGNOS_SYS_WINSIZE, 0, 0, 0);
 }'
     expect_reject "allowlisted name shadowed by a local (v1.1.4)" "with a local var" "$0" "$tmp/src"
     put src probe.cyr 'fn f() { syscall(1, 1, "x", 1); return 0; }'

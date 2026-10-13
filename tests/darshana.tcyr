@@ -34,6 +34,22 @@ var TCYR_SYS_RT_SIGPENDING = 127;
 var TCYR_SYS_RT_SIGPENDING = 136;
 #endif
 
+# v1.2.0 — one tty_sanitize_buf case: sanitize `in` (len `il`) and require
+# exactly `want` (len `wl`) back.
+fn _san_case(name, in_s, il, mode, keep, want, wl) {
+    var out[64];
+    var n = tty_sanitize_buf(&out, 0, in_s, il, mode, keep);
+    var ok = 1;
+    if (n != wl) { ok = 0; }
+    var k = 0;
+    while (ok == 1 && k < wl) {
+        if (load8(&out + k) != load8(want + k)) { ok = 0; }
+        k = k + 1;
+    }
+    assert(ok, name);
+    return 0;
+}
+
 fn main() {
     alloc_init();
 
@@ -275,6 +291,43 @@ fn main() {
     assert_eq(rp2, 9, "n=0 → 9-byte escape");
     assert_eq(load8(&dbuf + 8), 0x6d, "byte 8 = 'm' terminator");
     assert_eq(load8(&dbuf + 9), 0xAA, "byte past the escape is untouched by the wide store");
+
+    # v1.2.0 — the background twin: `ESC [ 4 8 ; 5 ; N m`, byte for byte.
+    # v1.2.0 — SGR attribute names: values, and that they compose.
+    test_group("ansi.cyr — TTY_SGR_* attributes (v1.2.0)");
+    assert_eq(TTY_SGR_BOLD, 1, "TTY_SGR_BOLD");
+    assert_eq(TTY_SGR_DIM, 2, "TTY_SGR_DIM");
+    assert_eq(TTY_SGR_UNDERLINE, 4, "TTY_SGR_UNDERLINE");
+    assert_eq(TTY_SGR_REVERSE, 7, "TTY_SGR_REVERSE");
+    var sgra[8];
+    assert_eq(tty_sgr_buf(&sgra, 0, TTY_SGR_REVERSE), 4, "tty_sgr_buf(REVERSE) → ESC [ 7 m");
+    assert_eq(load8(&sgra + 2), 0x37, "reverse digit '7'");
+    assert_eq(load8(&sgra + 3), 0x6d, "reverse 'm'");
+
+    test_group("ansi.cyr — tty_bg_256_buf exact bytes (v1.2.0)");
+    var bgb[24];
+    var bgi = 0;
+    while (bgi < 24) { store8(&bgb + bgi, 0xAA); bgi = bgi + 1; }
+    assert_eq(tty_bg_256_buf(&bgb, 0, 255), 11, "bg n=255 → 11 bytes");
+    assert_eq(load8(&bgb + 0),  0x1b, "bg byte 0 = ESC");
+    assert_eq(load8(&bgb + 1),  0x5b, "bg byte 1 = '['");
+    assert_eq(load8(&bgb + 2),  0x34, "bg byte 2 = '4' (background plane)");
+    assert_eq(load8(&bgb + 3),  0x38, "bg byte 3 = '8'");
+    assert_eq(load8(&bgb + 4),  0x3b, "bg byte 4 = ';'");
+    assert_eq(load8(&bgb + 5),  0x35, "bg byte 5 = '5'");
+    assert_eq(load8(&bgb + 6),  0x3b, "bg byte 6 = ';'");
+    assert_eq(load8(&bgb + 7),  0x32, "bg byte 7 = '2'");
+    assert_eq(load8(&bgb + 8),  0x35, "bg byte 8 = '5'");
+    assert_eq(load8(&bgb + 9),  0x35, "bg byte 9 = '5'");
+    assert_eq(load8(&bgb + 10), 0x6d, "bg byte 10 = 'm'");
+    assert_eq(load8(&bgb + 11), 0xAA, "bg: nothing past the escape");
+    assert_eq(tty_bg_256_buf(&bgb, 0, 0), 9, "bg n=0 → 9 bytes");
+    assert_eq(load8(&bgb + 7), 0x30, "bg n=0 digit is '0'");
+    assert_eq(load8(&bgb + 8), 0x6d, "bg n=0 byte 8 = 'm'");
+    assert_eq(tty_bg_256_buf(&bgb, 3, 42), 13, "bg n=42 at pos 3 → returns pos + 10");
+    assert_eq(tty_bg_256_buf(&bgb, 0, 256), 0 - 1, "bg rejects n=256");
+    assert_eq(tty_bg_256_buf(&bgb, 0, 0 - 1), 0 - 1, "bg rejects n=-1");
+    assert_eq(tty_bg_256_buf(&bgb, 0 - 1, 7), 0 - 1, "bg rejects pos=-1");
 
     test_group("ansi.cyr — tty_fg_rgb_buf exact bytes");
     var fbufx[32];
@@ -792,6 +845,71 @@ fn main() {
             "the unblock DELIVERED the queued SIGWINCH (pending bit gone)");
     } else {
         println("  SKIP: signalfd unavailable — pending-delivery check not run");
+    }
+
+    # v1.2.0 — tty_read_signal: the signal number, 0 when nothing is
+    # pending on a non-blocking fd, -1 for anything that is not a signalfd.
+    test_group("v1.2.0 — tty_sanitize_buf");
+    var U = TTY_SANITIZE_UTF8;
+    var L = TTY_SANITIZE_LATIN1;
+    _san_case("plain ASCII is copied unchanged", "hello, world", 12, U, 0, "hello, world", 12);
+    _san_case("ESC becomes '?': a CSI cannot recolour", "a\x1b[31mb", 7, U, 0, "a?[31mb", 7);
+    _san_case("OSC introducer neutralized", "\x1b]0;pwned\x07", 10, U, 0, "?]0;pwned?", 10);
+    _san_case("ESC is never kept, whatever keep says", "\x1b", 1, U, 0 - 1, "?", 1);
+    _san_case("TAB neutralized by default", "a\tb", 3, U, 0, "a?b", 3);
+    _san_case("TAB kept with TTY_KEEP_TAB", "a\tb", 3, U, TTY_KEEP_TAB, "a\tb", 3);
+    _san_case("LF kept with TTY_KEEP_LF, CR still neutralized", "a\r\nb", 4, U, TTY_KEEP_LF, "a?\nb", 4);
+    _san_case("DEL neutralized", "a\x7fb", 3, U, 0, "a?b", 3);
+    _san_case("UTF-8 2-byte (é) kept", "caf\xc3\xa9", 5, U, 0, "caf\xc3\xa9", 5);
+    _san_case("UTF-8 3-byte (€ E2 82 AC) kept", "\xe2\x82\xac", 3, U, 0, "\xe2\x82\xac", 3);
+    _san_case("UTF-8 4-byte (U+1F600) kept", "\xf0\x9f\x98\x80", 4, U, 0, "\xf0\x9f\x98\x80", 4);
+    _san_case("raw 8-bit CSI (0x9B) neutralized, UTF-8 mode", "a\x9b31mb", 6, U, 0, "a?31mb", 6);
+    _san_case("encoded C1 (C2 9B) is ONE '?'", "a\xc2\x9b31mb", 7, U, 0, "a?31mb", 6);
+    _san_case("U+00A0 (C2 A0, not C1) kept", "\xc2\xa0", 2, U, 0, "\xc2\xa0", 2);
+    _san_case("overlong (C0 AF) neutralized byte by byte", "\xc0\xaf", 2, U, 0, "??", 2);
+    _san_case("overlong 3-byte (E0 80 AF) neutralized", "\xe0\x80\xaf", 3, U, 0, "???", 3);
+    _san_case("surrogate (ED A0 80) neutralized", "\xed\xa0\x80", 3, U, 0, "???", 3);
+    _san_case("above U+10FFFF (F4 90 80 80) neutralized", "\xf4\x90\x80\x80", 4, U, 0, "????", 4);
+    _san_case("F5 lead neutralized", "\xf5", 1, U, 0, "?", 1);
+    _san_case("truncated sequence at the end neutralized", "ab\xe2\x82", 4, U, 0, "ab??", 4);
+    _san_case("stray continuation byte neutralized", "a\xa9b", 3, U, 0, "a?b", 3);
+    _san_case("Latin-1: printable high bytes kept", "\xe9\xa0\xff", 3, L, 0, "\xe9\xa0\xff", 3);
+    _san_case("Latin-1: raw C1 neutralized", "a\x9bb", 3, L, 0, "a?b", 3);
+    _san_case("Latin-1: € loses its 0x82 (the documented UTF-8 break)", "\xe2\x82\xac", 3, L, 0, "\xe2?\xac", 3);
+    _san_case("Latin-1: ESC still neutralized", "\x1b[2J", 4, L, 0, "?[2J", 4);
+    var sn_nul[4];
+    store8(&sn_nul, 0x41); store8(&sn_nul + 1, 0); store8(&sn_nul + 2, 0x42);
+    _san_case("NUL neutralized", &sn_nul, 3, U, 0, "A?B", 3);
+    var sn_out[16];
+    assert_eq(tty_sanitize_buf(&sn_out, 0 - 1, "x", 1, U, 0), 0 - 1, "negative pos → -1");
+    assert_eq(tty_sanitize_buf(&sn_out, 0, "x", 0 - 1, U, 0), 0 - 1, "negative len → -1");
+    assert_eq(tty_sanitize_buf(&sn_out, 0, "x", 1, 2, 0), 0 - 1, "unknown mode → -1");
+    assert_eq(tty_sanitize_buf(&sn_out, 5, "abc", 3, U, 0), 8, "returns pos + bytes written");
+    assert_eq(tty_sanitize_buf(&sn_out, 0, "abc", 0, U, 0), 0, "empty input writes nothing, returns pos");
+    # In place: buf + pos == src is documented as safe.
+    var sn_ip[16];
+    store8(&sn_ip, 0x61); store8(&sn_ip + 1, 0xc2); store8(&sn_ip + 2, 0x9b); store8(&sn_ip + 3, 0x62);
+    assert_eq(tty_sanitize_buf(&sn_ip, 0, &sn_ip, 4, U, 0), 3, "in place: encoded C1 shrinks the text by one");
+    assert_eq(load8(&sn_ip + 1) * 256 + load8(&sn_ip + 2), 0x3f62, "in place: 'a?b'");
+
+    test_group("v1.2.0 — tty_read_signal");
+    assert_eq(tty_read_signal(0 - 1), 0 - 1, "read_signal(-1) = -1");
+    assert_eq(tty_read_signal(1 << 32), 0 - 1, "read_signal(2^32) = -1 (out of range)");
+    var rs_dn = sys_open("/dev/null", 2, 0);
+    if (rs_dn >= 0) {
+        assert_eq(tty_read_signal(rs_dn), 0 - 1, "a non-signalfd (/dev/null) = -1, not 0");
+        file_close(rs_dn);
+    }
+    var rs_fd = tty_open_signalfd(TTY_SIGMASK_WINCH);
+    if (rs_fd >= 0) {
+        assert(fd_set_nonblocking(rs_fd) >= 0, "the signalfd can be made non-blocking");
+        assert_eq(tty_read_signal(rs_fd), 0, "nothing pending → 0");
+        sys_kill(sys_getpid(), 28);
+        assert_eq(tty_read_signal(rs_fd), 28, "a raised SIGWINCH reads as 28");
+        assert_eq(tty_read_signal(rs_fd), 0, "consumed — nothing pending again");
+        tty_close_signalfd(rs_fd, TTY_SIGMASK_WINCH);
+    } else {
+        println("  SKIP: signalfd unavailable — tty_read_signal not exercised");
     }
 
     return assert_summary();

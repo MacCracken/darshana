@@ -4,7 +4,7 @@
 **Date**: 2026-08-23
 **Deciders**: project owner
 **Supersedes**: nothing. **Amends**: the pre-v1.0 latitude recorded in CLAUDE.md.
-**Amended**: 2026-10-12 — documentation is never a release by itself (§ Post-1.0 change policy).
+**Amended**: 2026-10-12 — documentation is never a release by itself (§ Post-1.0 change policy); and the symbols added since 1.0 are tabulated (§ Added since 1.0).
 
 ## Context
 
@@ -64,6 +64,30 @@ form of both tables, checked against `dist/darshana.cyr` in **both** directions
 on every CI run: a listed symbol missing from dist fails, and a public symbol in
 dist missing from the list fails. Editing either table means editing that file,
 which is the point.
+
+### Added since 1.0 — frozen from the release that added them
+
+Additive, so each was a minor. Once released, an added symbol is held to
+exactly the freeze above — name, arity, documented return contract, emitted
+bytes, constant value — and breaking it costs a major. `scripts/smoke.sh`
+checks that every name in this table still exists in the bundle, as it does
+for the two v1.0 tables.
+
+| Added in | Symbol |
+|---|---|
+| 1.2.0 | `tty_bg_256_buf` |
+| 1.2.0 | `tty_read_signal` |
+| 1.2.0 | `tty_winsize_or` |
+| 1.2.0 | `tty_raw_nonblock` |
+| 1.2.0 | `tty_sanitize_buf` |
+| 1.2.0 | `TTY_SGR_BOLD` |
+| 1.2.0 | `TTY_SGR_DIM` |
+| 1.2.0 | `TTY_SGR_UNDERLINE` |
+| 1.2.0 | `TTY_SGR_REVERSE` |
+| 1.2.0 | `TTY_SANITIZE_UTF8` |
+| 1.2.0 | `TTY_SANITIZE_LATIN1` |
+| 1.2.0 | `TTY_KEEP_TAB` |
+| 1.2.0 | `TTY_KEEP_LF` |
 
 ### What "frozen" covers
 

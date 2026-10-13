@@ -13,270 +13,118 @@
 ## Where things stand
 
 **The API has been frozen since v1.0.0** — 29 functions and 37 constants,
-enumerated in [ADR 0003](../adr/0003-v1-api-freeze.md) and machine-checked
-bidirectionally on every CI run. Breaking one costs a major bump and its own
-ADR; additive change stays minor.
+enumerated in [ADR 0003](../adr/0003-v1-api-freeze.md) — and **v1.2.0 added
+five functions and eight constants**, frozen from that release in the same
+ADR's "Added since 1.0" table. All of it is machine-checked on every CI run.
+Breaking any of it costs a major bump and its own ADR; additive change stays
+minor.
 
-The library is done in the sense that mattered: it owns its slice, **nine**
-consumers use it, and the surface has stopped moving. Every release since the
-freeze has been maintenance — a hardening sweep, a byte-identical performance
-pass, platform verification, toolchain bumps. **Nothing about the shipped
-surface is outstanding.** The one open item the freeze left — moving the five
-known consumers onto a `1.x` dep — closed by v1.1.3. A survey on 2026-10-12
-found four more (thoth, jalwa, darshini, agora); [`state.md`](state.md)
-§ Consumers has each one's pin.
-
-**v1.1.4 was the third audit sweep** (after v0.9.3 and v1.0.2): five lenses,
-every finding verified before it was acted on. Its record, including what it
-confirmed and deliberately did not take, is [CHANGELOG `[1.1.4]`](../../CHANGELOG.md).
-What it found and deferred because it prices as minor is queued below. **The
-next release is 1.2.0.**
+Nine consumers use it ([`state.md`](state.md) § Consumers). v1.1.4 was the
+third audit sweep; v1.2.0 shipped what that sweep deferred — the measured
+composer speedups (35–49%, byte-identical, proven on a real Pi 4), the
+refactors, and every candidate whose extract-on-second-consumer trigger had
+fired, plus the output sanitizer the owner ruled into the charter
+([ADR 0004](../adr/0004-output-sanitization.md)). **Nothing is scheduled
+next.** What follows is the queue of shapes a future release could take.
 
 Current version, counts and verification status live in [`state.md`](state.md);
 this file does not restate them.
 
-## Queued: 1.2.0 (minor)
+## Next, by bucket
 
-The next release. Additive only — adding a symbol never breaks the freeze.
-Items arrive here from the 1.1.4 sweep (optimizations and standalone `src/`
-refactors) and from consumers (new symbols). The bar for anything claiming
-identical output is proof, not argument: **`tests/identity.tcyr`'s eleven
-digests unchanged** — on x86_64, under qemu-aarch64, and on the Pi 4 for
-anything that changes a store width or alignment. That suite, landed in 1.1.4,
-is the proof; a moved digest is a frozen-surface change, not a test update.
+Nothing here is scheduled; each item says what would schedule it.
 
-**Optimizations, queued by 1.1.4.** Each was prototyped in scratch and matched
-1.1.3 with zero mismatches over its full envelope (return value plus every byte
-of a poisoned canvas), on x86_64 and qemu-aarch64. Medians of 14–28 samples of
-20M calls, pinned to one core, cycc 6.6.20 on Zen3. Nothing here is a consumer
-bottleneck today: the largest measured win for a real consumer is ~70 µs/frame
-for kii at ~10k cells, and anuenue's per-character path only if it drops its
-escape cache.
-
-1. **Write the constant escape prefixes as hex literals** (`ansi.cyr`, the
-   three wide stores). cycc 6.6.20 does not fold `27 | (91 << 8) | …`: ~45
-   instructions per call build the "one store". `tty_fg_256_buf` −17%,
-   `tty_sgr_reset_buf` −19%, `tty_fg_rgb_buf` −6%. No control flow changes.
-2. **Rewrite the shared RGB body, keeping the wrappers.** Literal prefix; one
-   range check `((r | g | b) >> 8) != 0`; a pointer cursor instead of
-   `pos = pos + 1` per byte; exact-width packed stores per field.
-   `tty_fg_rgb_buf` 770.5 → 502.9 ms (−35%); net 31.8 → 18.4 ns. **Needs the Pi**:
-   store16 is new and store32 lands at data-dependent unaligned offsets.
-3. **Optional on top of 2: flatten `tty_fg_rgb_buf` / `tty_bg_rgb_buf`.** −47–49%
-   gross, net 13.8 ns. Re-expands v0.9.3's dedupe; the identity suite is what
-   catches the two copies drifting.
-4. **The same treatment for `tty_fg_256_buf` (−41%) and `tty_sgr_buf` (−31%)** —
-   and write the queued `tty_bg_256_buf` in that shape from the start.
-5. **A `tty_dec_buf` fast path** — small values −47%, 10-digit −40%. Trap: the
-   digit counter overflows at 19 digits; it needs an explicit stop.
-
-*Measured and rejected — do not retry without new evidence:* `#inline` (cycc
-ignores it here); `#regalloc` (no codegen change); copying parameters into
-locals (none); two divisions instead of four (+3%); rodata digit tables (−27%,
-but +2,328 B in every consumer binary, even under DCE); inlining `tty_move`'s
-compose, flattening `tty_cursor_up`/`down`, or inlining `tty_sgr`'s hop (−1% to
-−6.6% end to end — the write(2) dominates); widening `tty_raw`'s 60-byte copy
-(runs once per session); build flags (no change in ranking).
-
-*Correctness traps that look like optimizations:* a packed store that writes
-past the escape (only a whole-canvas check sees it); folding `pos` into the
-channel mask (rejects pos ≥ 256); dropping a composer's own `pos < 0` guard
-(reopens v0.9.3's laundered -1); an 8-byte access at offset 56 of `tty_raw`'s
-60-byte buffer; a fixed 5-digit inline in `tty_move` (silently depends on a
-guard its docstring contemplates loosening).
-
-**Refactors with identical output, queued:**
-
-- **Route the five Linux `ioctl` calls through the stdlib's `sys_ioctl`.** The
-  wrapper is in the vendored 6.6.20 stdlib (`lib/syscalls_linux_common.cyr`),
-  filed by kybernet, and its own comment cites darshana's hand-rolled call.
-  `scripts/syscall-audit.sh`'s allowlist moves with it.
-- **Move the AGNOS arm onto the stdlib's agnos `sys_winsize`,
-  `sys_sigprocmask` and `sys_signalfd`**, which use the same numbers.
-- **Extract the AGNOS peers' pure decode and mask math into `_agnos_*`
-  helpers**, so `tests/agnos.tcyr` can unit-test them. Today they have compile
-  coverage only: in the 1.1.4 audit, swapping AGNOS `tty_winsize`'s rows and
-  cols, or dropping its signalfd rollback, survived every gate.
-- **`tty_raw`'s copy-loop bound to `TIO_BUF_SIZE`**, removing the fourth literal
-  `60` site a resize has to remember.
-
-**Candidate symbols** — consumer-driven, under the house rule (CLAUDE.md) that
-darshana does not anticipate: a primitive is extracted when a **second**
-consumer needs it, as cyim's `tty.cyr` was when chakshu became the second
-caller. The list is evidence, not a commitment. It comes from two surveys on
-2026-10-12: the nine consumer trees, and every other Cyrius project under
-`~/Repos` that does terminal control by hand. Every consumer claim cited here
-was checked against that consumer's source. The **elsewhere** counts are the
-second survey's, sampled rather than exhaustively re-checked: the games'
-`VMIN = 0`, commandress's attributes, kybernet's `TCSETSF`, shakti's echo-off
-and mine-cart's kbscan read were confirmed. **Consumers** are the projects that already depend
-on darshana. **Elsewhere** counts projects that hand-roll the same primitive
-without depending on it; those are potential adopters, not votes under the
-rule. Names and shapes are placeholders to settle with the consumers.
-
-*In charter, and the 2nd-consumer trigger has fired:*
-
-1. **A window size that never reports 0 × 0.** Consumers: 4 — chakshu
-   (`src/tui.cyr:160-172`), cyim (`src/tty.cyr:44-68`), kii
-   (`src/main.cyr:373-393`), bannermanor (`src/layout.cyr:88-104`). Each rejects
-   the "successful zero" and falls back to a default. `tty_winsize` cannot
-   change — its frozen contract is 0 whenever the ioctl succeeds — so this would
-   be a new symbol taking a caller default. The clamps differ (cyim 2×20 to
-   1000×1000, bannermanor up to 4096) and would stay in the consumer. **First
-   decide whether 1.1.4's docstring fix is enough.**
-2. **Named SGR attributes.** Consumers: 3 — chakshu and cyim hand-write
-   `ESC [ 7 m` (reverse video) for selection, chakshu also bold and dim, and
-   thoth reverse, underline and bold. Elsewhere: 5 — cyrius-yeomans-descent,
-   vidya, commandress, ark, kriya. `tty_sgr(code)` already emits every one.
-   What is missing is the names (`TTY_SGR_BOLD = 1`, `TTY_SGR_DIM = 2`,
-   `TTY_SGR_REVERSE = 7`, …), which `tty_sgr`'s docstring anticipated as "the
-   door for future bold / underline". Constants only, and only attributes a
-   consumer uses. Two adjacent asks come from elsewhere only, so they do not
-   meet the rule yet: 16-color background constants (`TTY_BG_*`, 40–47 /
-   100–107; commandress, vidya), and a compound `CSI a;b;c m` composer
-   (commandress, cyrius-yeomans-descent).
-3. **Reading a signalfd record.** Consumers: 3 — chakshu (`src/tui.cyr:1872`,
-   `:1881`), cyim (`src/main.cyr:420`), anuenue (`src/animate.cyr:455-465`).
-   Each reads the 128-byte `signalfd_siginfo` by hand. darshana opens and
-   closes signalfds but leaves every caller to read them. A
-   `tty_read_signal(fd)`-shaped primitive — the signal number, 0 when nothing is
-   pending on a non-blocking fd, -1 on error — completes the existing pair; the
-   AGNOS peer reads mirshi's emulated record.
-4. **`tty_bg_256_buf`** — the 256-color background twin of `tty_fg_256_buf`,
-   deferred under the rule since v0.5.3. Consumers: 2 — kii's local
-   `_emit_bg_256_buf` (`src/emit.cyr:63-96`), whose comment names the lift
-   trigger (*"once a second consumer in the AGNOS surface needs it, lift to
-   darshana"*), and now thoth's `_ui_bg_escape` (`src/ui.cyr:217+`), which emits
-   `48;5;N`. **The trigger has fired.**
-5. **Sanitizing untrusted bytes before they reach the terminal** — brought into
-   the charter 2026-10-12 (owner ruling). It is output-side terminal safety,
-   the one thing every screen-owning tool needs and each gets subtly different
-   alone. The most-duplicated terminal primitive found: consumers 7 (chakshu,
-   cyim, kii, bannermanor, thoth, agora, darshini), elsewhere 9 (owl,
-   commandress, sit, agnoshi, kybernet, iam, cyrius-yeomans-descent, kriya,
-   puka, plus cyrius's own `cbt`). The four consumer rules read in full all
-   differ:
-   - chakshu: C0 and DEL become `?`; bytes ≥ 0x80 pass.
-   - cyim: C0 except TAB becomes `^X`, DEL `^?`; bytes ≥ 0x80 pass.
-   - kii (`src/cli.cyr:114-167`): rejects the whole string on C0 (except
-     TAB/LF) or DEL, and walks the UTF-8 structure to reject encoded C1
-     (`C2 80`–`C2 9F`), stray continuation bytes, overlong leads and truncated
-     sequences. Its comment records why a flat 0x80–0x9F test is wrong (`ч` is
-     `D1 87`). The strictest rule, and the obvious starting point.
-   - bannermanor: C0, DEL and every raw 0x80–0x9F byte become a space —
-     deliberately, because its font schema is ASCII-only and a Latin-1
-     terminal reads those bytes as controls.
-
-   **To settle with the consumers before writing it:**
-   - *UTF-8 versus Latin-1.* Raw 0x80–0x9F are also ordinary UTF-8
-     continuation bytes (`€` is `E2 82 AC`), so bannermanor's rule cannot be
-     the general one without breaking text. That rule is right for a Latin-1
-     terminal and wrong for a UTF-8 one. A UTF-8-aware rule keeps valid
-     sequences, neutralizes encoded C1 (U+0080–U+009F) and has to decide what
-     a malformed or stray byte becomes. One function, two, or a mode argument.
-   - *Replace or reject.* Three consumers replace (`?`, `^X`, space); kii
-     rejects the string outright. That suggests a replacing composer plus a
-     predicate.
-   - *Which C0 bytes the caller may keep.* TAB in a table cell, LF in a
-     multi-line log.
-   - *Byte budget.* `_buf` composers take no capacity argument, so the budget
-     has to be stated as a function of the input length: 1× for a one-byte
-     replacement, 2× for caret notation, 3× if U+FFFD stands in for a byte.
-
-   No syscall, so no platform gate: it is platform-independent, like
-   `ansi.cyr`. It is a parser over hostile input, so it ships with the
-   `cyrius fuzz --poison` harness 1.1.4 builds, asserting at least that no
-   neutralized byte survives, that valid UTF-8 in gives valid UTF-8 out, and
-   that sanitizing twice changes nothing.
-
-*In charter, one consumer — but that consumer depends on a private symbol:*
-
-6. **Non-blocking raw mode (VMIN = 0, VTIME = 0).** Consumers: 1 — but thoth
-   gets it by calling darshana's **private** `_tty_apply_raw_flags`
-   (`src/intr.cyr:50`) and overriding the two bytes after it. That makes a
-   non-frozen internal load-bearing for a consumer. Elsewhere: 5 — cyrius-doom,
-   cyrius-bb, cyrius-polyomino, encom-hits, mirshi. All copy the same pattern
-   to keep a game or poll loop from blocking on `read(0)`. Below the rule's
-   count, but the private-symbol dependency is a reason to decide it on purpose
-   rather than by drift. It is a termios setting, not input decoding, so the
-   2026-10-12 ruling that put decoding out of scope does not reach it.
-
-*No consumer yet, or one — wait for a second:*
-
-- **Echo-off / password input** — elsewhere: 2 (shakti; kybernet, which also
-  flushes pending input with `TCSETSF`). Termios-shaped, so in charter, but no
-  consumer has asked.
-- **Input flush (`TCIFLUSH`)** — chakshu only (`src/tui.cyr:495-496`, `:520`).
-- **`TTY_SIGMASK_PIPE`** (Linux 0x1000 / AGNOS 0x2000), so a consumer can route
-  SIGPIPE through its signalfd instead of dying on a broken output pipe —
-  suggested by the 1.1.4 security lens alongside the teardown reorder. No
-  consumer has asked; ignoring SIGPIPE works today.
-- **thoth-only screen controls:** cursor save/restore (`ESC 7` / `ESC 8`), the
-  DECSTBM scroll region, OSC 0 window title, OSC 52 clipboard, and `_buf` forms
-  of cursor-move and clear-to-EOL. thoth also hand-rolls mouse reporting and
-  bracketed paste, which **Out of scope** below parks "until a consumer asks". A
-  consumer now uses them; under the rule they still wait for a second.
-
-*Hand-rolled, but already ruled out of scope:* key-input decoding (4
-consumers, 6 elsewhere) and an AGNOS kbscan reader (2 consumers), both ruled
-out 2026-10-12 — see **Out of scope**. `NO_COLOR` / `COLORTERM` /
-`TERM` color negotiation (chakshu, anuenue, bannermanor, thoth; owl and kriya
-elsewhere) and the RGB→256/16 quantizers (anuenue) fall under color management.
-The stdin + signalfd epoll loop (chakshu, cyim) is a render loop. EINTR-safe
-write-all loops (kii, anuenue) belong in the stdlib. PTY plumbing and
-`TIOCSWINSZ` (shakti, puka) serve terminal *emulators and relays*, not tools
-that take over a screen.
-
-**Always eligible:** a new platform peer (additive by ADR 0003 — the AGNOS arm
-arrived this way across v0.8.0–v0.9.0), and anything a consumer asks for.
-
-## Later 1.1.x — patch candidates
-
-Confirmed in the 1.1.4 sweep and patch-shaped, but not taken in it:
+### 1.2.x — patch
 
 - **Run `tests/agnos.tcyr`'s live half under mirshi in CI.** The AGNOS peers
   that issue agnos syscalls are uncallable on a Linux host, so they have compile
-  coverage only. The 1.1.4 correctness lens ran them under mirshi 1.11.3 locally
-  — winsize, isatty, raw/cooked, both signalfds — 15/15. Wiring it needs mirshi
-  available in CI.
+  coverage, plus the pure decode `_agnos_winsize_unpack` (v1.2.0). The signalfd
+  peers cannot be meaningfully exercised under mirshi until mirshi delivers a
+  blocked signal through a signalfd, the first defect filed in its roadmap —
+  so this waits on mirshi.
+
+### 1.x.0 — minor (additive; consumer-driven)
+
+The house rule (CLAUDE.md) is that darshana does not anticipate: a primitive is
+extracted when a **second** consumer needs it. Evidence from the 2026-10-12
+surveys; **consumers** depend on darshana, **elsewhere** counts projects that
+hand-roll the primitive without it (potential adopters, not votes).
+
+*One consumer so far — wait for a second:*
+
+- **Input flush (`TCIFLUSH`)** — chakshu only (`src/tui.cyr:495-496`, `:520`).
+- **thoth-only screen controls:** cursor save/restore (`ESC 7` / `ESC 8`), the
+  DECSTBM scroll region, OSC 0 window title, OSC 52 clipboard, and `_buf` forms
+  of cursor-move and clear-to-EOL. thoth also enables mouse reporting and
+  bracketed paste; their *reports* are input and ruled out (see Out of scope),
+  so only the enable/disable escapes could ever qualify.
+
+*No consumer yet:*
+
+- **16-color background constants** (`TTY_BG_*`, 40–47 / 100–107) and a
+  **compound `CSI a;b;c m` composer** — elsewhere: commandress, vidya,
+  cyrius-yeomans-descent. `tty_sgr(4x)` works today.
+- **Echo-off / password input** — elsewhere: shakti; kybernet (which also
+  flushes pending input with `TCSETSF`). Termios-shaped, so in charter.
+- **`TTY_SIGMASK_PIPE`** (Linux 0x1000 / AGNOS 0x2000), so a consumer can route
+  SIGPIPE through its signalfd; ignoring SIGPIPE works today.
+- **A reject-only sanitizer predicate** (`tty_has_ctl`) — kii's semantics. ADR
+  0004 records why the composer shipped without it; an addition if a second
+  consumer wants it.
+
+*Measured and set aside in 1.2.0 — revisit only with new evidence:*
+
+- **Flattening `tty_fg_rgb_buf` / `tty_bg_rgb_buf`** into two copies of the
+  packed body: ~4–5 ns more per call, for two hand-maintained copies. Worth it
+  only if a consumer becomes bound by the composer (anuenue dropping its escape
+  cache is the plausible case). `tests/identity.tcyr` is what would catch the
+  copies drifting.
+- **The AGNOS arm on the stdlib's agnos `sys_sigprocmask` / `sys_signalfd`**:
+  blocked by the platform gate, which polices those names as Linux-only tokens.
+
+*Ruled out of scope:* key-input decoding and an AGNOS kbscan reader (see Out of
+scope); `NO_COLOR` / `COLORTERM` / `TERM` negotiation and color quantizers
+(color management); the stdin + signalfd epoll loop (a render loop); EINTR-safe
+write-all loops (the stdlib's); PTY plumbing and `TIOCSWINSZ` (terminal
+emulators and relays, not screen-owning tools).
+
+**Always eligible:** a new platform peer (additive by ADR 0003), and anything a
+consumer asks for.
 
 ## Upstream — not darshana work
 
-Found by the 1.1.4 sweep in the toolchain and emulator darshana builds on,
-recorded for their owners:
+Found while working on darshana, recorded for their owners:
 
-- **cyrius stdlib, agnos `sys_close(-1)`** treats -1 as a tagged socket (bit
-  0x40000000 is set in -1) and frees socket slot 7. darshana's AGNOS
-  `tty_close_signalfd` guards against it since 1.1.4.
-- **mirshi** never frees a closed signalfd's slot (its documented v1.6.0 limit;
-  8 per process), so the 9th `tty_open_signalfd` under mirshi fails.
-- **The agnos kernel's sigprocmask** stores any `how` other than 0 and 1
-  verbatim, while mirshi names SIG_SETMASK — the two disagree on `how = 2`.
-- **cyrius `lib/syscalls_linux_common.cyr`** (≈:179) repeats darshana's old
-  "no 16→29 ESYSXLAT row" claim; 6.5.38 added that row.
-- **cyrius 6.6.20 `cyrius deps`** does not prune `cyrius.lock` when a stdlib
-  leaf is removed, and `cyrius lib sync --dry-run` prints pointer values
+- **mirshi** — five signal-band defects, **filed in mirshi's roadmap**
+  (2026-10-12), two confirmed by run: a signalfd never delivers a blocked signal
+  (so darshana's AGNOS signalfd receives nothing under mirshi), host signals
+  bypass the agnos signal model, the `read#5` record differs from the kernel's,
+  a closed signalfd's slot is never freed, and `sigprocmask` edge cases diverge.
+- **cyrius stdlib**: agnos `sys_close(-1)` frees socket slot 7 (darshana guards
+  since 1.1.4); `lib/syscalls_linux_common.cyr` repeats darshana's old "no
+  16→29 ESYSXLAT row" claim; cyrius 6.6.20 `cyrius deps` does not prune
+  `cyrius.lock` when a leaf is removed, and `lib sync --dry-run` prints pointers
   instead of file names.
+- **The agnos kernel** never raises SIGWINCH, so a `TTY_SIGMASK_WINCH` signalfd
+  never fires there; consumers poll `tty_winsize`.
 
 ## Upgrade notes for consumers
 
-What a consumer bumping its darshana dep should know. Consumer-specific
-issues live in each consumer's own roadmap, not here.
+What a consumer bumping its darshana dep should know. Consumer-specific issues
+live in each consumer's own roadmap, not here.
 
-- **1.1.4 needs no consumer code change.** No frozen name, arity, return
-  contract, emitted byte or constant moved — `tests/identity.tcyr`'s digests are
-  identical to every release since v1.0.0. Two inputs that were already
-  outside the documented contract now behave as documented: an fd outside
-  [0, 0x7FFFFFFF] is rejected by the four Linux fd-taking functions instead of
-  aliasing another descriptor, and the AGNOS `tty_close_signalfd` no longer
-  passes a negative fd to close.
-- **Reorder your teardown** to ADR 0002's amended sequence: `tty_cooked()`
-  first, `tty_close_signalfd()` last. The old order (cooked fourth) can leave the
-  terminal raw when fd 1 is a broken pipe.
-- **Live signalfds need disjoint masks**, and a child spawned while one is open
-  inherits its signal block — both now documented in the docstrings.
-- **1.1.3 needed no consumer code change either.** `cyrius deps` resolves two
-  stdlib leaves from darshana's sidecar instead of six.
+- **1.2.0 needs no consumer code change.** It is additive, and every byte darshana
+  already emitted is unchanged. What it offers: `tty_sanitize_buf` in place of a
+  hand-rolled control-byte scrubber (pick the mode by the terminal you write to);
+  `tty_read_signal` in place of reading `signalfd_siginfo`; `tty_winsize_or` in
+  place of a 0 × 0 guard; `tty_raw_nonblock` in place of patching VMIN / VTIME;
+  `tty_bg_256_buf`; and `TTY_SGR_*` names for bold, dim, underline and reverse.
+- **1.1.4 needed none either**, but changed the recommended teardown: ADR 0002's
+  amended sequence puts `tty_cooked()` first and `tty_close_signalfd()` last,
+  because the old order can leave the terminal raw when fd 1 is a broken pipe.
+  Live signalfds need disjoint masks, and a child spawned while one is open
+  inherits its signal block. An fd outside [0, 0x7FFFFFFF] is rejected instead
+  of aliasing another descriptor.
 
 ## 2.0.0 — major
 

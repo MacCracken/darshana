@@ -135,6 +135,17 @@ var TTY_FG_BRIGHT_MAGENTA = 95;
 var TTY_FG_BRIGHT_CYAN    = 96;
 var TTY_FG_BRIGHT_WHITE   = 97;
 
+# SGR attribute codes (v1.2.0) — pass them to `tty_sgr` / `tty_sgr_buf`,
+# e.g. `tty_sgr(TTY_SGR_REVERSE)` for a selection highlight. Only the
+# attributes consumers actually hand-wrote: bold and dim (chakshu,
+# thoth), underline (thoth), reverse video (chakshu, cyim, thoth).
+# `tty_sgr_reset()` clears all of them; there are no per-attribute "off"
+# codes because no consumer uses one.
+var TTY_SGR_BOLD      = 1;
+var TTY_SGR_DIM       = 2;
+var TTY_SGR_UNDERLINE = 4;
+var TTY_SGR_REVERSE   = 7;
+
 # Reset all SGR attributes (color, bold, underline, etc.). CSI 0m.
 # Cheaper than tty_sgr(0) — no decimal formatting.
 # Returns 0.
@@ -170,8 +181,36 @@ fn tty_sgr_reset() {
 # negative on success). Same fail-before-emit discipline as
 # `tty_sgr`'s `[0, 999]` guard added in v0.4.0.
 
-# ---- digit encoding in the composers (v1.1.0) -----------------------
+# ---- digit encoding in the composers (v1.1.0, rewritten v1.2.0) -----
 #
+# v1.2.0: every composer now writes its constant prefix as ONE literal
+# store and each digit field — digits plus its ';' or 'm' — as exact-width
+# packed stores (store32 for "ddd;", store16 + store8 for "dd;", store16
+# for "d;") through a pointer cursor. Measured on the landed code against
+# v1.1.4, 20M calls, whole process, median of 5: `tty_fg_rgb_buf`
+# 758 -> 486 ms (-36%), `tty_fg_256_buf` 326 -> 191 (-41%), `tty_sgr_buf`
+# 307 -> 201 (-35%). tests/identity.tcyr proves
+# the bytes and returns identical over every input, on x86_64, qemu and a
+# real Pi 4 (the new store16 and the data-dependent store32 offsets are
+# unaligned; ARM was what licensed v1.1.0's store64 too).
+#
+# Why it was slower before: cycc 6.6.20 does NOT fold
+# `27 | (91 << 8) | (layer << 16) | ...` — about 45 instructions per
+# call built the "one store" v1.1.0 introduced. Write such constants as
+# hex literals. And only body locals are register-allocated, never
+# parameters, which is why a pointer cursor `p` beats `pos = pos + 1`.
+#
+# ⛔ Traps the 1.1.4 measurement recorded, so 1.2.0 did not retry them:
+# a packed store must never write past the escape (a `store32` of "7m??"
+# for the last field passes every length test; only identity.tcyr's
+# whole-canvas check sees it); `((pos | r | g | b) >> 8)` wrongly rejects
+# pos >= 256; and each composer keeps its own `pos < 0` guard even though
+# internal callers pass constants — dropping it reopens v0.9.3's laundered
+# -1. Flattening `tty_fg_rgb_buf` / `tty_bg_rgb_buf` into two copies of
+# this body would save another ~4-5 ns per call and was deliberately not
+# taken: two hand-maintained copies for a gain no consumer is bound by.
+#
+# The v1.1.0 history below still holds.
 # `_ansi_emit_u8` is GONE. It was darshana's second decimal emitter —
 # `tty_dec_buf` (cursor.cyr) is the first — and v1.0.2 recorded that
 # collapsing the two was a byte-identical refactor worth taking at the
@@ -181,9 +220,11 @@ fn tty_sgr_reset() {
 # Delegating the five call sites to `tty_dec_buf` is byte-identical
 # (proven exhaustively) and 32-45% SLOWER: 20M `tty_fg_rgb_buf` calls
 # went 990 ms -> 1418 ms, `tty_fg_256_buf` 458 -> 605, `tty_sgr_buf`
-# 353 -> 511 (the CHANGELOG [1.1.0] table; median of 7). `tty_dec_buf` is a general i64 formatter — it reverses
-# digits through a 24-byte scratch array and copies them back — where
-# these composers only ever emit 1-3 digits.
+# 353 -> 511 (the CHANGELOG [1.1.0] table; median of 7). `tty_dec_buf`
+# was a general i64 formatter — it reversed digits through a 24-byte
+# scratch array and copied them back — where these composers only ever
+# emit 1-3 digits. (v1.2.0 gave `tty_dec_buf` a 1-3 digit fast path, but
+# the call itself is the cost, so delegation would still lose.)
 #
 # So the duplication was removed by ELIMINATION instead: the 1-3 digit
 # sequence is written inline at each of the five sites, and the shared
@@ -222,56 +263,49 @@ fn tty_sgr_reset() {
 # short-circuits, no partial write occurs. A negative incoming `pos`
 # is rejected the same way.
 #
-# v1.1.0 rewrote the body for speed without moving a byte: the 7-byte
-# fixed prefix is one store, and the three digit emissions are inline
-# (see the section note above). 20M calls: 990 ms -> 696 ms, -30%.
+# v1.1.0 rewrote the body for speed without moving a byte (990 -> 696 ms
+# per 20M calls); v1.2.0 rewrote it again — literal prefix, one range
+# test, a pointer cursor and packed field stores (see the section note
+# above): 758 -> 486 ms per 20M calls against v1.1.4, -36%.
 fn _ansi_rgb_buf(buf, pos, layer, r, g, b) {
     if (pos < 0) { return 0 - 1; }
-    if (r < 0 || r > 255) { return 0 - 1; }
-    if (g < 0 || g > 255) { return 0 - 1; }
-    if (b < 0 || b > 255) { return 0 - 1; }
-    # `ESC [ <layer> 8 ; 2 ;` in one unaligned 8-byte store instead of
-    # seven store8+increment pairs. The 8th byte is always overwritten
-    # immediately by the first digit of R: the shortest escape this
-    # composer can produce is 13 bytes, so [pos, pos+8) is strictly
-    # inside it and nothing outside the result is touched.
-    store64(buf + pos, 27 | (91 << 8) | (layer << 16) | (56 << 24)
-                          | (59 << 32) | (50 << 40) | (59 << 48));
-    pos = pos + 7;
+    # One test for all three channels: `>>` zero-fills in cycc, so a
+    # negative channel has high bits set too. Exact over all of i64.
+    if (((r | g | b) >> 8) != 0) { return 0 - 1; }
+    var p = buf + pos;
+    # `ESC [ <layer> 8 ; 2 ;` + one spare byte, as a single literal store.
+    # The spare 8th byte is always overwritten by R's field, which starts
+    # at p + 7 and is at least 2 bytes wide.
+    store64(p, 0x003B323B38005B1B | (layer << 16));
+    p = p + 7;
+    var q = 0;
+    # Each field is written with exact-width stores — digits plus its
+    # terminator (';', or 'm' for B) — so nothing lands past the escape.
     if (r >= 100) {
-        store8(buf + pos, 48 + r / 100);          pos = pos + 1;
-        store8(buf + pos, 48 + (r / 10) % 10);    pos = pos + 1;
-        store8(buf + pos, 48 + r % 10);           pos = pos + 1;
+        q = r / 10;
+        store32(p, 0x3B303030 + r / 100 + ((q % 10) << 8) + ((r % 10) << 16)); p = p + 4;
     } else { if (r >= 10) {
-            store8(buf + pos, 48 + r / 10);       pos = pos + 1;
-            store8(buf + pos, 48 + r % 10);       pos = pos + 1;
+            store16(p, 0x3030 + r / 10 + ((r % 10) << 8)); store8(p + 2, 59); p = p + 3;
         } else {
-            store8(buf + pos, 48 + r);            pos = pos + 1;
+            store16(p, 0x3B30 + r); p = p + 2;
         } }
-    store8(buf + pos, 59);    pos = pos + 1;      # ';'
     if (g >= 100) {
-        store8(buf + pos, 48 + g / 100);          pos = pos + 1;
-        store8(buf + pos, 48 + (g / 10) % 10);    pos = pos + 1;
-        store8(buf + pos, 48 + g % 10);           pos = pos + 1;
+        q = g / 10;
+        store32(p, 0x3B303030 + g / 100 + ((q % 10) << 8) + ((g % 10) << 16)); p = p + 4;
     } else { if (g >= 10) {
-            store8(buf + pos, 48 + g / 10);       pos = pos + 1;
-            store8(buf + pos, 48 + g % 10);       pos = pos + 1;
+            store16(p, 0x3030 + g / 10 + ((g % 10) << 8)); store8(p + 2, 59); p = p + 3;
         } else {
-            store8(buf + pos, 48 + g);            pos = pos + 1;
+            store16(p, 0x3B30 + g); p = p + 2;
         } }
-    store8(buf + pos, 59);    pos = pos + 1;      # ';'
     if (b >= 100) {
-        store8(buf + pos, 48 + b / 100);          pos = pos + 1;
-        store8(buf + pos, 48 + (b / 10) % 10);    pos = pos + 1;
-        store8(buf + pos, 48 + b % 10);           pos = pos + 1;
+        q = b / 10;
+        store32(p, 0x6D303030 + b / 100 + ((q % 10) << 8) + ((b % 10) << 16)); p = p + 4;
     } else { if (b >= 10) {
-            store8(buf + pos, 48 + b / 10);       pos = pos + 1;
-            store8(buf + pos, 48 + b % 10);       pos = pos + 1;
+            store16(p, 0x3030 + b / 10 + ((b % 10) << 8)); store8(p + 2, 109); p = p + 3;
         } else {
-            store8(buf + pos, 48 + b);            pos = pos + 1;
+            store16(p, 0x6D30 + b); p = p + 2;
         } }
-    store8(buf + pos, 109);   pos = pos + 1;      # 'm'
-    return pos;
+    return p - buf;
 }
 
 # One-shot writer shared by `tty_fg_rgb` / `tty_bg_rgb`. Composes into
@@ -311,7 +345,7 @@ fn tty_sgr_reset_buf(buf, pos) {
     # `ESC [ 0 m` in one unaligned 4-byte store. Unlike the two above
     # this writes EXACTLY the bytes it produces — no 8th-byte argument
     # is needed, because the escape is exactly 4 bytes long.
-    store32(buf + pos, 27 | (91 << 8) | (48 << 16) | (109 << 24));
+    store32(buf + pos, 0x6D305B1B);      # ESC [ 0 m, as one literal (v1.2.0)
     return pos + 4;
 }
 
@@ -328,20 +362,20 @@ fn tty_sgr_reset_buf(buf, pos) {
 fn tty_sgr_buf(buf, pos, code) {
     if (pos < 0) { return 0 - 1; }
     if (code < 0 || code > 999) { return 0 - 1; }
-    store8(buf + pos, 27); pos = pos + 1;        # ESC
-    store8(buf + pos, 91); pos = pos + 1;        # '['
+    var p = buf + pos;
     if (code >= 100) {
-        store8(buf + pos, 48 + code / 100);          pos = pos + 1;
-        store8(buf + pos, 48 + (code / 10) % 10);    pos = pos + 1;
-        store8(buf + pos, 48 + code % 10);           pos = pos + 1;
-    } else { if (code >= 10) {
-            store8(buf + pos, 48 + code / 10);       pos = pos + 1;
-            store8(buf + pos, 48 + code % 10);       pos = pos + 1;
-        } else {
-            store8(buf + pos, 48 + code);            pos = pos + 1;
-        } }
-    store8(buf + pos, 109); pos = pos + 1;       # 'm'
-    return pos;
+        var q = code / 10;
+        store16(p, 0x5B1B);                                           # ESC [
+        store32(p + 2, 0x6D303030 + code / 100 + ((q % 10) << 8) + ((code % 10) << 16));
+        return pos + 6;
+    }
+    if (code >= 10) {
+        store32(p, 0x30305B1B + ((code / 10) << 16) + ((code % 10) << 24));
+        store8(p + 4, 109);                                           # 'm'
+        return pos + 5;
+    }
+    store32(p, 0x6D305B1B + (code << 16));                            # ESC [ d m
+    return pos + 4;
 }
 
 # ---- 256-color (8-bit indexed) SGR helpers --------------------------
@@ -355,40 +389,54 @@ fn tty_sgr_buf(buf, pos, code) {
 #
 # Escape layout: `CSI 38;5;<N>m` — 9 bytes ("\x1b[38;5;0m") at the
 # short end, 11 bytes ("\x1b[38;5;255m") at the long end. Callers
-# must budget 11 bytes per emission. (No one-shot `tty_fg_256`
-# wrapper has shipped — this tier is buffer-composing only.)
+# must budget 11 bytes per emission. Background (`48;5;N`) has the
+# same envelope. (No one-shot `tty_fg_256` wrapper has shipped — this
+# tier is buffer-composing only.)
+
+# Shared body for the 256-color composers (v1.2.0, when the background
+# twin landed). `layer` is the ASCII digit selecting the plane — 51 ('3')
+# foreground, 52 ('4') background — exactly as `_ansi_rgb_buf` does for
+# the 24-bit pair: the two escapes differ by that one byte. Returns the
+# new write position, or -1 if `n` is outside [0, 255] or `pos` is
+# negative; a rejection writes nothing.
+fn _ansi_256_buf(buf, pos, layer, n) {
+    if (pos < 0) { return 0 - 1; }
+    if ((n >> 8) != 0) { return 0 - 1; }         # n outside [0, 255], negatives included
+    var p = buf + pos;
+    # `ESC [ <layer> 8 ; 5 ;` + a spare byte; the index field starts at
+    # p + 7 and is at least 2 bytes wide, so it always overwrites the spare.
+    store64(p, 0x003B353B38005B1B | (layer << 16));
+    if (n >= 100) {
+        var q = n / 10;
+        store32(p + 7, 0x6D303030 + n / 100 + ((q % 10) << 8) + ((n % 10) << 16));
+        return pos + 11;
+    }
+    if (n >= 10) {
+        store16(p + 7, 0x3030 + n / 10 + ((n % 10) << 8)); store8(p + 9, 109);
+        return pos + 10;
+    }
+    store16(p + 7, 0x6D30 + n);
+    return pos + 9;
+}
 
 # Append `CSI 38;5;Nm` to `buf` at `pos`. Returns new `pos`, or -1
 # if `n` is outside [0, 255], or -1 if `pos` is negative.
 # Buffer-targeting primitive (no fd 1 write); use it inside a frame
 # builder. Byte budget: up to 11.
-#
-# The background twin (`tty_bg_256_buf`) is deferred — see roadmap.md
-# §"Queued: 1.2.0" (candidate 4) and CHANGELOG v0.5.3 — under the same
-# extract-on-2nd-consumer discipline as v0.5.1's bg/fg split. kii
-# carries a local `_emit_bg_256_buf` as consumer #1, and thoth now
-# hand-rolls the same escape, so the lift is queued for 1.2.0.
 fn tty_fg_256_buf(buf, pos, n) {
-    if (pos < 0) { return 0 - 1; }
-    if (n < 0 || n > 255) { return 0 - 1; }
-    # `ESC [ 3 8 ; 5 ;` in one unaligned 8-byte store. Same argument as
-    # _ansi_rgb_buf: the shortest escape here is 9 bytes, so the 8th
-    # byte is inside the result and is overwritten by the first digit.
-    store64(buf + pos, 27 | (91 << 8) | (51 << 16) | (56 << 24)
-                          | (59 << 32) | (53 << 40) | (59 << 48));
-    pos = pos + 7;
-    if (n >= 100) {
-        store8(buf + pos, 48 + n / 100);          pos = pos + 1;
-        store8(buf + pos, 48 + (n / 10) % 10);    pos = pos + 1;
-        store8(buf + pos, 48 + n % 10);           pos = pos + 1;
-    } else { if (n >= 10) {
-            store8(buf + pos, 48 + n / 10);       pos = pos + 1;
-            store8(buf + pos, 48 + n % 10);       pos = pos + 1;
-        } else {
-            store8(buf + pos, 48 + n);            pos = pos + 1;
-        } }
-    store8(buf + pos, 109); pos = pos + 1;        # 'm'
-    return pos;
+    return _ansi_256_buf(buf, pos, 51, n);           # '3' = foreground
+}
+
+# Append `CSI 48;5;Nm` to `buf` at `pos` — the BACKGROUND twin of
+# `tty_fg_256_buf`. Same contract, same budget: returns the new write
+# position, or -1 if `n` is outside [0, 255] or `pos` is negative.
+# Byte budget: up to 11.
+#
+# v1.2.0. Deferred since v0.5.3 under the extract-on-2nd-consumer rule:
+# kii carried a local `_emit_bg_256_buf` as consumer #1, and its own
+# comment named the trigger; thoth's `_ui_bg_escape` became the second.
+fn tty_bg_256_buf(buf, pos, n) {
+    return _ansi_256_buf(buf, pos, 52, n);           # '4' = background
 }
 
 # Set foreground to 24-bit (r,g,b), writing the escape directly to

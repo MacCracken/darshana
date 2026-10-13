@@ -58,7 +58,8 @@ Per-consumer pins are in [`state.md`](docs/development/state.md) § Consumers.
 | ANSI escape helpers (alt-screen, clear, cursor) | Widget toolkit / form controls |
 | Cursor positioning + visibility | Render loop + frame scheduling |
 | Window-size query (`TIOCGWINSZ` on Linux, `winsize`#60 on AGNOS) | Event/input dispatch system |
-| Signal delivery via `signalfd` — `tty_open_signalfd` / `tty_close_signalfd` + `TTY_SIGMASK_*` | Tab/window/pane management |
+| Signal delivery via `signalfd` — `tty_open_signalfd` / `tty_close_signalfd` / `tty_read_signal` + `TTY_SIGMASK_*` | Tab/window/pane management |
+| Making untrusted text safe for the terminal — `tty_sanitize_buf`, UTF-8 or Latin-1 ([ADR 0004](docs/adr/0004-output-sanitization.md)) | |
 | | Signal-*handler* installation (`sigaction`) — routed through `signalfd` instead; see [ADR 0002](docs/adr/0002-state-restore-posture.md) |
 | | Key-input decoding, and an AGNOS raw-keyboard reader — ruled out 2026-10-12; see [roadmap § Out of scope](docs/development/roadmap.md) |
 

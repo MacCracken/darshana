@@ -166,24 +166,30 @@ fn _id_rgb_group(layer) {
     return h;
 }
 
-fn _id_fg256(h, pos, n) {
+# `layer` 0 = tty_fg_256_buf, 1 = tty_bg_256_buf (v1.2.0). Budget 9..11.
+fn _id_c256(h, layer, pos, n) {
     _id_poison();
-    var ret = tty_fg_256_buf(&_id_region + ID_BASE, pos, n);
+    var ret = 0;
+    if (layer == 0) { ret = tty_fg_256_buf(&_id_region + ID_BASE, pos, n); }
+    else            { ret = tty_bg_256_buf(&_id_region + ID_BASE, pos, n); }
     return _id_account(h, pos, ret, 9, 11);
 }
 
-fn _id_fg256_group() {
+# The fg seed (ID_SEED + 2) is unchanged from v1.1.4, so its digest is
+# the same frozen value; bg's seed is new in v1.2.0.
+fn _id_c256_group(layer) {
     var h = ID_SEED + 2;
+    if (layer == 1) { h = ID_SEED + 11; }
     var pos = 0;
     while (pos < 8) {
         var n = 0 - 1;
-        while (n <= 256) { h = _id_fg256(h, pos, n); n = n + 1; }
-        h = _id_fg256(h, pos, ID_IMIN);
-        h = _id_fg256(h, pos, ID_IMAX);
+        while (n <= 256) { h = _id_c256(h, layer, pos, n); n = n + 1; }
+        h = _id_c256(h, layer, pos, ID_IMIN);
+        h = _id_c256(h, layer, pos, ID_IMAX);
         pos = pos + 1;
     }
-    h = _id_fg256(h, 0 - 1, 7);
-    h = _id_fg256(h, ID_IMIN, 7);
+    h = _id_c256(h, layer, 0 - 1, 7);
+    h = _id_c256(h, layer, ID_IMIN, 7);
     return h;
 }
 
@@ -256,6 +262,133 @@ fn _id_dec_group() {
     }
     h = _id_dec(h, 0 - 1, 5);
     h = _id_dec(h, ID_IMIN, 5);
+    return h;
+}
+
+# ---- tty_sanitize_buf (v1.2.0) -----------------------------------------
+#
+# Every 1- and 2-byte input, every 3-byte input over the multi-byte leads
+# E0-F4 (with a spread of third bytes), and every 4-byte lead F0-F4, in
+# both modes. Each call must (a) stay within its byte budget (at most
+# `len`) and inside [pos, ret) — the shared guard-region check — and its
+# output must be (b) CLEAN by an INDEPENDENT validator below, written by
+# code point and bit mask rather than the implementation's lead-byte
+# table, (c) idempotent — sanitizing it again changes nothing — and (d)
+# identical to the input whenever the input was already clean.
+
+var _id_san_in[8];
+var _id_san_again[16];
+var _id_san_bad = 0;
+
+# 1 if p[0..n) is safe output: no C0 byte unless `keep` names it (and
+# never ESC), no DEL, and — UTF-8 mode — well-formed UTF-8 with no
+# U+0080-U+009F, or — Latin-1 mode — no raw 0x80-0x9F.
+fn _id_clean(p, n, mode, keep) {
+    var i = 0;
+    while (i < n) {
+        var c = load8(p + i);
+        if (c < 0x20) {
+            if (c == 27) { return 0; }
+            if (((keep >> c) & 1) == 0) { return 0; }
+            i = i + 1;
+        } else { if (c == 0x7F) { return 0; }
+        else { if (c < 0x80) { i = i + 1; }
+        else { if (mode == 1) {
+            if (c < 0xA0) { return 0; }
+            i = i + 1;
+        } else {
+            var need = 0;
+            var cp = 0;
+            if ((c & 0xE0) == 0xC0) { need = 1; cp = c & 0x1F; }
+            if ((c & 0xF0) == 0xE0) { need = 2; cp = c & 0x0F; }
+            if ((c & 0xF8) == 0xF0) { need = 3; cp = c & 0x07; }
+            if (need == 0) { return 0; }
+            if (i + need >= n) { return 0; }                              # truncated
+            var k = 1;
+            while (k <= need) {
+                var b = load8(p + i + k);
+                if ((b & 0xC0) != 0x80) { return 0; }
+                cp = (cp << 6) | (b & 0x3F);
+                k = k + 1;
+            }
+            if (need == 1 && cp < 0xA0) { return 0; }                     # overlong, or C1
+            if (need == 2 && cp < 0x800) { return 0; }                    # overlong
+            if (need == 2 && cp >= 0xD800 && cp <= 0xDFFF) { return 0; }  # surrogate
+            if (need == 3 && (cp < 0x10000 || cp > 0x10FFFF)) { return 0; }
+            i = i + need + 1;
+        } } } }
+    }
+    return 1;
+}
+
+fn _id_san(h, mode, keep, len) {
+    _id_poison();
+    var out = &_id_region + ID_BASE + 3;
+    var ret = tty_sanitize_buf(&_id_region + ID_BASE, 3, &_id_san_in, len, mode, keep);
+    h = _id_account(h, 3, ret, 1, len);
+    if (ret < 0) { _id_san_bad = _id_san_bad + 1; return h; }
+    var n = ret - 3;
+    if (_id_clean(out, n, mode, keep) == 0) { _id_san_bad = _id_san_bad + 1; }
+    var n2 = tty_sanitize_buf(&_id_san_again, 0, out, n, mode, keep);
+    if (n2 != n) { _id_san_bad = _id_san_bad + 1; }
+    else {
+        var k = 0;
+        while (k < n) { if (load8(&_id_san_again + k) != load8(out + k)) { _id_san_bad = _id_san_bad + 1; k = n; } k = k + 1; }
+    }
+    if (_id_clean(&_id_san_in, len, mode, keep) == 1) {
+        var same = 1;
+        if (n != len) { same = 0; }
+        var j = 0;
+        while (same == 1 && j < len) { if (load8(out + j) != load8(&_id_san_in + j)) { same = 0; } j = j + 1; }
+        if (same == 0) { _id_san_bad = _id_san_bad + 1; }
+    }
+    return h;
+}
+
+fn _id_san_group() {
+    var h = ID_SEED + 12;
+    var thirds[16];
+    store8(&thirds, 0x00); store8(&thirds + 1, 0x1B); store8(&thirds + 2, 0x41); store8(&thirds + 3, 0x7F);
+    store8(&thirds + 4, 0x80); store8(&thirds + 5, 0x9B); store8(&thirds + 6, 0xA0); store8(&thirds + 7, 0xBF);
+    store8(&thirds + 8, 0xC0); store8(&thirds + 9, 0xFF);
+    var mode = 0;
+    while (mode <= 1) {
+        var a = 0;
+        while (a < 256) {
+            store8(&_id_san_in, a);
+            h = _id_san(h, mode, 0, 1);
+            h = _id_san(h, mode, TTY_KEEP_TAB | TTY_KEEP_LF, 1);
+            h = _id_san(h, mode, 0 - 1, 1);
+            var b = 0;
+            while (b < 256) {
+                store8(&_id_san_in + 1, b);
+                h = _id_san(h, mode, 0, 2);
+                if (a >= 0xE0 && a <= 0xF4) {
+                    var t = 0;
+                    while (t < 10) {
+                        store8(&_id_san_in + 2, load8(&thirds + t));
+                        h = _id_san(h, mode, 0, 3);
+                        if (mode == 0 && a >= 0xF0 && t >= 4 && t <= 7) {
+                            var f = 0;
+                            while (f < 10) {
+                                store8(&_id_san_in + 3, load8(&thirds + f));
+                                h = _id_san(h, mode, 0, 4);
+                                f = f + 1;
+                            }
+                        }
+                        t = t + 1;
+                    }
+                }
+                b = b + 1;
+            }
+            a = a + 1;
+        }
+        mode = mode + 1;
+    }
+    # Rejections write nothing (checked by the guard region).
+    _id_poison(); h = _id_account(h, 3, tty_sanitize_buf(&_id_region + ID_BASE, 0 - 1, &_id_san_in, 1, 0, 0), 1, 1);
+    _id_poison(); h = _id_account(h, 3, tty_sanitize_buf(&_id_region + ID_BASE, 3, &_id_san_in, 0 - 1, 0, 0), 1, 1);
+    _id_poison(); h = _id_account(h, 3, tty_sanitize_buf(&_id_region + ID_BASE, 3, &_id_san_in, 1, 2, 0), 1, 1);
     return h;
 }
 
@@ -414,6 +547,9 @@ var EXPECT_FIXED     = (0 - 7194304134156127716);   # 0x9c28b281cd7ff21c
 var EXPECT_SGR       = 8416752889827628924;   # 0x74ce5028d06b177c
 var EXPECT_RGB_EMIT  = (0 - 2693599707969797582);   # 0xda9e69563f5d4232
 var EXPECT_MOVE      = (0 - 1328405259568562800);   # 0xed908e7461a7bd90
+# Added in v1.2.0 — frozen from 1.2.0 on.
+var EXPECT_BG_256    = 7610589541642282858;   # 0x699e3edd90e4276a
+var EXPECT_SANITIZE  = (0 - 1680589921240263252);   # 0xe8ad585eeb5f55ac
 var EXPECT_REL       = (0 - 3644634539072174773);   # 0xcd6ba832627bc54b
 
 fn _id_report(name, got, want) {
@@ -433,10 +569,13 @@ fn main() {
     println("=== identity.tcyr — composers, whole domain ===");
     var d_fg  = _id_rgb_group(0);
     var d_bg  = _id_rgb_group(1);
-    var d_256 = _id_fg256_group();
+    var d_256 = _id_c256_group(0);
+    var d_b256 = _id_c256_group(1);
     var d_sgb = _id_sgr_group();
     var d_rst = _id_reset_group();
     var d_dec = _id_dec_group();
+    var d_san = _id_san_group();
+    assert_eq(_id_san_bad, 0, "every sanitized output is clean, idempotent, and unchanged when already clean");
     assert_eq(_id_bad, 0, "every composer call stayed in budget and inside [pos, ret)");
 
     println("=== identity.tcyr — fd-1 emitters, captured ===");
@@ -460,9 +599,11 @@ fn main() {
     _id_report("tty_fg_rgb_buf (cube + edges)", d_fg, EXPECT_FG_RGB);
     _id_report("tty_bg_rgb_buf (cube + edges)", d_bg, EXPECT_BG_RGB);
     _id_report("tty_fg_256_buf", d_256, EXPECT_FG_256);
+    _id_report("tty_bg_256_buf (v1.2.0)", d_b256, EXPECT_BG_256);
     _id_report("tty_sgr_buf", d_sgb, EXPECT_SGR_BUF);
     _id_report("tty_sgr_reset_buf", d_rst, EXPECT_RESET_BUF);
     _id_report("tty_dec_buf", d_dec, EXPECT_DEC_BUF);
+    _id_report("tty_sanitize_buf (v1.2.0)", d_san, EXPECT_SANITIZE);
     _id_report("fixed emitters", d_fix, EXPECT_FIXED);
     _id_report("tty_sgr", d_sgr, EXPECT_SGR);
     _id_report("tty_fg_rgb / tty_bg_rgb", d_rgb, EXPECT_RGB_EMIT);
