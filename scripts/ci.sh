@@ -381,7 +381,8 @@ gate_docs() {
     for f in README.md CHANGELOG.md VERSION LICENSE cyrius.cyml cyrius.lock CLAUDE.md \
              docs/development/roadmap.md docs/development/state.md \
              docs/adr/0001-name-darshana.md docs/adr/0002-state-restore-posture.md \
-             docs/adr/0003-v1-api-freeze.md dist/darshana.cyr dist/darshana.deps; do
+             docs/adr/0003-v1-api-freeze.md docs/adr/0004-output-sanitization.md \
+             docs/guides/upgrading.md dist/darshana.cyr dist/darshana.deps; do
         if [ -f "$f" ]; then echo "  OK: $f"; else echo "  MISSING: $f"; missing=1; fi
     done
     v="$(tr -d '[:space:]' < VERSION)"

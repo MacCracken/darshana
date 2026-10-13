@@ -103,7 +103,7 @@ fn tty_move(row, col) {
     if (pos < 0) { return 0 - 1; }
     store8(&buf + pos, 0x48);    # 'H'
     pos = pos + 1;
-    syscall(1, 1, &buf, pos);
+    sys_write(1, &buf, pos);
     return 0;
 }
 
@@ -129,7 +129,7 @@ fn _cursor_rel(n, final) {
     if (pos < 0) { return 0; }
     store8(&buf + pos, final);
     pos = pos + 1;
-    syscall(1, 1, &buf, pos);
+    sys_write(1, &buf, pos);
     return 0;
 }
 

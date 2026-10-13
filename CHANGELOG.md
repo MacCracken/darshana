@@ -4,6 +4,98 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-10-12
+
+**darshana no longer issues a raw syscall.** Every escape emitter writes
+through the stdlib's `sys_write`, and the AGNOS arm calls the agnos stdlib's
+`sys_winsize`, `sys_sigprocmask` and `sys_signalfd` instead of carrying its own
+copies of their numbers. No frozen name, arity, return contract, emitted byte
+or constant moved: all thirteen `tests/identity.tcyr` digests are unchanged, on
+x86_64, under qemu-aarch64 and on a real Raspberry Pi 4.
+
+⚠ **Semver.** ADR 0003 prices an internal refactor with identical output as a
+minor, and v1.1.0 was cut as one for exactly that. This release is cut as a
+patch by owner decision.
+
+### Changed — internal refactors, identical output
+
+- **The 14 fd-1 writes in `src/ansi.cyr` and `src/cursor.cyr` call
+  `sys_write(1, …)`** instead of `syscall(1, 1, …)`. write(2) is 1 on x86_64
+  and agnos but 64 on aarch64; the literal reached the right call there only
+  because the aarch64 backend rewrites 1 → 64. The stdlib's `SYS_WRITE` is
+  each target's own number.
+- **The AGNOS arm calls the agnos stdlib's wrappers.** `tty_winsize` and
+  `tty_isatty` call `sys_winsize()`; the signalfd pair call `sys_sigprocmask` /
+  `sys_signalfd`. The private `_AGNOS_SYS_WINSIZE` / `_SIGPROCMASK` /
+  `_SIGNALFD` are deleted (not frozen — ADR 0003 lists them as internals).
+  `_AGNOS_SFD_CLOEXEC` stays: it is a flag value, not a syscall number.
+- **Checked, not assumed: no AGNOS behavior change.** The agnos `sys_write`
+  passes a fourth argument — write#1's non-blocking flag, which agnos ≥ 1.57.9
+  reads — explicitly as 0, where darshana's three-argument call passed none.
+  Disassembling a `--agnos` build shows cycc 6.6.20 zeroes `r10` for every
+  syscall with fewer than four arguments, so the old call was already a
+  blocking write.
+
+### Changed — gates
+
+- **`scripts/syscall-audit.sh`: `src/`'s syscall allowlist is empty.** Every
+  syscall goes through a wrapper on the wrapper allowlist, which gains
+  `sys_write` and `sys_winsize`.
+- **The arch rule has no literal exception.** `syscall(1, …)` was exempt; it
+  now fails in any tree. The nine test-harness prints that used it
+  (`tests/identity.tcyr`, `tests/pty.tcyr`) call `sys_write`. New probes: a raw
+  write is rejected in `src/` and in the corpus, and `sys_write` is accepted.
+  The re-binding probes run under the examples' rules (`--examples-rules`),
+  the one allowlist that still carries names.
+- **`scripts/platform-gate.sh` gains a peer rule:** a function defined more
+  than once in a file must have exactly one definition in the
+  `CYRIUS_TARGET_LINUX` gate and one in the `CYRIUS_TARGET_AGNOS` gate. It needs
+  no token list, and it replaces `sys_signalfd` / `sys_sigprocmask` as
+  Linux-only tokens — the AGNOS arm now calls the same-named agnos wrappers.
+  `SFD_CLOEXEC` stays a Linux token; the agnos tokens are `sys_winsize`,
+  `sys_read_nb` and `_AGNOS_SFD_`. Proven on the real tree: moving the Linux
+  `tty_open_signalfd`, the Linux `tty_close_signalfd` or the AGNOS `tty_winsize`
+  out of its gate fails the peer rule, and fails the build a second time on
+  the affected target (`duplicate fn … last definition wins`, fatal since
+  1.1.4). New self-test probes for the peer rule, an ungated `sys_winsize`, and
+  an ungated `SFD_CLOEXEC`.
+- **`tests/agnos.tcyr` pins the stdlib's agnos numbers** (`SYS_WINSIZE` 60,
+  `SYS_SIGPROCMASK` 17, `SYS_SIGNALFD` 18) where it pinned darshana's own copies,
+  so a stdlib that renumbered one fails there. Still 20 assertions.
+
+### Changed — documentation
+
+- **`docs/guides/upgrading.md` (new)** — what a consumer bumping its dep needs
+  to know, release by release from 1.0.1: the 1.1.4 teardown reorder, the
+  1.1.3 sidecar change, what 1.2.0 lets a consumer drop, and the two AGNOS
+  signalfd caveats. The upgrade notes it replaces lived in the roadmap.
+- **The roadmap is open items and boundaries only**, and lists the two
+  planted defects from the 1.1.4 mutation run that still pass every gate.
+  Removed: the status narrative, the upgrade notes (now the guide), the upstream list (now
+  `state.md` § Dependencies → Upstream gaps, with where each one is filed), and
+  the set-aside optimizations (recorded in [1.2.0]). The out-of-scope rulings
+  that were a one-line list are full entries in § Out of scope. `tty_forget()`
+  moves from the 2.0.0 section to the 1.x.0 candidates, where ADR 0003 prices
+  it.
+- **`cyrius.cyml`'s comments are a manifest's again**: what each section is
+  for, without the release history (which is the CHANGELOG's).
+- The docs gate requires ADR 0004 and the upgrade guide.
+- **Architecture note 002** describes the wrapper rule (retitled from
+  "Everything is a raw syscall"); CLAUDE.md's two syscall rules, ADR 0003's
+  list of internals, getting-started and the example's manifest tag updated.
+
+### Upgrade notes
+
+None: no consumer code change, and the bundle's requirements are unchanged.
+
+### Verification
+
+- `bash scripts/ci.sh all`: all 15 gates green — x86_64 312 + 100 + 18 + 20;
+  the same unit, PTY and identity totals under qemu-aarch64 and under
+  `CYRIUS_DCE=1`; no build warning on any target.
+- **Raspberry Pi 4 (Linux 7.0)**: smoke ok, 312/312 unit, 100/100 PTY, 18/18
+  identity, all thirteen digests identical to x86_64.
+
 ## [1.2.0] — 2026-10-12
 
 A minor: **five functions and eight constants added, the composers 35–49%

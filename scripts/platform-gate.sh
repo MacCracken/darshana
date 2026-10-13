@@ -40,6 +40,13 @@
 # green; the AGNOS build then warned "duplicate fn … last definition wins"
 # and silently used the Linux bodies. Both are closed, and each probe now
 # checks for its own failure message rather than for any non-zero exit.
+#
+# v1.2.1: the AGNOS arm calls the stdlib's agnos `sys_sigprocmask` /
+# `sys_signalfd`, which share their names with the Linux wrappers, so those
+# two names are no longer Linux-only tokens. What catches a signalfd peer
+# escaping its gate now is the PEER rule, which needs no token list at all:
+# a function defined more than once in a file is a platform peer, and must
+# have exactly one definition inside each target gate and none outside.
 
 set -eu
 
@@ -71,12 +78,33 @@ $_stray"
     echo "$_f:$_s-$_e"
 }
 
+# $1 = file. Every function defined more than once must be a Linux/AGNOS
+# peer pair: one definition inside each target gate, none outside either.
+check_peers() {
+    _bad=$(awk '
+        /^#ifdef CYRIUS_TARGET_LINUX/ { g = "linux"; next }
+        /^#ifdef CYRIUS_TARGET_AGNOS/ { g = "agnos"; next }
+        /^#endif/                     { g = ""; next }
+        /^fn [A-Za-z_][A-Za-z0-9_]*/ {
+            n = $2; sub(/\(.*/, "", n)
+            cnt[n]++; where[n] = where[n] " " NR ":" (g == "" ? "ungated" : g)
+            if (g == "linux") lin[n]++; else if (g == "agnos") agn[n]++; else out[n]++
+        }
+        END {
+            for (n in cnt) if (cnt[n] > 1 && (lin[n] != 1 || agn[n] != 1 || out[n] > 0))
+                print n " —" where[n]
+        }' "$1")
+    [ -z "$_bad" ] || fail "$1: a platform peer is not one-per-gate (each needs exactly one definition in the CYRIUS_TARGET_LINUX gate and one in the CYRIUS_TARGET_AGNOS gate):
+$_bad"
+}
+
 run() {
     lin_report=""; agn_report=""
     for f in "$SRC_DIR"/*.cyr; do
-        r=$(check_gate "$f" '(SYS_IOCTL|sys_ioctl|TCGETS|TCSETS|TIOCGWINSZ|sys_signalfd|sys_sigprocmask|\bSFD_CLOEXEC)' CYRIUS_TARGET_LINUX "Linux ioctl")
+        check_peers "$f"
+        r=$(check_gate "$f" '(SYS_IOCTL|sys_ioctl|TCGETS|TCSETS|TIOCGWINSZ|\bSFD_CLOEXEC)' CYRIUS_TARGET_LINUX "Linux ioctl")
         [ -n "$r" ] && lin_report="$lin_report $r"
-        r=$(check_gate "$f" '_AGNOS_SYS_[A-Z]+|_AGNOS_SFD_' CYRIUS_TARGET_AGNOS "agnos syscall")
+        r=$(check_gate "$f" '_AGNOS_SFD_|sys_winsize|sys_read_nb' CYRIUS_TARGET_AGNOS "agnos syscall")
         [ -n "$r" ] && agn_report="$agn_report $r"
     done
     # The gates must exist SOMEWHERE — a corpus-driven check that finds no
@@ -110,9 +138,17 @@ if [ "${1:-}" = "--self-test" ]; then
     # token sits after its #endif.
     probe "ioctl token after termios.cyr's own Linux #endif (positional)" "outside the CYRIUS_TARGET_LINUX gate" \
         termios.cyr 'var _probe_pos = TCGETS;'
-    # A Linux-only signalfd wrapper outside the gate (v1.1.4).
-    probe "Linux signalfd wrapper outside the gate" "outside the CYRIUS_TARGET_LINUX gate" \
-        termios.cyr 'fn _probe_sfd() { return sys_signalfd(0 - 1, 0, 0); }'
+    # The Linux signalfd flag outside the gate (v1.1.4; the wrapper names
+    # stopped being Linux-only in v1.2.1).
+    probe "Linux SFD_CLOEXEC outside the gate" "outside the CYRIUS_TARGET_LINUX gate" \
+        termios.cyr 'var _probe_sfd = SFD_CLOEXEC;'
+    # An agnos-only wrapper after the AGNOS #endif (v1.2.1).
+    probe "agnos sys_winsize outside the AGNOS gate" "outside the CYRIUS_TARGET_AGNOS gate" \
+        termios.cyr 'fn _probe_ws() { return sys_winsize(); }'
+    # The PEER rule (v1.2.1): a third definition of a peer, ungated — the
+    # shape of a Linux signalfd body moved below the AGNOS #endif.
+    probe "a platform peer defined outside both gates" "is not one-per-gate" \
+        termios.cyr 'fn tty_close_signalfd(fd, sigmask) { return 0; }'
     # Negative control: the real tree must still pass.
     if ( "$0" >/dev/null 2>&1 ); then
         echo "  ok: real $SRC_DIR still passes (not vacuous)"

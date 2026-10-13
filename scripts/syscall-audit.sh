@@ -53,40 +53,36 @@
 #
 # `--self-test` proves the gate can actually fail, by planting each of the
 # bypasses above plus a plain fork+exec and asserting all are REJECTED — and
-# that `syscall(1, ...)` is still ACCEPTED, so the arch rule is not merely
-# over-strict. A gate that cannot fail proves nothing.
+# that an allowlisted wrapper and a per-arch constant are still ACCEPTED, so
+# neither rule is merely over-strict. A gate that cannot fail proves nothing.
 #
 # Run standalone, or via scripts/smoke.sh / the CI security job.
 
 set -eu
 
 # ------------------------------------------------------------------
-# The allowlist. Each entry is a first argument to `syscall(` that
-# darshana is permitted to issue, with the reason it is here.
+# The allowlist of first arguments to `syscall(` that src/ may issue:
+# NONE. Every syscall darshana makes goes through a stdlib wrapper, which
+# owns the number for its target. Adding an entry here means issuing a
+# raw syscall again; prefer adding a wrapper to ALLOWED_WRAPPERS below.
 # ------------------------------------------------------------------
-#   1                        write(2) to fd 1 — every ANSI escape emitter
-#   _AGNOS_SYS_WINSIZE       agnos #60, framebuffer console grid
-#   _AGNOS_SYS_SIGPROCMASK   agnos #17, mirshi-emulated
-#   _AGNOS_SYS_SIGNALFD      agnos #18, mirshi-emulated
-ALLOWED_SYSCALLS="1 _AGNOS_SYS_WINSIZE _AGNOS_SYS_SIGPROCMASK _AGNOS_SYS_SIGNALFD"
+ALLOWED_SYSCALLS=""
 
 # Stdlib `sys_*` / file helpers darshana is permitted to call. These are
 # thin syscall wrappers; the same allowlist discipline applies.
-#   sys_sigprocmask   block/unblock the signalfd mask (Linux arm)
-#   sys_signalfd      create the signalfd (Linux arm). NOTE: bare
-#                     passthrough — returns -errno, not -1. darshana
+#   sys_write         every fd-1 escape emitter (both arms)
+#   sys_ioctl         termios TCGETS/TCSETS + TIOCGWINSZ (Linux arm)
+#   sys_sigprocmask   block/unblock the signalfd mask (both arms). NOTE: the
+#   sys_signalfd      create the signalfd (both arms)     Linux pair are bare
+#                     passthroughs returning -errno, not -1; darshana
 #                     normalizes at its own boundary.
-#   file_close        close the signalfd on teardown
-#   sys_ioctl         termios TCGETS/TCSETS + TIOCGWINSZ (Linux arm). The
-#                     stdlib wrapper issues its arch-aware SYS_IOCTL (16 on
-#                     x86_64, 29 on aarch64). v1.2.0 — before that darshana
-#                     issued `syscall(SYS_IOCTL, ...)` itself, and SYS_IOCTL
-#                     sat on ALLOWED_SYSCALLS. Do NOT reintroduce a local
-#                     numeric definition (see v0.9.2).
-#   sys_read          read one signalfd record (Linux tty_read_signal, v1.2.0)
-#   sys_read_nb       the AGNOS stdlib's non-blocking read, for the same
-#                     (a blocking agnos sys_read waits on pipes/keyboard)
-ALLOWED_WRAPPERS="sys_sigprocmask sys_signalfd file_close sys_ioctl sys_read sys_read_nb"
+#   file_close        close the signalfd on teardown (both arms)
+#   sys_read          read one signalfd record (Linux tty_read_signal)
+#   sys_read_nb       the same on AGNOS (a blocking agnos sys_read waits on
+#                     pipes and the keyboard)
+#   sys_winsize       agnos #60, the framebuffer console grid (AGNOS arm)
+# Do NOT reintroduce a local syscall-number definition (see v0.9.2).
+ALLOWED_WRAPPERS="sys_write sys_ioctl sys_sigprocmask sys_signalfd file_close sys_read sys_read_nb sys_winsize"
 
 # Language builtins and control keywords, which are not calls to audit.
 BUILTINS="syscall load8 load16 load32 load64 store8 store16 store32 store64 if while else return for fn var"
@@ -243,10 +239,10 @@ audit_dir() {
 # an explicit `#ifdef CYRIUS_ARCH_X86` / `CYRIUS_ARCH_AARCH64` gate — or
 # `CYRIUS_TARGET_AGNOS`, which is x86_64-only, so its numbers are fixed.
 # Both halves are checked (v1.1.4): no literal at a call site, AND no
-# locally-declared syscall constant outside such a gate. `1` is the sole
-# literal exception: write(2) is 1 on x86_64 and AGNOS, and on aarch64
-# (where write is 64) the backend translates the literal 1 — the one
-# translation darshana relies on, which every aarch64 suite exercises.
+# locally-declared syscall constant outside such a gate. There is no
+# literal exception: write(2) goes through the stdlib's `sys_write`.
+# (Through 1.2.0 `syscall(1, ...)` was exempt — correct on aarch64, where
+# write is 64, only because the backend translates the literal 1.)
 #
 # Comments are stripped before matching, so the prose above (and the
 # rationale comments in src/termios.cyr and tests/agnos.tcyr, which
@@ -270,7 +266,7 @@ audit_no_literals() {
             reject_expressions "$_f" "$_n"
             _hits=$(normalize "$_f" \
                     | grep -oE 'syscall[[:space:]]*\([[:space:]]*\(*[[:space:]]*[0-9]+' \
-                    | grep -oE '[0-9]+$' | grep -vx '1' | sort -u || true)
+                    | grep -oE '[0-9]+$' | sort -u || true)
             for _lit in $_hits; do
                 note "FAIL: $_f issues syscall($_lit) as a NUMERIC LITERAL."
                 note "  Syscall numbers differ per architecture — darshana targets"
@@ -278,7 +274,7 @@ audit_no_literals() {
                 note "  exit 60 vs 93, openat 257 vs 56. Use the stdlib's arch-aware"
                 note "  constant (SYS_IOCTL, SYS_EXIT, ...) or declare your own"
                 note "  inside an explicit #ifdef CYRIUS_ARCH_X86 / _AARCH64 gate."
-                note "  Only syscall(1, ...) — write(2) — may be a literal."
+                note "  For write(2), call the stdlib's sys_write."
                 fail=1
                 _any=1
             done
@@ -369,15 +365,19 @@ if [ "${1:-}" = "--self-test" ]; then
     expect_reject "a # inside a string hides the rest of the line (v1.1.4)" "$ALLOW" "$0" "$tmp/src"
     put src probe.cyr 'fn f() { syscall(1 + 58, 0, 0, 0); return 0; }'
     expect_reject "arithmetic first arg  syscall(1 + 58, ...) (v1.1.4)" "EXPRESSION" "$0" "$tmp/src"
-    put src probe.cyr 'fn f(_AGNOS_SYS_WINSIZE, a) { return syscall(_AGNOS_SYS_WINSIZE, a, 0, 0); }'
-    expect_reject "allowlisted name re-bound as a parameter (v1.1.4)" "as a fn parameter" "$0" "$tmp/src"
+    # src/'s allowlist is empty, so the re-binding rule is probed under the
+    # examples' rules — the one allowlist that still carries names.
+    put src probe.cyr 'fn f(SYS_EXIT, a) { return syscall(SYS_EXIT, a, 0, 0); }'
+    expect_reject "allowlisted name re-bound as a parameter (v1.1.4)" "as a fn parameter" "$0" --examples-rules "$tmp/src"
     put src probe.cyr 'fn f() {
-    var _AGNOS_SYS_WINSIZE = 59;
-    return syscall(_AGNOS_SYS_WINSIZE, 0, 0, 0);
+    var SYS_EXIT = 59;
+    return syscall(SYS_EXIT, 0, 0, 0);
 }'
-    expect_reject "allowlisted name shadowed by a local (v1.1.4)" "with a local var" "$0" "$tmp/src"
+    expect_reject "allowlisted name shadowed by a local (v1.1.4)" "with a local var" "$0" --examples-rules "$tmp/src"
     put src probe.cyr 'fn f() { syscall(1, 1, "x", 1); return 0; }'
-    expect_accept "syscall(1, ...) write literal (not over-strict)" "$0" "$tmp/src"
+    expect_reject "raw write  syscall(1, ...) in src/ (v1.2.1)" "$ALLOW" "$0" "$tmp/src"
+    put src probe.cyr 'fn f() { sys_write(1, "x", 1); return 0; }'
+    expect_accept "sys_write wrapper (not over-strict)" "$0" "$tmp/src"
 
     # The arch-blindness rule (audit_no_literals), via --corpus.
     put corpus probe.cyr 'fn f() { return syscall(16, 0, 0, 0); }'
@@ -402,8 +402,10 @@ var P_SYS = 101;
 #endif
 fn f() { return syscall(P_SYS, 0); }'
     expect_accept "a constant declared per arch (not over-strict)" "$0" --corpus "$tmp/corpus"
-    put corpus probe.cyr 'fn f() { syscall(1, 1, "x", 1); return syscall(SYS_IOCTL, 0, 0, 0); }'
-    expect_accept "write(1) literal and a stdlib constant" "$0" --corpus "$tmp/corpus"
+    put corpus probe.tcyr 'fn t() { syscall(1, 1, "x", 1); return 0; }'
+    expect_reject "numeric-literal write  syscall(1, ...) — no exception (v1.2.1)" "NUMERIC LITERAL" "$0" --corpus "$tmp/corpus"
+    put corpus probe.cyr 'fn f() { return syscall(SYS_IOCTL, 0, 0, 0); }'
+    expect_accept "a stdlib constant" "$0" --corpus "$tmp/corpus"
 
     # Negative controls: the real trees must still pass both rules.
     expect_accept "real src/ (allowlist rule)" "$0" src
@@ -419,6 +421,11 @@ if [ "${1:-}" = "--corpus" ]; then
     # The arch-blindness rule alone, over the named trees (--self-test).
     shift
     audit_no_literals "$@"
+elif [ "${1:-}" = "--examples-rules" ]; then
+    # Explicit directory under the examples' allowlists (--self-test's
+    # re-binding probes).
+    _extra_defs=""
+    audit_dir "$2" "$ALLOWED_SYSCALLS_EXAMPLES" "$ALLOWED_WRAPPERS_EXAMPLES"
 elif [ $# -ge 1 ]; then
     # Explicit directory: the allowlist rule alone (--self-test's probes).
     _extra_defs=""

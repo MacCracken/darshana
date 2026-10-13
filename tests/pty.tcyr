@@ -155,9 +155,9 @@ fn _pty_expect(fd, want, want_len) {
 # greps for "SKIP pty:" and annotates a warning. Skip markers are NOT
 # assertions — they neither pass nor fail the suite.
 fn _pty_skip(reason) {
-    syscall(1, 1, "SKIP pty: ", 10);
-    syscall(1, 1, reason, strlen(reason));
-    syscall(1, 1, "\n", 1);
+    sys_write(1, "SKIP pty: ", 10);
+    sys_write(1, reason, strlen(reason));
+    sys_write(1, "\n", 1);
     return 0;
 }
 

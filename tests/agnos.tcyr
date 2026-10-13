@@ -30,7 +30,7 @@
 # ⛔ WHAT MUST NOT BE CALLED HERE, AND WHY.
 # Only the constants plus `tty_raw` and `tty_cooked` are safe to EXECUTE
 # on a Linux host, because they issue no syscall. The other four AGNOS
-# peers issue `syscall(60, ...)` (_AGNOS_SYS_WINSIZE) or the mirshi
+# peers issue winsize#60 (the stdlib's `sys_winsize`) or the agnos
 # signalfd pair — and on x86_64 Linux syscall 60 is `exit`. Calling
 # `tty_isatty` or `tty_winsize` from this harness would terminate the
 # process with status 0 mid-run: a green result that proved nothing,
@@ -60,14 +60,16 @@ fn main() {
     assert_eq(TTY_SIGMASK_WINCH, 1 << 28,
         "WINCH mask is exactly SIGWINCH(28) under 1<<sig");
 
-    # ---- internal syscall numbers (mirshi ABI) ---------------------
-    # `_`-prefixed, so not frozen by ADR 0003 — but they are the mirshi
-    # ABI, and a silent drift here is the v0.9.2 SYS_IOCTL class of bug
+    # ---- the agnos syscall numbers this arm relies on --------------
+    # The arm calls the stdlib's agnos wrappers, which own the numbers.
+    # These pin the numbers to the agnos ABI the arm was verified against,
+    # so a stdlib that renumbered one fails here instead of silently
+    # issuing a different syscall — the v0.9.2 SYS_IOCTL class of bug,
     # with no diagnostic on this target either.
-    test_group("AGNOS arm — internal syscall numbers (mirshi ABI)");
-    assert_eq(_AGNOS_SYS_WINSIZE, 60, "framebuffer console grid is winsize#60");
-    assert_eq(_AGNOS_SYS_SIGPROCMASK, 17, "sigprocmask is #17");
-    assert_eq(_AGNOS_SYS_SIGNALFD, 18, "signalfd is #18");
+    test_group("AGNOS arm — agnos syscall numbers (stdlib)");
+    assert_eq(SYS_WINSIZE, 60, "framebuffer console grid is winsize#60");
+    assert_eq(SYS_SIGPROCMASK, 17, "sigprocmask is #17");
+    assert_eq(SYS_SIGNALFD, 18, "signalfd is #18");
     assert_eq(_AGNOS_SFD_CLOEXEC, 0x80000, "SFD_CLOEXEC value carried for intent parity");
 
     # ---- the no-termios contract -----------------------------------

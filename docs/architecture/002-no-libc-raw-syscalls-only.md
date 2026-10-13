@@ -1,4 +1,4 @@
-# 002 — Everything is a raw syscall, and what that costs
+# 002 — No libc: every kernel call is a stdlib syscall wrapper, and what that costs
 
 **What's true about the code.** The sovereign-stack rule itself is a
 [CLAUDE.md](../../CLAUDE.md) domain rule; this note is about what living under it
@@ -7,14 +7,20 @@ actually looks like in `src/`.
 ## The invariant
 
 darshana links no libc, no ncurses, no terminfo. There is no `tcgetattr(3)`, no
-`tputs(3)`, no `isatty(3)`. Every kernel interaction is a bare `syscall(...)`:
+`tputs(3)`, no `isatty(3)`. Every kernel interaction is one syscall, issued
+through the Cyrius stdlib's thin `sys_*` wrapper for it:
 
-- termios is `syscall(SYS_IOCTL, fd, TCGETS|TCSETS, &buf)` against a 60-byte
-  buffer whose field offsets are hardcoded from `asm-generic/termbits.h`
-- window size is `syscall(SYS_IOCTL, fd, TIOCGWINSZ, &ws)` against an 8-byte
-  struct, or agnos syscall #60 on the AGNOS arm
-- every escape sequence is `syscall(1, 1, <bytes>, <len>)` — a direct `write(2)`
-  to fd 1
+- termios is `sys_ioctl(fd, TCGETS|TCSETS, &buf)` against a 60-byte buffer
+  whose field offsets are hardcoded from `asm-generic/termbits.h`
+- window size is `sys_ioctl(fd, TIOCGWINSZ, &ws)` against an 8-byte struct, or
+  agnos `sys_winsize()` (#60) on the AGNOS arm
+- every escape sequence is `sys_write(1, <bytes>, <len>)` — one `write(2)` to
+  fd 1
+
+The wrappers add no behavior — each is a single `syscall` — but they own the
+syscall *number*, which is the part that differs per target. Since v1.2.1
+`src/` issues no raw `syscall(` at all: `scripts/syscall-audit.sh`'s allowlist
+for it is empty.
 
 CI enforces the negative half: the security job fails on any
 `include "lib/{cffi,dynlib,fdlopen,pam}.cyr"`.
@@ -45,8 +51,10 @@ number) and **corpus-wide** (every `src/*.cyr`, not one file) that Linux ioctl a
 signalfd tokens stay inside the Linux gate and agnos tokens inside theirs.
 `scripts/syscall-audit.sh` refuses any syscall number written as a bare integer,
 and any locally-declared syscall constant outside an arch (or AGNOS-target) gate,
-anywhere in `src/`, `tests/`, `programs/` or `docs/examples/` — `syscall(1, ...)`
-excepted.
+anywhere in `src/`, `tests/`, `programs/` or `docs/examples/`. Through v1.2.0
+`syscall(1, ...)` was exempt; it was correct on aarch64, where write is 64, only
+because the backend rewrites the literal 1. v1.2.1 moved every write to
+`sys_write` and removed the exemption.
 
 ⚠ Until v1.1.4 that sentence overstated what ran. The literal rule globbed
 `*.cyr`, so it never scanned a single `*.tcyr` test, and it looked only at call
@@ -60,12 +68,14 @@ The general shape: take arch-varying numbers from the stdlib, which knows the
 target. Define locally only what is arch-*stable* — the ioctl request codes
 (`TCGETS`, `TCSETS`, `TIOCGWINSZ`) are, the syscall numbers are not.
 
-**Numbers declared inside a target's own `#ifdef` are safe.** The AGNOS arm
-declares `_AGNOS_SYS_WINSIZE = 60`, `_AGNOS_SYS_SIGPROCMASK = 17` and
-`_AGNOS_SYS_SIGNALFD = 18` inside `#ifdef CYRIUS_TARGET_AGNOS`, where those numbers
-can only ever mean agnos's, and calls through the names. (It never wrote a bare
-`syscall(60, ...)` — the syscall audit rejects that even there.) The Linux↔agnos
-overlap hazard cannot bite a number declared inside its own target's gate.
+**Numbers declared inside a target's own `#ifdef` are safe, but the stdlib's
+are better.** Through v1.2.0 the AGNOS arm declared `_AGNOS_SYS_WINSIZE = 60`,
+`_AGNOS_SYS_SIGPROCMASK = 17` and `_AGNOS_SYS_SIGNALFD = 18` inside
+`#ifdef CYRIUS_TARGET_AGNOS`, where those numbers could only mean agnos's. That
+was safe, but it was a second copy of the kernel's ABI. v1.2.1 calls the agnos
+stdlib's `sys_winsize`, `sys_sigprocmask` and `sys_signalfd` instead, and
+`tests/agnos.tcyr` pins the stdlib's numbers to the ABI the arm was verified
+against.
 
 **Even a correct per-arch number can be rewritten.** The aarch64 backend
 translates *some* x86_64 syscall numbers into their aarch64 equivalents. A
@@ -89,13 +99,11 @@ practice, and a consumer mid-render has no useful recovery, so the emitters stay
 call-site-clean and always return 0. The `_buf` composers are the escape hatch
 for anyone who wants one checked write per frame instead of many unchecked ones.
 
-## The one place it is not a raw syscall
+## Wrappers do not normalize returns
 
-`tty_open_signalfd` / `tty_close_signalfd` use the stdlib's `sys_sigprocmask` /
-`sys_signalfd` / `file_close` wrappers on the Linux arm. Those are still
-syscalls — the wrappers are thin — but note that `sys_signalfd` is a bare
-passthrough that returns `-errno`, not `-1`. darshana normalizes it at its own
-boundary so its documented contract holds — `tty_open_signalfd` at v0.9.3, and
+The Linux wrappers pass the kernel's return straight back, so `sys_signalfd`
+and `sys_sigprocmask` return `-errno`, not `-1`. darshana normalizes them at its
+own boundary so its documented contract holds — `tty_open_signalfd` at v0.9.3, and
 `tty_close_signalfd` at v1.0.2, which is the point: v0.9.3 normalized the open
 path and missed its teardown twin for three releases, leaving the Linux and
 AGNOS peers disagreeing on a contract both claimed to share. When adding a

@@ -11,37 +11,16 @@ entry = "programs/smoke.cyr"
 output = "build/darshana-smoke"
 
 [lib]
-# Four domain modules — termios / ansi / cursor per the M1 design, plus
-# sanitize (v1.2.0, output sanitization; docs/adr/0004).
-# `cyrius distlib` concatenates these (in order) into dist/darshana.cyr;
-# consumers `include "lib/darshana.cyr"` after `cyrius deps` resolves
-# the dep. src/main.cyr is the in-tree convenience entry that includes
-# all four for smoke.cyr + tests, but is intentionally NOT in this
-# list — it would duplicate the module bodies in the dist bundle.
+# `cyrius distlib` concatenates these, in order, into dist/darshana.cyr.
+# src/main.cyr is deliberately absent: it includes all four for the tests
+# and smoke, and listing it would duplicate every module body in the bundle.
 modules = ["src/termios.cyr", "src/ansi.cyr", "src/cursor.cyr", "src/sanitize.cyr"]
 
 [deps]
-# Footprint: tighter than the init default. termios + ANSI helpers
-# only need syscalls (ioctl + write) and the standard alloc/io path.
-# assert is for tests/darshana.tcyr. Still no str/fmt/string as
-# declared leaves — the surface does no dynamic allocation or string
-# formatting of its own.
+# darshana's own build footprint, tests and smoke included (`assert` is
+# test-only). Consumers do not inherit it: dist/darshana.deps is derived
+# by `cyrius distlib`'s compile-verify.
 #
-# v1.1.3 (cyrius 6.6.20) dropped `vec` and `args`. Both had been declared
-# only to close a stdlib include gap, never because darshana calls them:
-# `vec` (v1.0.1) because `fmt` called `vec_get` without including its
-# definer, `args` (v1.1.1) because `io` delegated to `_agnos_getenv`
-# without including `args_agnos`. The stdlib now includes both definers
-# itself, so the BFS pulls them and declaring the leaves only
-# auto-prepended a dead `lib/args.cyr`.
-#
-# This list is darshana's OWN footprint — tests and smoke included. Since
-# cyrius 6.6.18 it no longer reaches consumers: dist/darshana.deps is
-# derived by `cyrius distlib`'s compile-verify, not copied from here, so
-# a test-only leaf like `assert` stays out of every consumer's build.
-#
-# `lib/` is OUTPUT, not curated: `rm -rf lib/ && cyrius deps` rebuilds
-# it from this list (Phase 3's transitive BFS pulls each leaf's own
-# includes). Do not hand-edit or hand-prune lib/.
+# lib/ is output — rebuild it with `rm -rf lib/ && cyrius deps`.
 stdlib = ["syscalls", "alloc", "io", "assert"]
 ---

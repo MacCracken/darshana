@@ -12,7 +12,7 @@ Donor: [`cyim/src/tty.cyr`](https://github.com/MacCracken/cyim) (~207 lines, Lin
 
 ## Status
 
-**Stable. The API has been frozen since v1.0.0.** The current version is in [`VERSION`](VERSION). 29 functions and 37 constants, enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) and machine-checked on every CI run. Breaking any of them requires a major bump; additive change (new symbols, new platform peers) stays a minor bump. Pin a `1.x` tag and take minor bumps without reading a diff.
+**Stable. The API has been frozen since v1.0.0.** The current version is in [`VERSION`](VERSION). 29 functions and 37 constants at v1.0, and every symbol added since, enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) and machine-checked on every CI run. Breaking any of them requires a major bump; additive change (new symbols, new platform peers) stays a minor bump. Pin a `1.x` tag and take minor bumps without reading a diff.
 
 Verified on **Linux/x86_64 and Linux/aarch64** on every CI run — smoke plus every suite, cross-built and executed — and on **AGNOS** by cross-build. Since v1.1.4 the emitted bytes are frozen by digest: `tests/identity.tcyr` drives every composer over its whole input domain and every fd-1 emitter, and its eleven digests have been identical on every release since the freeze (v1.0.0), on x86_64, under qemu-aarch64 and on a real Raspberry Pi 4. Assertion counts and the release history live in [`docs/development/state.md`](docs/development/state.md) and the [CHANGELOG](CHANGELOG.md).
 
@@ -20,7 +20,7 @@ The TTY surface works on Linux and, since v0.9.0, fully on AGNOS — every sysca
 
 Start from [`docs/examples/raw_loop.cyr`](docs/examples/raw_loop.cyr) — the full raw-mode / alt-screen / signalfd / restore-on-every-exit-path shape, runnable.
 
-Consume it via `cyrius deps` against the `dist/darshana.cyr` bundle — no need to copy `cyim/src/tty.cyr` anymore.
+Consume it via `cyrius deps` against the `dist/darshana.cyr` bundle — no need to copy `cyim/src/tty.cyr` anymore. Bumping an existing dep: [`docs/guides/upgrading.md`](docs/guides/upgrading.md).
 
 ## Build
 

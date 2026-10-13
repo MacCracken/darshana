@@ -553,11 +553,11 @@ var EXPECT_SANITIZE  = (0 - 1680589921240263252);   # 0xe8ad585eeb5f55ac
 var EXPECT_REL       = (0 - 3644634539072174773);   # 0xcd6ba832627bc54b
 
 fn _id_report(name, got, want) {
-    syscall(1, 1, "  ", 2);
-    syscall(1, 1, name, strlen(name));
-    syscall(1, 1, " = 0x", 5);
+    sys_write(1, "  ", 2);
+    sys_write(1, name, strlen(name));
+    sys_write(1, " = 0x", 5);
     fmt_hex(got);
-    syscall(1, 1, "\n", 1);
+    sys_write(1, "\n", 1);
     assert_eq(got, want, name);
     return 0;
 }
@@ -609,9 +609,9 @@ fn main() {
     _id_report("tty_fg_rgb / tty_bg_rgb", d_rgb, EXPECT_RGB_EMIT);
     _id_report("tty_move", d_mov, EXPECT_MOVE);
     _id_report("tty_cursor_up / tty_cursor_down", d_rel, EXPECT_REL);
-    syscall(1, 1, "  records: ", 11);
+    sys_write(1, "  records: ", 11);
     fmt_int(_id_records);
-    syscall(1, 1, "\n", 1);
+    sys_write(1, "\n", 1);
 
     return assert_summary();
 }

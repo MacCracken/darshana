@@ -6,11 +6,16 @@
 # NOT inside the CYRIUS_TARGET_LINUX gate that termios.cyr uses.
 #
 # Each fixed-escape helper writes its sequence to fd 1 (stdout)
-# directly via `syscall(1, ...)` and returns 0 unconditionally —
+# through the stdlib's `sys_write(1, ...)` and returns 0 unconditionally —
 # best-effort: the write(2) result is not checked. A 3–8 byte escape
 # to a TTY does not partial-write in practice, and a consumer mid-
 # render has no meaningful recovery from a failed escape, so the
 # emitters keep their call sites clean rather than thread an error.
+#
+# The wrapper, not a raw `syscall(1, ...)`: write is 1 on x86_64 but 64
+# on aarch64, and a literal 1 reached the right call there only because
+# the aarch64 backend rewrites it. The stdlib's `SYS_WRITE` is each
+# target's own number.
 #
 # ⚠ One failure is not quiet: if fd 1 is a pipe whose reader has gone
 # (`prog | head -c1`), the write raises SIGPIPE, whose default action
@@ -27,7 +32,7 @@
 # user's previous shell content is restored on tty_alt_leave().
 # Returns 0 (the write(2) result is not checked — see this file's header).
 fn tty_alt_enter() {
-    syscall(1, 1, "\x1b[?1049h", 8);
+    sys_write(1, "\x1b[?1049h", 8);
     return 0;
 }
 
@@ -35,7 +40,7 @@ fn tty_alt_enter() {
 # Pair with tty_alt_enter() on every exit path including SIGINT/SIGTERM.
 # Returns 0.
 fn tty_alt_leave() {
-    syscall(1, 1, "\x1b[?1049l", 8);
+    sys_write(1, "\x1b[?1049l", 8);
     return 0;
 }
 
@@ -43,7 +48,7 @@ fn tty_alt_leave() {
 # pair with tty_cursor_home() if you want top-left.
 # Returns 0.
 fn tty_clear() {
-    syscall(1, 1, "\x1b[2J", 4);
+    sys_write(1, "\x1b[2J", 4);
     return 0;
 }
 
@@ -53,7 +58,7 @@ fn tty_clear() {
 # v0.3.0 — promoted from chakshu's _tui_clear_eol.
 # Returns 0.
 fn tty_clear_to_eol() {
-    syscall(1, 1, "\x1b[K", 3);
+    sys_write(1, "\x1b[K", 3);
     return 0;
 }
 
@@ -69,7 +74,7 @@ fn tty_clear_to_eol() {
 # v1.0 freeze (emitted bytes unchanged — still CSI J).
 # Returns 0.
 fn tty_clear_to_eos() {
-    syscall(1, 1, "\x1b[J", 3);
+    sys_write(1, "\x1b[J", 3);
     return 0;
 }
 
@@ -77,14 +82,14 @@ fn tty_clear_to_eos() {
 # or the user's shell prompt comes back without a visible cursor.
 # Returns 0.
 fn tty_cursor_hide() {
-    syscall(1, 1, "\x1b[?25l", 6);
+    sys_write(1, "\x1b[?25l", 6);
     return 0;
 }
 
 # Show the text cursor. CSI ?25h.
 # Returns 0.
 fn tty_cursor_show() {
-    syscall(1, 1, "\x1b[?25h", 6);
+    sys_write(1, "\x1b[?25h", 6);
     return 0;
 }
 
@@ -92,7 +97,7 @@ fn tty_cursor_show() {
 # because no decimal formatting / parameter encoding.
 # Returns 0.
 fn tty_cursor_home() {
-    syscall(1, 1, "\x1b[H", 3);
+    sys_write(1, "\x1b[H", 3);
     return 0;
 }
 
@@ -107,7 +112,7 @@ fn tty_cursor_home() {
 #
 # Usage:
 #     tty_sgr(TTY_FG_CYAN);        # set foreground to cyan
-#     syscall(1, 1, "AGNOS", 5);   # write colored text
+#     sys_write(1, "AGNOS", 5);   # write colored text
 #     tty_sgr_reset();             # clear back to default
 #
 # Idempotency: consumers are responsible for emitting tty_sgr_reset()
@@ -150,7 +155,7 @@ var TTY_SGR_REVERSE   = 7;
 # Cheaper than tty_sgr(0) — no decimal formatting.
 # Returns 0.
 fn tty_sgr_reset() {
-    syscall(1, 1, "\x1b[0m", 4);
+    sys_write(1, "\x1b[0m", 4);
     return 0;
 }
 
@@ -314,7 +319,7 @@ fn _ansi_rgb_write(layer, r, g, b) {
     var buf[24];
     var pos = _ansi_rgb_buf(&buf, 0, layer, r, g, b);
     if (pos < 0) { return 0 - 1; }
-    syscall(1, 1, &buf, pos);
+    sys_write(1, &buf, pos);
     return 0;
 }
 
@@ -475,6 +480,6 @@ fn tty_sgr(code) {
     var buf[8];                  # max emit is ESC [ + 3 digits + m = 6
     var pos = tty_sgr_buf(&buf, 0, code);
     if (pos < 0) { return 0 - 1; }
-    syscall(1, 1, &buf, pos);
+    sys_write(1, &buf, pos);
     return 0;
 }
