@@ -19,7 +19,7 @@ Move the tag in your manifest and re-resolve:
 ```
 [deps.darshana]
 git     = "https://github.com/MacCracken/darshana.git"
-tag     = "1.5.0"
+tag     = "1.6.0"
 modules = ["dist/darshana.cyr"]
 ```
 
@@ -30,6 +30,43 @@ cyrius deps
 then rebuild and run your own suite. A consumer that resolves darshana by
 `path` reads the working tree, not the tag, so it picks up the bundle as soon as
 the tree changes; one that vendors `dist/darshana.cyr` by copy re-copies it.
+
+## 1.6.0
+
+**No code change**: the release only adds one function, and every answer and
+byte darshana already gave is unchanged. The floor is unchanged too: cyrius
+6.7.2 on Linux, 6.7.11 for an AGNOS build.
+
+`tty_isatty_is_per_fd()` says whether `tty_isatty(fd)` answers about `fd`
+([ADR 0008](../adr/0008-isatty-scope-probe.md)):
+
+| Platform | `tty_isatty_is_per_fd()` | so a 1 from `tty_isatty(fd)` means |
+|---|---|---|
+| Linux | 1, always | `fd` is a terminal |
+| agnos ≥ 1.57.13 | 1 | `fd` is the console or a terminal emulator's channel |
+| agnos < 1.57.13, mirshi 1.11.3 | 0 | only that the console is up: `fd` may be a file or a pipe |
+
+What you can drop: an AGNOS workaround that keeps colour or other escapes off
+because `tty_isatty` could not say what `fd` was, or a `sys_fd_kind` call of
+your own made for that reason. Gate decoration on both calls:
+
+```cyrius
+var decorate = 0;
+if (tty_isatty_is_per_fd() == 1) {
+    if (tty_isatty(1) == 1) { decorate = 1; }
+}
+```
+
+What stays:
+- A safety control that should fail closed, such as sanitizing names before
+  they reach the screen, can keep reading `tty_isatty` alone. On an old kernel
+  it then also sanitizes output going to a file, which is the safe direction.
+- The probe says nothing about `tty_winsize`. On AGNOS that reports the
+  console's grid whatever `fd` is, so inside a terminal emulator (puka) it is
+  the console's size, not the window's.
+- Under mirshi 1.11.3 the first of `tty_isatty` and `tty_isatty_is_per_fd` to
+  run prints the one `mirshi: ENOSYS agnos#110 -> -1` line, as in 1.5.0. They
+  share one probe, so asking both prints no second line.
 
 ## 1.5.0
 

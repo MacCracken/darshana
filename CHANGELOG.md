@@ -4,6 +4,73 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-10-28
+
+A minor: **one function added, and nothing already shipped changed.**
+`tty_isatty_is_per_fd()` says whether `tty_isatty(fd)` answers about `fd` on
+this platform. On Linux it always does. On AGNOS it does from agnos 1.57.13,
+and before that, and under mirshi 1.11.3, it answers about the console
+([ADR 0008](docs/adr/0008-isatty-scope-probe.md)). darshini asked for it, to
+turn on its AGNOS colour, icons, grid and link targets only where
+`darshini > file` cannot receive them. All 20 digests are unchanged, and the
+floor is unchanged, measured again with a consumer that calls the new
+function: Linux builds fail under cyrius 6.7.1 and build under 6.7.2, 6.7.10,
+6.7.11 and 6.7.18; AGNOS builds fail under 6.7.10 and build under 6.7.11 and
+6.7.18.
+
+### Added
+
+- **`tty_isatty_is_per_fd()`**: 1 if `tty_isatty(fd)` answers about `fd`, 0 if
+  it answers about something wider. It is a 1/0 predicate that takes no
+  argument, because the answer belongs to the platform, not an fd, and cannot
+  change during a process.
+  - **Linux**: 1, with no syscall.
+  - **AGNOS**: 1 on agnos 1.57.13 and later (`fd_kind#111`), 0 on an older
+    kernel and under mirshi 1.11.3. It reads the once-per-process probe
+    `tty_isatty` already makes and shares its cached answer, so asking both
+    costs at most one `console_mode#110` query and, under mirshi, one
+    `ENOSYS` line.
+
+  Decorate when it is 1 and `tty_isatty(fd)` is 1. It says nothing about
+  `tty_winsize`, which on AGNOS reports the console's grid even on a
+  terminal emulator's channel.
+- ADR 0003's "Added since 1.0" table gains it; `scripts/smoke.sh` requires it.
+  It is a platform peer, one definition per target gate, checked by
+  `scripts/platform-gate.sh`'s peer rule.
+- **ADR 0008** records the shape and why it ships with one consumer: the third
+  recorded exception to the second-consumer rule, after ADR 0005 and ADR 0006,
+  by owner decision. The tri-state `tty_isatty_exact(fd)` was offered and
+  declined. ADR 0003's Neutral section names all three exceptions.
+
+### Tests
+
+- `tests/darshana.tcyr` 441 → **442**: the Linux answer, on x86_64 and aarch64.
+- `tests/agnos.tcyr` 44 → **47**: 0 with the cached "no", and the cache still
+  says no afterwards, so nothing was asked; 1 with the cached "yes".
+- `tests/agnos_live.cyr` 57 → **59**: asked first on a real kernel, so the
+  public call makes the real query: 1, and the cache `tty_isatty` reads holds
+  it. 59 / 59 on agnos 1.57.14.
+- Totals pinned in `scripts/ci.sh` (`EXPECT_UNIT`, `EXPECT_AGNOS`) and
+  `scripts/agnos-live.sh` (`EXPECT_LIVE`).
+- All 15 gates pass (`scripts/ci.sh all`). On a Raspberry Pi 4 the unit suite
+  passes 444 (sized TTY), pty 127 and identity 33, with all 20 digests
+  identical to x86_64's.
+- **Five planted defects, each caught.** The Linux peer answering 0 fails the
+  unit suite. The AGNOS peer answering 1 always, 0 always, the raw cache value
+  (-1 on an old kernel), or a fresh query on every call each fails the host
+  suite. The two that change the answer on a new kernel (0 always, the raw
+  cache) also fail the live suite, on 2 assertions; the other two give the
+  right answer there and can only be caught on the host.
+
+### Changed — documentation
+
+- The bundle's front matter puts `tty_isatty_is_per_fd` in the predicates
+  bucket, and both `tty_isatty` docstrings point at it.
+- The upgrade guide gains a 1.6.0 note. The bump examples (the guide's and
+  `docs/examples/raw_loop.cyr`'s) name 1.6.0. The roadmap names 1.6.0 among
+  the minors that shipped. `state.md` is refreshed: darshini's row now reads
+  its 1.5.0 pin, and bannermanor's own `fd_kind` gate is described.
+
 ## [1.5.0] — 2026-10-28
 
 A minor: **three AGNOS peers do what their Linux twins do, on agnos 1.57.13 and

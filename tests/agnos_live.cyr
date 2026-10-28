@@ -32,6 +32,9 @@ fn main() {
     var q = sys_console_mode(0, 0);
     assert(q >= 0, "console_mode#110 answers a query: agnos >= 1.57.13");
     assert_eq(q & CM_NOECHO, 0, "echo is on at start");
+    # v1.6.0 — asked first, so the public probe makes the real query.
+    assert_eq(tty_isatty_is_per_fd(), 1, "tty_isatty_is_per_fd asks the kernel: 1, tty_isatty is about the fd");
+    assert_eq(_agnos_tty_calls, 1, "and caches the answer tty_isatty reads");
     assert_eq(_agnos_has_tty_calls(), 1, "darshana's probe agrees");
 
     test_group("agnos live — tty_isatty is about the fd");

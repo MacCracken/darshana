@@ -28,11 +28,12 @@
 
 **Nothing is queued.** 1.3.0 shipped every candidate the 2026-10-12 surveys
 found ([ADR 0005](../adr/0005-candidates-ahead-of-second-consumer.md)), 1.4.0
-the SGR scanner anuenue proposed ([ADR 0006](../adr/0006-sgr-scanner.md)), and
+the SGR scanner anuenue proposed ([ADR 0006](../adr/0006-sgr-scanner.md)),
 1.5.0 the AGNOS arms agnos 1.57.13 unblocked
-([ADR 0007](../adr/0007-agnos-console-mode-and-fd-kind.md)). From here the
-CLAUDE.md rule applies again: a primitive is extracted when a **second**
-consumer needs it.
+([ADR 0007](../adr/0007-agnos-console-mode-and-fd-kind.md)), and 1.6.0 the
+`tty_isatty` scope probe darshini asked for
+([ADR 0008](../adr/0008-isatty-scope-probe.md)). From here the CLAUDE.md rule
+applies again: a primitive is extracted when a **second** consumer needs it.
 
 *Always eligible:*
 - a new platform peer;

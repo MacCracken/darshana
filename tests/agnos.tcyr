@@ -133,6 +133,16 @@ fn main() {
     assert_eq(tty_flush_input(0), 0 - 1, "tty_flush_input is -1: nothing can flush");
     assert_eq(_tty_in_raw, 0, "a refused echo-off holds no slot");
     assert_eq(_agnos_has_tty_calls(), 0, "the cached answer is used, not asked again");
+    # v1.6.0 — the public probe says so (ADR 0008).
+    assert_eq(tty_isatty_is_per_fd(), 0, "tty_isatty_is_per_fd is 0: tty_isatty answers about the console");
+    assert_eq(_agnos_tty_calls, 0 - 1, "and it asked nothing: the cache still says no");
+
+    # v1.6.0 — a kernel that has the calls. The cached "yes" is set by
+    # hand, so nothing is asked of the host.
+    test_group("AGNOS arm — tty_isatty_is_per_fd on agnos >= 1.57.13");
+    _agnos_tty_calls = 1;
+    assert_eq(tty_isatty_is_per_fd(), 1, "tty_isatty_is_per_fd is 1: tty_isatty answers about the fd");
+    _agnos_tty_calls = 0 - 1;
 
     # v1.5.0 — the slot paths that make no call.
     test_group("AGNOS arm — the slot");

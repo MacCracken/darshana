@@ -127,6 +127,7 @@ for the two v1.0 tables.
 | 1.3.0 | `TTY_BG_BRIGHT_WHITE` |
 | 1.4.0 | `tty_sgr_len` |
 | 1.4.0 | `tty_sgr_strip_buf` |
+| 1.6.0 | `tty_isatty_is_per_fd` |
 
 ### What "frozen" covers
 
@@ -202,9 +203,10 @@ for the two v1.0 tables.
 - Additive change stays cheap. New functions, new constants, new platform peers,
   and new `_`-prefixed internals are all minor bumps. The extract-on-2nd-consumer
   rule (`tty_bg_256_buf` is the standing example) is unaffected by the freeze.
-  (Two recorded exceptions, each an owner decision: 1.3.0's seven
-  candidates, [ADR 0005](0005-candidates-ahead-of-second-consumer.md), and
-  1.4.0's SGR scanner, [ADR 0006](0006-sgr-scanner.md).)
+  (Three recorded exceptions, each an owner decision: 1.3.0's seven
+  candidates, [ADR 0005](0005-candidates-ahead-of-second-consumer.md);
+  1.4.0's SGR scanner, [ADR 0006](0006-sgr-scanner.md); and 1.6.0's
+  `tty_isatty_is_per_fd`, [ADR 0008](0008-isatty-scope-probe.md).)
 
 ## Post-1.0 change policy
 

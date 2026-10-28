@@ -28,5 +28,6 @@ Decisions about darshana — what we chose, the context, and the consequences we
 | [0005](0005-candidates-ahead-of-second-consumer.md) | 1.3.0 ships the seven roadmap candidates ahead of a second consumer (owner decision), each shaped on the code that hand-rolls it; the rule stands for everything after | Accepted |
 | [0006](0006-sgr-scanner.md) | 1.4.0 adds `tty_sgr_len` / `tty_sgr_strip_buf`, reading SGR in text a program displays or measures: in charter on the output side, the second exception to the second-consumer rule (owner decision), anuenue's shape with five recorded differences | Accepted |
 | [0007](0007-agnos-console-mode-and-fd-kind.md) | 1.5.0's AGNOS arms: `tty_isatty` per fd (console and a terminal emulator's channel), echo-off and flush on the console only, one probe per process with the 1.4.0 answers on older kernels, AGNOS builds on cyrius ≥ 6.7.11, and a live suite on a real agnos kernel | Accepted |
+| [0008](0008-isatty-scope-probe.md) | 1.6.0 adds `tty_isatty_is_per_fd()`, a no-argument 1/0 predicate saying whether `tty_isatty` answers about the fd (always on Linux; on AGNOS from agnos 1.57.13): the third exception to the second-consumer rule (owner decision), for darshini | Accepted |
 
 _This index was empty through v0.9.4 while two ADRs sat on disk; keep it current when adding one._

@@ -7,12 +7,15 @@
 
 ## Version
 
-**1.5.0** (2026-10-28). Stable; the API has been frozen since v1.0.0
-([ADR 0003](../adr/0003-v1-api-freeze.md)). 1.5.0 makes the AGNOS arms of
-`tty_echo_off`, `tty_flush_input` and `tty_isatty` real on agnos 1.57.13 and
-later ([ADR 0007](../adr/0007-agnos-console-mode-and-fd-kind.md)), and runs the
-AGNOS arm on a real agnos kernel for the first time. 1.4.0 added the SGR scanner
-and 1.3.1 moved to cyrius 6.7.18, both the same day. Nothing is queued; open: a
+**1.6.0** (2026-10-28). Stable; the API has been frozen since v1.0.0
+([ADR 0003](../adr/0003-v1-api-freeze.md)). 1.6.0 adds `tty_isatty_is_per_fd()`,
+which says whether `tty_isatty` answers about the fd: always on Linux, on AGNOS
+from agnos 1.57.13 ([ADR 0008](../adr/0008-isatty-scope-probe.md), for
+darshini). 1.5.0 made the AGNOS arms of `tty_echo_off`, `tty_flush_input` and
+`tty_isatty` real on agnos 1.57.13 and later
+([ADR 0007](../adr/0007-agnos-console-mode-and-fd-kind.md)) and ran the AGNOS
+arm on a real agnos kernel for the first time; 1.4.0 added the SGR scanner and
+1.3.1 moved to cyrius 6.7.18, all the same day. Nothing is queued; open: a
 signalfd rollback test that waits on mirshi, which will be updated later, or on
 a real-kernel way to make a signalfd fail.
 
@@ -21,7 +24,7 @@ a real-kernel way to make a signalfd fail.
 | | |
 |---|---|
 | Pin | cyrius **6.7.18** (`cyrius.cyml [package].cyrius`, the latest release; CI installs from it) |
-| Bundle floor | Linux: cyrius **≥ 6.7.2**, because the bundle uses `const`. AGNOS: **≥ 6.7.11** since 1.5.0, for the stdlib's `sys_console_mode` / `sys_fd_kind` / `FDK_*` / `CM_*`. Measured for 1.5.0 with a consumer that includes the bundle: Linux fails under 6.7.1 and builds under 6.7.2, 6.7.10, 6.7.11 and 6.7.18; AGNOS fails under 6.7.10 (`undefined variable 'FDK_CONSOLE'`) and builds under 6.7.11 and 6.7.18 |
+| Bundle floor | Linux: cyrius **≥ 6.7.2**, because the bundle uses `const`. AGNOS: **≥ 6.7.11** since 1.5.0, for the stdlib's `sys_console_mode` / `sys_fd_kind` / `FDK_*` / `CM_*`. Measured again for 1.6.0 with a consumer that includes the bundle and calls `tty_isatty_is_per_fd`: Linux fails under 6.7.1 and builds under 6.7.2, 6.7.10, 6.7.11 and 6.7.18; AGNOS fails under 6.7.10 (`undefined variable 'FDK_CONSOLE'`) and builds under 6.7.11 and 6.7.18 |
 | `lib/` | 23 modules, 750,222 bytes, each byte-identical to the pinned snapshot. It is output: rebuild with `rm -rf lib/ && cyrius deps` |
 | `cyrius.lock` | committed; `cyrius deps --verify` checks it. A vendored file outside the declared footprint is named by `cyrius deps` and kept (cyrius 6.7.12); `rm lib/<file> && cyrius deps` drops it and its lock row (6.7.13) |
 | aarch64 | `cyrius build --aarch64` / `cyrius test --aarch64` work on a stock install, which ships `cycc_aarch64`. Run under `qemu-aarch64`, or on real hardware with `ssh pi` (Raspberry Pi 4, Linux 7.0) |
@@ -33,20 +36,20 @@ a real-kernel way to make a signalfd fail.
 
 ## Surface
 
-**56 public functions and 62 constants**, all frozen. ADR 0003 lists 29 + 37 from
-v1.0 and 52 added since, each frozen from the release that added it. They are
+**57 public functions and 62 constants**, all frozen. ADR 0003 lists 29 + 37 from
+v1.0 and 53 added since, each frozen from the release that added it. They are
 listed in machine-readable form in `scripts/smoke.sh` (`required_syms` /
 `required_flags`), checked against the bundle in both directions, and against
 ADR 0003's tables.
 
 | Module | Lines | Concern |
 |---|---:|---|
-| `src/termios.cyr` | 1,126 | the bundle's front matter: naming, the five return buckets, the module map. Termios modes — `tty_raw`, `tty_raw_nonblock`, `tty_echo_off` — sharing one save slot, plus `tty_cooked` / `tty_forget`; `tty_flush_input`; `tty_winsize` / `_or`; `tty_isatty`; the signalfd trio; `TIO_*` / `TTY_SIGMASK_*` |
+| `src/termios.cyr` | 1,167 | the bundle's front matter: naming, the five return buckets, the module map. Termios modes — `tty_raw`, `tty_raw_nonblock`, `tty_echo_off` — sharing one save slot, plus `tty_cooked` / `tty_forget`; `tty_flush_input`; `tty_winsize` / `_or`; `tty_isatty` and `tty_isatty_is_per_fd` (ADR 0008); the signalfd trio; `TIO_*` / `TTY_SIGMASK_*` |
 | `src/ansi.cyr` | 811 | alt screen, clear, cursor visibility and save/restore, SGR (16 / 256 / truecolor; `TTY_FG_*` / `TTY_BG_*` / `TTY_SGR_*`; `tty_sgr_list`), mouse and paste modes, OSC title and clipboard; reading SGR in text, `tty_sgr_len` / `tty_sgr_strip_buf` (ADR 0006). The scanner is pure |
 | `src/cursor.cyr` | 182 | `tty_dec_buf`, `tty_move` / `_buf`, `tty_cursor_up` / `_down`, scroll region |
 | `src/sanitize.cyr` | 179 | `tty_sanitize_buf`, `tty_has_ctl` (ADR 0004). Pure |
 | `src/main.cyr` | 28 | in-tree entry that includes all four; not in the bundle |
-| `dist/darshana.cyr` | 2,318 | the bundle: 2,298 module lines plus 20 that `distlib` adds (header, `# Requires`, separators) |
+| `dist/darshana.cyr` | 2,359 | the bundle: 2,339 module lines plus 20 that `distlib` adds (header, `# Requires`, separators) |
 | `dist/darshana.deps` | 4 | sidecar: 2 stdlib leaves, `syscalls` and `io`, derived by `distlib`'s compile-verify |
 
 **Platforms.** Linux on x86_64 and aarch64, and AGNOS. Every syscall-touching
@@ -58,6 +61,7 @@ agnos 1.57.13 and later:
 | Call | AGNOS answer | Notes |
 |---|---|---|
 | `tty_isatty(fd)` | about `fd`: 1 for the console and a terminal emulator's `#97` channel, 0 otherwise | fd_kind#111. Before 1.57.13, and under mirshi 1.11.3: about the console, as through 1.4.0 |
+| `tty_isatty_is_per_fd()` | 1 | since 1.6.0 (ADR 0008). 0 before 1.57.13 and under mirshi 1.11.3, where `tty_isatty` answers about the console. Always 1 on Linux |
 | `tty_echo_off`, `tty_flush_input` | 0 on the console | console_mode#110 (`CM_NOECHO \| CM_FLUSH`, `CM_FLUSH`). -1 on a channel (the emulator runs its own echo), on anything else, before 1.57.13 and under mirshi 1.11.3 |
 | `tty_cooked`, `tty_forget` | 0 | restore the console's echo state from before / free the slot with no call |
 | `tty_raw`, `tty_raw_nonblock` | -1 | no termios; raw keyboard input is out of scope (roadmap) |
@@ -65,24 +69,25 @@ agnos 1.57.13 and later:
 | `TTY_SIGMASK_PIPE` signalfd | never fires | agnos has no SIGPIPE |
 
 The arms ask once per process whether the kernel has the two calls
-(`console_mode#110`'s query), and keep the answer. Under mirshi 1.11.3, which has
-neither, that costs one `mirshi: ENOSYS agnos#110 -> -1` line on stderr.
+(`console_mode#110`'s query), and keep the answer; `tty_isatty_is_per_fd()` is
+that answer. Under mirshi 1.11.3, which has neither, that costs one
+`mirshi: ENOSYS agnos#110 -> -1` line on stderr.
 
 ## Tests
 
 | Suite | Assertions | Covers | Run |
 |---|---:|---|---|
-| `tests/darshana.tcyr` | 441 | the pure surface, constant values, exact bytes, rejections, the SGR scanner's contract edges, live-fd signalfd and winsize | `cyrius test` |
+| `tests/darshana.tcyr` | 442 | the pure surface, constant values, exact bytes, rejections, the SGR scanner's contract edges, live-fd signalfd and winsize | `cyrius test` |
 | `tests/pty.tcyr` | 127 | a real pseudo-terminal: every mode, restore byte-for-byte, mode switches, flush, hangup and `tty_forget`, fd aliasing, fd-1 escape capture | `cyrius test` |
 | `tests/identity.tcyr` | 33 | every `_buf` composer over its whole domain inside guard regions; the SGR scanner against independent references, chunked against whole; **20 frozen digests** | `cyrius test` |
-| `tests/agnos.tcyr` | 44 | the AGNOS arm's constants, the stdlib values it relies on, the winsize decode, and every path that makes no syscall (out-of-range fds, the old-kernel answers, the slot) | `cyrius build --agnos` then run it on the Linux host |
-| `tests/agnos_live.cyr` | 57 | the AGNOS arm on a real agnos kernel: `tty_isatty` per fd, echo-off and its slot, flush, a #97 channel endpoint, winsize, a signalfd reading a self-sent SIGINT | `bash scripts/agnos-live.sh` (QEMU; a release step, not CI) |
+| `tests/agnos.tcyr` | 47 | the AGNOS arm's constants, the stdlib values it relies on, the winsize decode, and every path that makes no syscall (out-of-range fds, the old-kernel answers, `tty_isatty_is_per_fd` from either cached answer, the slot) | `cyrius build --agnos` then run it on the Linux host |
+| `tests/agnos_live.cyr` | 59 | the AGNOS arm on a real agnos kernel: `tty_isatty_is_per_fd` making the real query, `tty_isatty` per fd, echo-off and its slot, flush, a #97 channel endpoint, winsize, a signalfd reading a self-sent SIGINT | `bash scripts/agnos-live.sh` (QEMU; a release step, not CI) |
 
-**645 on x86_64; 601 on aarch64** (the AGNOS suite is x86_64-hosted), plus 57
-on agnos. All green at 1.5.0 on x86_64, under `CYRIUS_DCE=1`, under
+**649 on x86_64; 602 on aarch64** (the AGNOS suite is x86_64-hosted), plus 59
+on agnos. All green at 1.6.0 on x86_64, under `CYRIUS_DCE=1`, under
 qemu-aarch64, on the Pi, and on agnos 1.57.14 in QEMU. The
 totals are pinned in `scripts/ci.sh`. Run with a sized terminal on stdin, the unit
-suite adds two live-TTY winsize assertions (443); CI has no TTY and pins 441.
+suite adds two live-TTY winsize assertions (444); CI has no TTY and pins 442.
 
 A digest that moves means a frozen byte moved. The digests freeze:
 - since v1.0.0: the RGB, 256, SGR, reset and dec composers; the fixed, SGR, RGB
@@ -92,6 +97,9 @@ A digest that moves means a frozen byte moved. The digests freeze:
   `tty_title_buf`, `tty_clipboard_buf`, and the 1.3.0 emitters;
 - since 1.4.0: `tty_sgr_len` / `tty_sgr_strip_buf`, over every answer and every
   whole strip of the identity suite's inputs.
+
+1.5.0 and 1.6.0 added none: the AGNOS arms and `tty_isatty_is_per_fd` emit no
+bytes.
 
 ## Gates
 
@@ -129,7 +137,7 @@ Every other gap darshana filed is closed upstream; each record is in its owner's
 `docs/development/issues/archived/`:
 - **agnos 1.57.13** closed all three: a console grid change now raises SIGWINCH,
   `console_mode#110` gives ring 3 echo-off and an input flush, and `fd_kind#111`
-  says what an fd is. darshana's AGNOS arms do not use them yet (roadmap).
+  says what an fd is. darshana's AGNOS arms use them since 1.5.0 (ADR 0007).
 - **cyrius 6.7.11 – 6.7.14** closed all nine: the agnos negative-fd socket alias
   (6.7.11); the `sys_ioctl` comment, the removed leaf `deps` kept, the
   `lib sync --dry-run` output, the stale `commit` lock row (now reported, by
@@ -141,8 +149,9 @@ Every other gap darshana filed is closed upstream; each record is in its owner's
 
 Nine. Versions, pins and darshana tags read from each consumer's manifest (and
 thoth's vendored bundle) on 2026-10-28; the "Uses" column was read from their
-code on 2026-10-12. Seven resolve darshana **1.3.0** by git tag alone, on cyrius
-6.7.9 to 6.7.12; none is on 1.3.1 or 1.4.0 yet. anuenue, whose proposal 1.4.0
+code on 2026-10-12. Six resolve darshana **1.3.0** by git tag alone, on cyrius
+6.7.9 to 6.7.12; darshini resolves **1.5.0** on 6.7.18, and none is on 1.6.0
+yet. anuenue, whose proposal 1.4.0
 shipped, still carries its own stand-in. thoth and jalwa have not moved past
 1.1.2.
 
@@ -153,16 +162,19 @@ shipped, still carries its own stand-in. thoth and jalwa have not moved past
 | [cyim](https://github.com/MacCracken/cyim) | 1.11.0 | 1.3.0 | 6.7.9 | the donor: raw/cooked, alt screen, clear, `tty_move`, `tty_winsize`; a WINCH and a PIPE signalfd via `tty_read_signal`; `tty_fg_256_buf`, `tty_sgr*`; `tty_sanitize_buf` on paths, messages and picker rows (its buffer view keeps caret notation) |
 | [kii](https://github.com/MacCracken/kii) | 1.9.0 | 1.3.0 | 6.7.12 | `tty_winsize`, `tty_fg_256_buf`, `tty_bg_256_buf`, `tty_sgr_reset_buf`; `tty_has_ctl` as its filename check |
 | [bannermanor](https://github.com/MacCracken/bannermanor) | 1.8.1 | 1.3.0 | 6.7.11 | `tty_sgr` + `TTY_FG_*`; `tty_winsize` for the terminal width (the real AGNOS console grid since 1.2.0) |
-| [darshini](https://github.com/MacCracken/darshini) | 1.6.0 | 1.3.0 | 6.7.9 | `tty_sgr_buf` / `tty_sgr_reset_buf` + `TTY_FG_*`; `tty_winsize` (Linux), `tty_isatty`; `tty_sanitize_buf` on every filename it echoes |
+| [darshini](https://github.com/MacCracken/darshini) | 1.8.0 | 1.5.0 | 6.7.18 | `tty_sgr_buf` / `tty_sgr_reset_buf` + `TTY_FG_*`; `tty_winsize` (Linux), `tty_isatty`; `tty_sanitize_buf` on every filename it echoes |
 | [agora](https://github.com/MacCracken/agora) | 1.12.1 | 1.3.0 | 6.7.9 | `tty_sgr_buf` / `tty_sgr_reset_buf` + `TTY_FG_*`; `tty_sanitize_buf` on all user text it sends. Its shutdown signalfd is its own, not darshana's |
 | [thoth](https://github.com/MacCracken/thoth) | 0.52.8 | 1.1.2 (copied) | 6.6.6 | the widest: modes, screen, cursor, winsize, isatty, signals; also the private `_tty_apply_raw_flags`. Needs cyrius ≥ 6.7.2 before taking 1.3.0 |
 | [jalwa](https://github.com/MacCracken/jalwa) | 1.4.5 | 1.1.2 | 6.6.3 | raw/cooked, alt screen, clear, cursor, isatty. Needs cyrius ≥ 6.7.2 before taking 1.3.0 |
 
 AGNOS sizing was not settled the same way everywhere, because through 1.4.0
 darshana's AGNOS `tty_isatty` could not say what an fd was (1.5.0 can, on agnos
-1.57.13 and later). bannermanor sizes banners to the AGNOS console even when stdout is
-redirected (color stays off). darshini keeps width 0 and decoration off on AGNOS,
-having watched icons and escapes land in a redirected file under mirshi.
+1.57.13 and later). bannermanor asks `sys_fd_kind(1) == FDK_CONSOLE` itself, so
+its width cut and colour follow the console only: winsize#60 describes the
+console, not a terminal emulator's channel, a question darshana does not answer
+(ADR 0008 § Neutral). darshini keeps width 0 and decoration off on AGNOS,
+having watched icons and escapes land in a redirected file under mirshi; 1.6.0's
+`tty_isatty_is_per_fd` is the probe it waits on to turn them on (ADR 0008).
 
 ## Known limits, true today
 

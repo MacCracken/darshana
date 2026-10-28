@@ -1121,6 +1121,12 @@ fn main() {
     assert_eq(tty_sgr_strip_buf(&sb, 0, 0, &sb_h), 0, "empty input keeps 0 bytes");
     assert_eq(load64(&sb_h), 0, "and stores a held count of 0");
 
+    # v1.6.0 — on Linux `tty_isatty` asks TIOCGWINSZ of the fd itself, so
+    # its answer is always about the fd (ADR 0008). The AGNOS answers are
+    # in tests/agnos.tcyr and tests/agnos_live.cyr.
+    test_group("v1.6.0 — tty_isatty_is_per_fd");
+    assert_eq(tty_isatty_is_per_fd(), 1, "Linux: tty_isatty answers about the fd");
+
     return assert_summary();
 }
 
