@@ -21,9 +21,9 @@ permissions:
 jobs:
   build-and-test:
     name: Build & Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install Cyrius toolchain
         # The cyrius.cyml `[package].cyrius` pin is the single source of truth
@@ -92,8 +92,8 @@ jobs:
       - name: Install qemu-user (for the aarch64 arm)
         run: |
           sudo apt-get update -qq
-          # qemu-user, not qemu-user-static: both ship qemu-aarch64 on
-          # Ubuntu 24.04, and 26.04 drops qemu-user-static.
+          # qemu-user, not qemu-user-static: on Ubuntu 26.04 qemu-user ships
+          # the static /usr/bin/qemu-aarch64 and replaces qemu-user-static.
           sudo apt-get install -y -qq qemu-user
 
       - name: Cross-build + test the aarch64 arm
@@ -110,9 +110,9 @@ jobs:
 
   security:
     name: Security scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Scan for forbidden patterns, platform gates, syscall allowlist
         # Pure shell: this job installs no toolchain.
@@ -120,9 +120,9 @@ jobs:
 
   docs:
     name: Documentation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Required files + version consistency
         run: bash scripts/ci.sh docs

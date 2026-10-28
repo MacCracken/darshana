@@ -28,9 +28,15 @@ consumer needs it.
 
 *Always eligible:*
 - a new platform peer;
-- an AGNOS arm that becomes real when agnos grows the mechanism —
-  `tty_echo_off` / `tty_flush_input` on a console line-discipline call, and a
-  per-fd `tty_isatty` on an fd-kind query (both filed with agnos);
+- an AGNOS arm that becomes real when agnos grows the mechanism. **Unblocked:**
+  agnos 1.57.13 ships `console_mode#110` (`CM_NOECHO`, `CM_FLUSH`) and
+  `fd_kind#111`, and cyrius's stdlib wraps both from 6.7.11 (`sys_console_mode`,
+  `sys_fd_kind`). So `tty_echo_off` / `tty_flush_input` can stop answering -1 on
+  AGNOS, and `tty_isatty(fd)` can answer about `fd` (`sys_fd_kind(fd) ==
+  FDK_CONSOLE`) instead of about the console. A kernel older than 1.57.13 answers
+  -1 to both calls, and the arms must keep that answer there. agnos 1.57.13 also
+  raises SIGWINCH on a grid change; the WINCH signalfd stays untestable until
+  mirshi delivers signals (above);
 - anything a consumer asks for.
 
 ## 2.0.0 — major

@@ -19,7 +19,7 @@ Move the tag in your manifest and re-resolve:
 ```
 [deps.darshana]
 git     = "https://github.com/MacCracken/darshana.git"
-tag     = "1.3.0"
+tag     = "1.3.1"
 modules = ["dist/darshana.cyr"]
 ```
 
@@ -30,6 +30,14 @@ cyrius deps
 then rebuild and run your own suite. A consumer that resolves darshana by
 `path` reads the working tree, not the tag, so it picks up the bundle as soon as
 the tree changes; one that vendors `dist/darshana.cyr` by copy re-copies it.
+
+## 1.3.1
+
+**No code change, no behavior change, and no toolchain move required.** 1.3.1
+moves darshana's own toolchain to cyrius 6.7.18 and its CI to Ubuntu 26.04. The
+bundle's code is byte-identical to 1.3.0's (only its `# Version:` line moved), so
+every byte it emits is unchanged, its stdlib requirements are still `syscalls`
+and `io`, and its floor is still cyrius 6.7.2. It is built and tested on 6.7.18.
 
 ## 1.3.0
 

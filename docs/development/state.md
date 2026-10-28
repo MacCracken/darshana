@@ -7,21 +7,24 @@
 
 ## Version
 
-**1.3.0** (2026-10-12). Stable; the API has been frozen since v1.0.0
-([ADR 0003](../adr/0003-v1-api-freeze.md)). 1.3.0 shipped the last of the
-roadmap's candidates ([ADR 0005](../adr/0005-candidates-ahead-of-second-consumer.md)),
-so nothing is queued. The only open item is a test that waits on mirshi.
+**1.3.1** (2026-10-28). Stable; the API has been frozen since v1.0.0
+([ADR 0003](../adr/0003-v1-api-freeze.md)). 1.3.1 is a toolchain and CI patch:
+cyrius 6.7.18, Ubuntu 26.04 runners, and the latest stable actions, with the
+bundle's code unchanged. 1.3.0 shipped the last of the roadmap's candidates
+([ADR 0005](../adr/0005-candidates-ahead-of-second-consumer.md)). Open: a test
+that waits on mirshi, and the AGNOS arms that agnos 1.57.13 unblocked (roadmap).
 
 ## Toolchain
 
 | | |
 |---|---|
-| Pin | cyrius **6.7.9** (`cyrius.cyml [package].cyrius`, the latest release; CI installs from it) |
-| Bundle floor | cyrius **≥ 6.7.2**, because the bundle uses `const`. Measured: it fails under 6.6.20 and 6.7.1 and builds under 6.7.2 and 6.7.9 |
-| `lib/` | 23 modules, about 744 KB, each byte-identical to the pinned snapshot. It is output: rebuild with `rm -rf lib/ && cyrius deps` |
+| Pin | cyrius **6.7.18** (`cyrius.cyml [package].cyrius`, the latest release; CI installs from it) |
+| Bundle floor | cyrius **≥ 6.7.2**, because the bundle uses `const`. Measured at 1.3.0: it fails under 6.6.20 and 6.7.1 and builds under 6.7.2 and 6.7.9. 1.3.1's bundle code is byte-identical to 1.3.0's, and it builds under 6.7.18 |
+| `lib/` | 23 modules, 750,222 bytes, each byte-identical to the pinned snapshot. It is output: rebuild with `rm -rf lib/ && cyrius deps` |
 | `cyrius.lock` | committed; `cyrius deps --verify` checks it. Not pruned when a leaf is removed (filed with cyrius) |
 | aarch64 | `cyrius build --aarch64` / `cyrius test --aarch64` work on a stock install, which ships `cycc_aarch64`. Run under `qemu-aarch64`, or on real hardware with `ssh pi` (Raspberry Pi 4, Linux 7.0) |
-| CI qemu | `ci.yml` installs `qemu-user` (since 1.3.0; not yet run on a GitHub runner) |
+| CI runner | every job in `ci.yml` and `release.yml` runs on `ubuntu-26.04` (since 1.3.1), where `qemu-user` ships the static `qemu-aarch64`. Not yet run on a GitHub runner; 1.3.0's CI and release ran green on `ubuntu-latest` (24.04) |
+| CI actions | `actions/checkout` v7.0.1, `actions/upload-artifact` v7.0.2, `actions/download-artifact` v8.0.2, `softprops/action-gh-release` v3.0.3, each pinned by commit SHA |
 
 `cyrius build -v` names the compiler it resolved. The driver dispatches to the
 **pinned** version's `cycc`, whatever `~/.cyrius/current` says.
@@ -52,9 +55,9 @@ and `src/`'s syscall allowlist is empty. What AGNOS cannot do today:
 | Call | AGNOS answer | Why |
 |---|---|---|
 | `tty_raw`, `tty_raw_nonblock` | -1 | no termios; raw keyboard input is out of scope (roadmap) |
-| `tty_echo_off`, `tty_flush_input` | -1 | the console always echoes and has no flush call (filed with agnos) |
-| `tty_isatty(fd)` | about the console, not `fd` | no fd-kind query (filed with agnos) |
-| `TTY_SIGMASK_WINCH` signalfd | never fires | the kernel never raises SIGWINCH (filed with agnos). Poll `tty_winsize` |
+| `tty_echo_off`, `tty_flush_input` | -1 | darshana does not call agnos 1.57.13's `console_mode#110` (`CM_NOECHO`, `CM_FLUSH`) yet (roadmap). Older kernels have no such call |
+| `tty_isatty(fd)` | about the console, not `fd` | darshana does not call agnos 1.57.13's `fd_kind#111` yet (roadmap) |
+| `TTY_SIGMASK_WINCH` signalfd | untested | agnos 1.57.13 raises SIGWINCH on a console grid change (agnos's record); darshana has not run its WINCH signalfd against it, and under mirshi no signalfd receives anything. Poll `tty_winsize` |
 | `TTY_SIGMASK_PIPE` signalfd | never fires | agnos has no SIGPIPE |
 | any signalfd under mirshi | receives nothing | mirshi defects (filed in mirshi's roadmap) |
 
@@ -68,8 +71,9 @@ and `src/`'s syscall allowlist is empty. What AGNOS cannot do today:
 | `tests/agnos.tcyr` | 27 | the AGNOS arm's constants, decode and syscall-free peers | `cyrius build --agnos` then run it on the Linux host |
 
 **564 on x86_64; 537 on aarch64** (the AGNOS suite is x86_64-hosted). All green
-at 1.3.0 on x86_64, under `CYRIUS_DCE=1`, under qemu-aarch64 and on the Pi. The
-totals are pinned in `scripts/ci.sh`.
+at 1.3.1 on x86_64, under `CYRIUS_DCE=1`, under qemu-aarch64 and on the Pi. The
+totals are pinned in `scripts/ci.sh`. Run with a sized terminal on stdin, the unit
+suite adds two live-TTY winsize assertions (384); CI has no TTY and pins 382.
 
 A digest that moves means a frozen byte moved. The digests freeze:
 - since v1.0.0: the RGB, 256, SGR, reset and dec composers; the fixed, SGR, RGB
@@ -108,18 +112,18 @@ Found while working on darshana; each belongs to its owner.
 | Owner | Gap | Filed |
 |---|---|---|
 | mirshi | five signal-band defects: a signalfd never delivers a blocked signal; host signals bypass the agnos model; the `read#5` record; the slot leak on close; `sigprocmask` edges | mirshi `docs/development/roadmap.md` |
-| agnos | the console grid changes without SIGWINCH | agnos `docs/development/issues/2026-10-12-console-grid-changes-without-sigwinch.md` |
-| agnos | no ring-3 control of the console line discipline (echo-off, input flush) | agnos `…/2026-10-12-console-line-discipline-has-no-ring3-control.md` |
-| agnos | no way to ask what an fd is | agnos `…/2026-10-12-no-way-to-ask-what-an-fd-is.md` |
-| cyrius stdlib | agnos `sys_close` / `sys_read` / `sys_write` take a negative fd for socket slot `fd & 7`. darshana never passes a negative fd to close | cyrius `docs/development/issues/2026-10-12-agnos-negative-fd-taken-for-socket-slot-7.md` |
-| cyrius stdlib | `sys_ioctl`'s comment says aarch64 has no 16 → 29 row | cyrius `…/2026-10-12-sys-ioctl-comment-says-aarch64-has-no-16-to-29-row.md` |
-| cyrius CLI | `cyrius deps` keeps a removed leaf vendored and locked | cyrius `…/2026-10-12-deps-keeps-a-removed-stdlib-leaf-vendored-and-locked.md` |
-| cyrius CLI | `cyrius lib sync --dry-run` prints pointers | cyrius `…/2026-10-08-cli-path-and-reporting-leftovers.md` |
-| cyrius CLI | a dep's tag change leaves the old `commit` row in `cyrius.lock`, and `--locked` passes | cyrius `…/2026-10-12-deps-keeps-a-stale-commit-row-after-a-tag-change.md` |
-| cyrius CLI | `distlib` records a named dep's transitive leaf (`boxed`) as the bundle's own | cyrius `…/2026-10-12-distlib-records-a-named-deps-transitive-leaf-as-the-bundles-own.md` |
-| cyrius CLI | `cyrfmt --check` passes a file `cyrfmt` reformats | cyrius `…/2026-10-12-cyrfmt-check-passes-a-file-cyrfmt-would-reformat.md` |
-| cyrius compiler | DCE keeps the callees of a redefined fn's losing body | cyrius `…/2026-10-12-dce-keeps-the-callees-of-a-redefined-fns-losing-body.md` |
-| cyrius stdlib | `epoll_event_new` per arch, but no reader for the data offset | cyrius `…/2026-10-12-stdlib-epoll-event-has-a-writer-but-no-reader.md` |
+
+Every other gap darshana filed is closed upstream; each record is in its owner's
+`docs/development/issues/archived/`:
+- **agnos 1.57.13** closed all three: a console grid change now raises SIGWINCH,
+  `console_mode#110` gives ring 3 echo-off and an input flush, and `fd_kind#111`
+  says what an fd is. darshana's AGNOS arms do not use them yet (roadmap).
+- **cyrius 6.7.11 – 6.7.14** closed all nine: the agnos negative-fd socket alias
+  (6.7.11); the `sys_ioctl` comment, the removed leaf `deps` kept, the
+  `lib sync --dry-run` output, the stale `commit` lock row (now reported, by
+  design still accepted), the `distlib` transitive leaf, `cyrfmt --check` (the
+  2-or-4 continuation contract kept, `audit` now agrees), and the epoll event
+  reader (6.7.12); the DCE losing-body callees (6.7.14).
 
 ## Consumers
 
@@ -140,8 +144,9 @@ this tree were dropped. thoth and jalwa have not moved yet.
 | [thoth](https://github.com/MacCracken/thoth) | — | 1.1.2 (copied) | 6.6.6 | the widest: modes, screen, cursor, winsize, isatty, signals; also the private `_tty_apply_raw_flags`. Needs cyrius ≥ 6.7.2 before taking 1.3.0 |
 | [jalwa](https://github.com/MacCracken/jalwa) | — | 1.1.2 | 6.6.3 | raw/cooked, alt screen, clear, cursor, isatty. Needs cyrius ≥ 6.7.2 before taking 1.3.0 |
 
-AGNOS sizing is not settled the same way everywhere, because agnos cannot say
-what an fd is. bannermanor sizes banners to the AGNOS console even when stdout is
+AGNOS sizing is not settled the same way everywhere, because darshana's AGNOS
+`tty_isatty` cannot say what an fd is (agnos 1.57.13's `fd_kind#111` can; roadmap).
+bannermanor sizes banners to the AGNOS console even when stdout is
 redirected (color stays off). darshini keeps width 0 and decoration off on AGNOS,
 having watched icons and escapes land in a redirected file under mirshi.
 
@@ -162,7 +167,10 @@ having watched icons and escapes land in a redirected file under mirshi.
 1. `bash scripts/ci.sh all` — every gate, x86_64 and qemu-aarch64.
 2. On the Pi: build `programs/smoke.cyr`, `tests/darshana.tcyr`, `tests/pty.tcyr`
    and `tests/identity.tcyr` with `cyrius build --aarch64`, `scp` them to the Pi,
-   run them, and diff the identity digests against x86_64's.
+   run them, and diff the identity digests against x86_64's. Run them in a
+   terminal that has a size, such as `ssh -t pi`, or under `script(1)` after
+   `stty rows 24 cols 80`. A 0×0 pty fails the unit suite's two live-TTY winsize
+   assertions. Strip the pty's `\r` before diffing.
 3. Bump `VERSION`, add the matching `## [X.Y.Z]` CHANGELOG section (moving
    `[Unreleased]` into it), refresh this file, and run `cyrius distlib`.
 4. Tag `X.Y.Z`. `.github/workflows/release.yml` gates on CI, verifies the version

@@ -66,7 +66,7 @@ check_total() {
 }
 
 # A 'SKIP pty:' token means the runner could not provide what the suite needs.
-# Under CI (ubuntu-latest has /dev/ptmx) that is a failure; set
+# Under CI (the ubuntu-26.04 runner has /dev/ptmx) that is a failure; set
 # DARSHANA_ALLOW_SKIP=1 to downgrade it to a warning on a degraded runner.
 # Locally it is a warning, since a sandbox may legitimately lack a pty.
 check_skip() {   # <label> <file>

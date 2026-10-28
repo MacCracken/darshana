@@ -4,6 +4,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-10-28
+
+A patch: **the toolchain moved to cyrius 6.7.18 and CI to Ubuntu 26.04 LTS, and
+nothing darshana emits changed.** The bundle's code is byte-identical to 1.3.0's;
+only its `# Version:` line moved. All 19 digests in `tests/identity.tcyr` are
+unchanged on x86_64, under qemu-aarch64 and on a real Raspberry Pi 4. Consumers
+need no change, and the bundle's floor is still cyrius ≥ 6.7.2: its code is the
+code that was measured for 1.3.0.
+
+### Changed — toolchain `6.7.9` → `6.7.18`
+
+- `lib/` re-vendored with `rm -rf lib/ && cyrius deps`, then `cyrius deps --lock`.
+  It is still the same 23 modules, each byte-identical to the 6.7.18 snapshot;
+  17 of them changed upstream. `deps --verify` reports 23 verified. Before any
+  other edit, every gate passed on 6.7.18 with every suite total and every digest
+  unchanged and no build warning.
+- The 6.7.18 installer, fetched at its tag as CI fetches it and run into a
+  throwaway home, verifies the checksum and the Ed25519 signature, ships
+  `cycc_aarch64`, and installs a stdlib snapshot and compilers byte-identical to
+  the ones these results came from.
+
+### Changed — CI
+
+- **Every job runs on `ubuntu-26.04`** instead of `ubuntu-latest`, which still
+  means 24.04. 26.04's `qemu-user` ships the static `/usr/bin/qemu-aarch64` and
+  replaces `qemu-user-static` (read from its package); `ci.yml`'s comment says so.
+- **Actions moved to their latest stable releases**, still pinned by commit SHA:
+  `actions/checkout` v4.4.0 → v7.0.1, `actions/upload-artifact` v4.6.2 → v7.0.2,
+  `actions/download-artifact` v4.3.0 → v8.0.2, `softprops/action-gh-release`
+  v2.6.2 → v3.0.3. Their breaking changes do not reach these workflows. The
+  majors move to the Node 24 runtime. download-artifact v5's path change is for
+  a single artifact downloaded by ID, and `release.yml` downloads all of them
+  and consolidates with `find`. v8 makes a digest mismatch an error, which only
+  tightens the release.
+- ⚠ **Neither workflow has run on a GitHub runner with these changes yet.**
+  `ci.yml` first runs on the next push; `release.yml` first runs at the 1.3.1 tag.
+
 ### Changed — documentation
 
 - `state.md`'s consumer table reflects the seven consumer releases of 2026-10-12.
@@ -13,6 +50,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   row had said it used darshana's signalfd, but its shutdown signalfd is its own.
   The upstream-gaps table gains the five cyrius issues those releases found. The
   README's consumer lines match.
+- **Every cyrius and agnos gap darshana filed is closed upstream**, so
+  `state.md`'s upstream-gaps table keeps only mirshi's signal band. The nine
+  cyrius issues closed in 6.7.11–6.7.14. The three agnos ones closed in agnos
+  1.57.13, which raises SIGWINCH on a console grid change and adds
+  `console_mode#110` (echo off, flush typeahead) and `fd_kind#111`; the stdlib
+  wraps the two calls from cyrius 6.7.11. darshana's AGNOS arms do not use them
+  yet. The roadmap's AGNOS-arm item, a minor, now says they are unblocked, and
+  `state.md`'s AGNOS table says what each call is waiting on.
+- `state.md`'s release process: run the Pi suites in a terminal that has a size.
+  Under a 0×0 pty, which `script(1)` makes over a non-interactive ssh, the unit
+  suite's two live-TTY winsize assertions fail (382 + 2 failed of 384); with a
+  sized pty it passes 384 of 384, and with no TTY it runs the 382 CI pins.
+- The upgrade guide gains a 1.3.1 note. Its bump example and `docs/examples/raw_loop.cyr`'s
+  manifest comment name 1.3.1.
+- `docs/development/proposals/2026-10-15-input-sgr-scanner.md`: anuenue's proposal
+  for an input-side SGR scanner, filed 2026-10-15. It is open and unplaced.
 
 ## [1.3.0] — 2026-10-12
 
