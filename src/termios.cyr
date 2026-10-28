@@ -38,11 +38,18 @@
 #     laundered into a write below the buffer. tty_dec_buf additionally
 #     clamps `val <= 0` to a single '0'. Each composer documents its own
 #     byte budget; none takes a capacity argument, so sizing the buffer is
-#     the caller's job.
-#   • predicates / fd openers / readers — tty_isatty returns 1/0;
-#     tty_has_ctl 1/0, or -1 on bad arguments; tty_open_signalfd returns
-#     an fd (>= 0) or exactly -1, never a raw -errno; tty_read_signal the
-#     signal number, 0 when none is pending, or -1. tty_close_signalfd is
+#     the caller's job. tty_sgr_strip_buf (v1.4.0) is the in-place member:
+#     it has no `pos`, never writes past the `n` bytes it was given, and
+#     returns how many it kept, or -1 on a negative `n` or a `final`
+#     other than 0 or 1.
+#   • predicates / scanners / fd openers / readers — tty_isatty returns
+#     1/0; tty_has_ctl 1/0, or -1 on bad arguments; tty_sgr_len (v1.4.0)
+#     the length of the SGR at its offset, 0 when the bytes there are not
+#     one (or the arguments are out of contract), and -1 when the buffer
+#     ends before that is decided, which is not a failure;
+#     tty_open_signalfd returns an fd (>= 0) or exactly -1, never a raw
+#     -errno; tty_read_signal the signal number, 0 when none is pending,
+#     or -1. tty_close_signalfd is
 #     the teardown counterpart: 0 on success, exactly -1 on failure (also
 #     never a raw -errno — normalized in v1.0.2; see its docstring).
 #   • termios field codec — tio_load32 returns the zero-extended
@@ -58,7 +65,7 @@
 #                  TIO_*
 #   ansi.cyr     — alt-screen / clear / cursor visibility and save /
 #                  SGR color / mouse and paste modes / OSC title and
-#                  clipboard
+#                  clipboard / reading SGR in text (v1.4.0)
 #   cursor.cyr   — tty_dec_buf (decimal formatter), cursor positioning,
 #                  scroll region
 #   sanitize.cyr — making untrusted bytes safe for the terminal (v1.2.0)

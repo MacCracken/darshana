@@ -904,6 +904,232 @@ fn _id_rel_group() {
     return h;
 }
 
+# ---- v1.4.0 — reading SGR in text -------------------------------------
+#
+# tty_sgr_len and tty_sgr_strip_buf against references written apart from
+# src/ansi.cyr: _id_ref_len finds where the parameter run ends and then
+# decides, instead of checking the bound as it scans; _id_ref_strip has no
+# held tail at all. Inputs: every string of 1-5 bytes over ten bytes that
+# matter (ESC '[' '1' ';' ':' 'm' '?' 'J' '/' 'x'), every parameter-run
+# length from 0 to 140 around the 128-byte bound, and 3000 random strings
+# of up to 300 bytes. Each is stripped whole inside the 1 KiB guard region,
+# and in three chunks at every pair of cut points (one random pair for the
+# longer strings), carrying the held tail, which must give the whole
+# result. The fold takes every tty_sgr_len answer and, for every whole
+# strip, the kept count, the held count and each kept byte. This group
+# runs after every earlier one and draws on its own generator, so it moves
+# no digest frozen before it.
+
+var _id_sl_bad = 0;       # tty_sgr_len disagreeing with _id_ref_len
+var _id_ss_bad = 0;       # a whole strip disagreeing with _id_ref_strip
+var _id_sc_bad = 0;       # a chunked strip disagreeing with the whole one
+var _id_sg_bad = 0;       # a write outside buf[0, n), or a held count out of range
+var _id_sx_in[320];
+var _id_sx_ref[320];
+var _id_sx_piece[640];
+var _id_sx_out[640];
+var _id_sx_alpha[16];
+var _id_sx_lcg = 2685821657736338717;
+
+fn _id_sx_rand() {
+    _id_sx_lcg = _id_sx_lcg * 6364136223846793005 + 1442695040888963407;
+    return (_id_sx_lcg >> 33) & 0x7FFFFFFF;
+}
+
+fn _id_sx_param(c) {
+    if (c >= 48 && c <= 59) { return 1; }
+    return 0;
+}
+
+fn _id_ref_len(p, s, n, max) {
+    if (s < 0 || s >= n || max < 3) { return 0; }
+    if (load8(p + s) != 27) { return 0; }
+    if (s + 1 == n) { return 0 - 1; }
+    if (load8(p + s + 1) != 91) { return 0; }
+    var j = s + 2;
+    while (j < n && _id_sx_param(load8(p + j)) == 1) { j = j + 1; }
+    if (j == n) {
+        if (n - s + 1 <= max) { return 0 - 1; }       # an 'm' at n would still fit
+        return 0;
+    }
+    if (load8(p + j) != 109) { return 0; }
+    if (j - s + 1 <= max) { return j - s + 1; }
+    return 0;
+}
+
+fn _id_ref_strip(src, n, dst) {
+    var w = 0;
+    var r = 0;
+    while (r < n) {
+        var gone = 0;
+        if (load8(src + r) == 27 && r + 2 < n && load8(src + r + 1) == 91) {
+            var j = r + 2;
+            while (j < n && _id_sx_param(load8(src + j)) == 1) { j = j + 1; }
+            if (j < n && load8(src + j) == 109 && j - r + 1 <= 128) { gone = j + 1 - r; }
+        }
+        if (gone > 0) { r = r + gone; }
+        else { store8(dst + w, load8(src + r)); w = w + 1; r = r + 1; }
+    }
+    return w;
+}
+
+# Strip _id_sx_in[0, n) as three chunks cut at c1 <= c2, carrying each held
+# tail into the next; 1 if the kept bytes equal _id_sx_ref[0, rn).
+fn _id_sx_chunks(n, c1, c2, rn) {
+    var hv[8];
+    var w = 0;                            # kept so far, in _id_sx_out
+    var held = 0;                         # carried bytes at the head of _id_sx_piece
+    var lo = 0;
+    var part = 0;
+    while (part < 3) {
+        var hi = n;
+        var fin = 1;
+        if (part == 0) { hi = c1; fin = 0; }
+        if (part == 1) { hi = c2; fin = 0; }
+        var k = 0;
+        while (k < hi - lo) { store8(&_id_sx_piece + held + k, load8(&_id_sx_in + lo + k)); k = k + 1; }
+        var len = held + hi - lo;
+        var kept = tty_sgr_strip_buf(&_id_sx_piece, len, fin, &hv);
+        var nh = load64(&hv);
+        if (kept < 0 || nh < 0 || nh >= 128 || kept + nh > len) { _id_sg_bad = _id_sg_bad + 1; return 0; }
+        if (fin == 1 && nh != 0) { _id_sg_bad = _id_sg_bad + 1; return 0; }
+        k = 0;
+        while (k < kept) { store8(&_id_sx_out + w + k, load8(&_id_sx_piece + k)); k = k + 1; }
+        w = w + kept;
+        k = 0;
+        while (k < nh) { store8(&_id_sx_piece + k, load8(&_id_sx_piece + kept + k)); k = k + 1; }
+        held = nh;
+        lo = hi;
+        part = part + 1;
+    }
+    if (w != rn) { return 0; }
+    var q = 0;
+    while (q < rn) { if (load8(&_id_sx_out + q) != load8(&_id_sx_ref + q)) { return 0; } q = q + 1; }
+    return 1;
+}
+
+# Every check on one input of n bytes in _id_sx_in. `all_cuts` 1 tries
+# every pair of cut points; 0 tries one random pair. Returns the digest.
+fn _id_sx_one(h, n, all_cuts) {
+    var s = 0;
+    while (s <= n) {
+        var mi = 0;
+        while (mi < 9) {
+            var max = mi;
+            if (mi == 8) { max = 128; }
+            var got = tty_sgr_len(&_id_sx_in, s, n, max);
+            if (got != _id_ref_len(&_id_sx_in, s, n, max)) { _id_sl_bad = _id_sl_bad + 1; }
+            h = _id_mix(h, got);
+            mi = mi + 1;
+        }
+        s = s + 1;
+    }
+    var rn = _id_ref_strip(&_id_sx_in, n, &_id_sx_ref);
+    _id_bpoison();
+    var k = 0;
+    while (k < n) { store8(&_id_big + ID_BBASE + k, load8(&_id_sx_in + k)); k = k + 1; }
+    var hv[8];
+    store64(&hv, 0 - 7);
+    var kept = tty_sgr_strip_buf(&_id_big + ID_BBASE, n, 1, &hv);
+    if (_id_bguard_ok(ID_BBASE, ID_BBASE + n) == 0 || load64(&hv) != 0) { _id_sg_bad = _id_sg_bad + 1; }
+    h = _id_mix(h, kept);
+    h = _id_mix(h, load64(&hv));
+    if (kept != rn) { _id_ss_bad = _id_ss_bad + 1; }
+    else {
+        k = 0;
+        while (k < kept) {
+            var b = load8(&_id_big + ID_BBASE + k);
+            if (b != load8(&_id_sx_ref + k)) { _id_ss_bad = _id_ss_bad + 1; k = kept; }
+            else { h = _id_mix(h, b); }
+            k = k + 1;
+        }
+    }
+    if (all_cuts == 1) {
+        var c1 = 0;
+        while (c1 <= n) {
+            var c2 = c1;
+            while (c2 <= n) {
+                if (_id_sx_chunks(n, c1, c2, rn) == 0) { _id_sc_bad = _id_sc_bad + 1; }
+                c2 = c2 + 1;
+            }
+            c1 = c1 + 1;
+        }
+    } else {
+        var a = _id_sx_rand() % (n + 1);
+        var b2 = _id_sx_rand() % (n + 1);
+        if (a > b2) { var t = a; a = b2; b2 = t; }
+        if (_id_sx_chunks(n, a, b2, rn) == 0) { _id_sc_bad = _id_sc_bad + 1; }
+    }
+    return h;
+}
+
+fn _id_sx_pool() {
+    var k = _id_sx_rand() % 16;
+    if (k <= 2) { return 27; }
+    if (k <= 4) { return 91; }
+    if (k <= 6) { return 109; }
+    if (k == 7) { return 59; }
+    if (k == 8) { return 58; }
+    if (k <= 10) { return 48 + _id_sx_rand() % 10; }
+    if (k == 11) { return 63; }
+    if (k == 12) { return 60; }
+    if (k == 13) { return 10; }
+    if (k == 14) { return 32; }
+    return 120;
+}
+
+fn _id_sgr_scan_group() {
+    var h = ID_SEED + 19;
+    store8(&_id_sx_alpha, 27); store8(&_id_sx_alpha + 1, 91); store8(&_id_sx_alpha + 2, 49);
+    store8(&_id_sx_alpha + 3, 59); store8(&_id_sx_alpha + 4, 58); store8(&_id_sx_alpha + 5, 109);
+    store8(&_id_sx_alpha + 6, 63); store8(&_id_sx_alpha + 7, 74); store8(&_id_sx_alpha + 8, 47);
+    store8(&_id_sx_alpha + 9, 120);
+    # Every string of 1-5 bytes over the alphabet: digits of `code`, base 10.
+    var n = 1;
+    var span = 10;
+    while (n <= 5) {
+        var code = 0;
+        while (code < span) {
+            var c = code;
+            var i = 0;
+            while (i < n) { store8(&_id_sx_in + i, load8(&_id_sx_alpha + c % 10)); c = c / 10; i = i + 1; }
+            h = _id_sx_one(h, n, 1);
+            code = code + 1;
+        }
+        n = n + 1;
+        span = span * 10;
+    }
+    # ESC [ then 0-140 parameter bytes, closed by 'm' or left open, after
+    # and before ordinary text: the 128-byte bound from both sides.
+    var run = 0;
+    while (run <= 140) {
+        var closed = 0;
+        while (closed <= 1) {
+            var p = 0;
+            store8(&_id_sx_in, 120);
+            store8(&_id_sx_in + 1, 27); store8(&_id_sx_in + 2, 91);
+            while (p < run) { store8(&_id_sx_in + 3 + p, 48 + p % 12); p = p + 1; }
+            var len = 3 + run;
+            if (closed == 1) { store8(&_id_sx_in + len, 109); len = len + 1; }
+            store8(&_id_sx_in + len, 120);
+            h = _id_sx_one(h, len + 1, 0);
+            h = _id_sx_one(h, len, 0);
+            closed = closed + 1;
+        }
+        run = run + 1;
+    }
+    # Random strings.
+    var it = 0;
+    while (it < 3000) {
+        var rlen = 1 + _id_sx_rand() % 300;
+        var q = 0;
+        while (q < rlen) { store8(&_id_sx_in + q, _id_sx_pool()); q = q + 1; }
+        h = _id_sx_one(h, rlen, 0);
+        it = it + 1;
+    }
+    return h;
+}
+
 # ---- expected digests (frozen — see the header before touching) --------
 
 var EXPECT_FG_RGB    = (0 - 2994597192840213677);   # 0xd6710db81b608b53
@@ -927,6 +1153,8 @@ var EXPECT_SGR_LIST  = (0 - 3061249612748115144);   # 0xd58441b24758b338
 var EXPECT_TITLE_BUF = 6023335987000168218;   # 0x5397302acbf8cf1a
 var EXPECT_CLIP_BUF  = 2537488908216174099;   # 0x2336f8b7c3b80613
 var EXPECT_EMIT_130  = 1272850605130756487;   # 0x11aa12e1aaf5b187
+# Added in v1.4.0 — frozen from 1.4.0 on.
+var EXPECT_SGR_SCAN  = (0 - 5223008102326575247);   # 0xb78425cdb9d65f71
 
 fn _id_report(name, got, want) {
     sys_write(1, "  ", 2);
@@ -960,6 +1188,11 @@ fn main() {
     assert_eq(_id_title_bad, 0, "every title is ESC ] 0 ; <clean UTF-8> BEL");
     var d_clp = _id_clip_group();
     assert_eq(_id_b64_bad, 0, "every OSC 52 payload decodes back to exactly its input");
+    var d_scan = _id_sgr_scan_group();
+    assert_eq(_id_sl_bad, 0, "tty_sgr_len agrees with an independent reference at every offset and max");
+    assert_eq(_id_ss_bad, 0, "tty_sgr_strip_buf agrees with an independent reference stripper");
+    assert_eq(_id_sc_bad, 0, "stripping in three chunks, carrying the held tail, equals stripping whole");
+    assert_eq(_id_sg_bad, 0, "tty_sgr_strip_buf writes only inside buf[0, n) and holds fewer than 128 bytes");
     assert_eq(_id_bad, 0, "every composer call stayed in budget and inside [pos, ret)");
 
     println("=== identity.tcyr — fd-1 emitters, captured ===");
@@ -1001,6 +1234,7 @@ fn main() {
     _id_report("tty_title_buf (v1.3.0)", d_ttl, EXPECT_TITLE_BUF);
     _id_report("tty_clipboard_buf (v1.3.0)", d_clp, EXPECT_CLIP_BUF);
     _id_report("v1.3.0 emitters", d_e130, EXPECT_EMIT_130);
+    _id_report("tty_sgr_len / tty_sgr_strip_buf (v1.4.0)", d_scan, EXPECT_SGR_SCAN);
     sys_write(1, "  records: ", 11);
     fmt_int(_id_records);
     sys_write(1, "\n", 1);

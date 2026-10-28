@@ -10,33 +10,43 @@
 > [ADR 0003](../adr/0003-v1-api-freeze.md). Documentation is never a release
 > by itself; it rides the next one.
 
-## 1.3.x — patch (waiting on mirshi)
+## 1.4.x — patch (waiting on mirshi)
 
 - **The AGNOS `tty_open_signalfd` rollback has no test that can fail.**
   Dropping it passes every gate, because the AGNOS signalfd peers cannot run on
   a Linux host. The fix is to run `tests/agnos.tcyr`'s live half under mirshi in
   CI, which waits on mirshi delivering a blocked signal through a signalfd (filed
-  in mirshi's roadmap). Until then the peers have compile coverage only, beside
-  the pure `_agnos_winsize_unpack` tests.
+  in mirshi's roadmap). mirshi will be updated later (owner, 2026-10-28). Until
+  then the peers have compile coverage only, beside the pure
+  `_agnos_winsize_unpack` tests.
+
+## 1.5.0 — minor (next, by owner decision): the AGNOS arms
+
+agnos 1.57.13 ships `console_mode#110` (`CM_NOECHO`, `CM_FLUSH`) and
+`fd_kind#111`, and cyrius's stdlib wraps both from 6.7.11 (`sys_console_mode`,
+`sys_fd_kind`). So the AGNOS peers can become real:
+- `tty_echo_off` and `tty_flush_input` can stop answering -1 on AGNOS;
+- `tty_isatty(fd)` can answer about `fd` (`sys_fd_kind(fd) == FDK_CONSOLE`)
+  instead of about the console.
+
+Each probe answers -1 on a kernel older than 1.57.13 (`sys_console_mode(0, 0)`,
+`sys_fd_kind` on an open fd), and the arms must keep today's answers there.
+agnos 1.57.13 also raises SIGWINCH on a console grid change; the WINCH signalfd
+stays untestable until mirshi delivers signals (above).
 
 ## 1.x.0 — minor (additive; consumer-driven)
 
-**Nothing is queued.** 1.3.0 shipped every candidate the 2026-10-12 surveys
-found ([ADR 0005](../adr/0005-candidates-ahead-of-second-consumer.md)). From
-here the CLAUDE.md rule applies again: a primitive is extracted when a **second**
+**Nothing else is queued.** 1.3.0 shipped every candidate the 2026-10-12
+surveys found ([ADR 0005](../adr/0005-candidates-ahead-of-second-consumer.md)),
+and 1.4.0 the SGR scanner anuenue proposed
+([ADR 0006](../adr/0006-sgr-scanner.md)). Both were owner exceptions; from here
+the CLAUDE.md rule applies again: a primitive is extracted when a **second**
 consumer needs it.
 
 *Always eligible:*
 - a new platform peer;
-- an AGNOS arm that becomes real when agnos grows the mechanism. **Unblocked:**
-  agnos 1.57.13 ships `console_mode#110` (`CM_NOECHO`, `CM_FLUSH`) and
-  `fd_kind#111`, and cyrius's stdlib wraps both from 6.7.11 (`sys_console_mode`,
-  `sys_fd_kind`). So `tty_echo_off` / `tty_flush_input` can stop answering -1 on
-  AGNOS, and `tty_isatty(fd)` can answer about `fd` (`sys_fd_kind(fd) ==
-  FDK_CONSOLE`) instead of about the console. A kernel older than 1.57.13 answers
-  -1 to both calls, and the arms must keep that answer there. agnos 1.57.13 also
-  raises SIGWINCH on a grid change; the WINCH signalfd stays untestable until
-  mirshi delivers signals (above);
+- an AGNOS arm that becomes real when agnos grows the mechanism (1.5.0 takes
+  the ones agnos 1.57.13 unblocked);
 - anything a consumer asks for.
 
 ## 2.0.0 — major
@@ -78,7 +88,9 @@ changes them.
   is the input layer: owning it means owning terminal-specific key tables and
   timing heuristics, the far side of the line between darshana and a TUI
   framework. darshana is output, termios and signals; input stays with the
-  consumer.
+  consumer. (Reading SGR colour codes in text a program displays is the output
+  side and shipped in 1.4.0, [ADR 0006](../adr/0006-sgr-scanner.md); it does not
+  reopen this.)
 - **Mouse and bracketed-paste reports.** Input, under the ruling above. The
   enable / disable escapes shipped in 1.3.0; decoding what the terminal sends
   back is the consumer's.

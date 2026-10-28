@@ -2,9 +2,13 @@
 
 **Filed:** 2026-10-15 by anuenue (v1.4.5 cut). anuenue now strips SGR colour codes from its *input*, with an
 inline stand-in pending this.
-**Status:** 🟡 OPEN — for the user to place.
-**Target version:** unplaced (pure-additive surface; no behavioural change to existing helpers)
-**Affects:** `src/ansi.cyr` (or `src/sanitize.cyr`), plus a `dist/darshana.cyr` rebuild and tests
+**Status:** ✅ RESOLVED — darshana 1.4.0 shipped both functions on 2026-10-28, in `src/ansi.cyr`, by owner
+decision ([ADR 0006](../../../adr/0006-sgr-scanner.md)). The contract is the stand-in's, with five recorded
+differences: `max` is a parameter of `tty_sgr_len` (`tty_sgr_strip_buf` keeps 128); `tty_sgr_len` checks for
+the ESC at `s`; out-of-contract arguments answer 0; `tty_sgr_strip_buf` rejects a negative `n` or a `final`
+other than 0 / 1 with -1; and darshana keeps no strip counter.
+**Target version:** darshana 1.4.0 (pure-additive surface; no behavioural change to existing helpers)
+**Affects:** `src/ansi.cyr`, plus a `dist/darshana.cyr` rebuild and tests
 
 ## Why
 

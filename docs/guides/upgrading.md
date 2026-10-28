@@ -19,7 +19,7 @@ Move the tag in your manifest and re-resolve:
 ```
 [deps.darshana]
 git     = "https://github.com/MacCracken/darshana.git"
-tag     = "1.3.1"
+tag     = "1.4.0"
 modules = ["dist/darshana.cyr"]
 ```
 
@@ -30,6 +30,31 @@ cyrius deps
 then rebuild and run your own suite. A consumer that resolves darshana by
 `path` reads the working tree, not the tag, so it picks up the bundle as soon as
 the tree changes; one that vendors `dist/darshana.cyr` by copy re-copies it.
+
+## 1.4.0
+
+**No code change**: the release only adds two functions, and every byte
+darshana already emitted is unchanged. The floor is still cyrius 6.7.2.
+
+What you can drop:
+
+| If you hand-wrote | Use |
+|---|---|
+| a check for whether the bytes at an ESC are a complete SGR (anuenue's `_sgr_len`) | `tty_sgr_len(buf, s, n, max)`: the length (> 0), 0 for not an SGR, -1 when the buffer ends first. Pass `max` 128 to match `tty_sgr_strip_buf` |
+| stripping SGR colour codes from text, in place (anuenue's `anuenue_sgr_strip`) | `tty_sgr_strip_buf(buf, n, final, out_held)`, with `final` 0 for a chunk of a stream and 1 for complete input. Prepend the held tail to the next chunk |
+
+From anuenue's stand-in, three things differ (ADR 0006):
+- `tty_sgr_len` answers 0, not -1, when the byte at `s` is not an ESC, and when
+  `s < 0`, `s >= n` or `max < 3`;
+- `tty_sgr_strip_buf` rejects a `final` other than 0 or 1, and a negative `n`,
+  with -1 and writes nothing. The stand-in took any nonzero `final` as 1;
+- darshana counts nothing. `tty_sgr_strip_buf`'s result says how many bytes
+  went, not how many sequences; a caller that reports the number of SGRs it
+  removed (anuenue's `-v`) counts them with `tty_sgr_len` in its own loop.
+
+Stripped text still carries every other escape, so it is no safer for a
+terminal than it was. Pass it through `tty_sanitize_buf` afterwards when the
+text is untrusted.
 
 ## 1.3.1
 

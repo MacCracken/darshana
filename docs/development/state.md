@@ -7,21 +7,22 @@
 
 ## Version
 
-**1.3.1** (2026-10-28). Stable; the API has been frozen since v1.0.0
-([ADR 0003](../adr/0003-v1-api-freeze.md)). 1.3.1 is a toolchain and CI patch:
-cyrius 6.7.18, Ubuntu 26.04 runners, and the latest stable actions, with the
-bundle's code unchanged. 1.3.0 shipped the last of the roadmap's candidates
-([ADR 0005](../adr/0005-candidates-ahead-of-second-consumer.md)). Open: a test
-that waits on mirshi, and the AGNOS arms that agnos 1.57.13 unblocked (roadmap).
+**1.4.0** (2026-10-28). Stable; the API has been frozen since v1.0.0
+([ADR 0003](../adr/0003-v1-api-freeze.md)). 1.4.0 adds the SGR scanner anuenue
+proposed, `tty_sgr_len` and `tty_sgr_strip_buf`
+([ADR 0006](../adr/0006-sgr-scanner.md)); 1.3.1, the same day, moved the
+toolchain to cyrius 6.7.18 and CI to Ubuntu 26.04. Next: the AGNOS arms that
+agnos 1.57.13 unblocked, as 1.5.0 (roadmap). Open: a test that waits on mirshi,
+which will be updated later.
 
 ## Toolchain
 
 | | |
 |---|---|
 | Pin | cyrius **6.7.18** (`cyrius.cyml [package].cyrius`, the latest release; CI installs from it) |
-| Bundle floor | cyrius **≥ 6.7.2**, because the bundle uses `const`. Measured at 1.3.0: it fails under 6.6.20 and 6.7.1 and builds under 6.7.2 and 6.7.9. 1.3.1's bundle code is byte-identical to 1.3.0's, and it builds under 6.7.18 |
+| Bundle floor | cyrius **≥ 6.7.2**, because the bundle uses `const`. Measured for 1.4.0 with a consumer that includes the bundle and calls the scanner: it fails under 6.6.20 and 6.7.1 (`expected '=', got identifier`, at the first `const`) and builds and runs the same under 6.7.2, 6.7.9 and 6.7.18 |
 | `lib/` | 23 modules, 750,222 bytes, each byte-identical to the pinned snapshot. It is output: rebuild with `rm -rf lib/ && cyrius deps` |
-| `cyrius.lock` | committed; `cyrius deps --verify` checks it. Not pruned when a leaf is removed (filed with cyrius) |
+| `cyrius.lock` | committed; `cyrius deps --verify` checks it. A vendored file outside the declared footprint is named by `cyrius deps` and kept (cyrius 6.7.12); `rm lib/<file> && cyrius deps` drops it and its lock row (6.7.13) |
 | aarch64 | `cyrius build --aarch64` / `cyrius test --aarch64` work on a stock install, which ships `cycc_aarch64`. Run under `qemu-aarch64`, or on real hardware with `ssh pi` (Raspberry Pi 4, Linux 7.0) |
 | CI runner | every job in `ci.yml` and `release.yml` runs on `ubuntu-26.04` (since 1.3.1), where `qemu-user` ships the static `qemu-aarch64`. Not yet run on a GitHub runner; 1.3.0's CI and release ran green on `ubuntu-latest` (24.04) |
 | CI actions | `actions/checkout` v7.0.1, `actions/upload-artifact` v7.0.2, `actions/download-artifact` v8.0.2, `softprops/action-gh-release` v3.0.3, each pinned by commit SHA |
@@ -31,20 +32,20 @@ that waits on mirshi, and the AGNOS arms that agnos 1.57.13 unblocked (roadmap).
 
 ## Surface
 
-**54 public functions and 62 constants**, all frozen. ADR 0003 lists 29 + 37 from
-v1.0 and 50 added since, each frozen from the release that added it. They are
+**56 public functions and 62 constants**, all frozen. ADR 0003 lists 29 + 37 from
+v1.0 and 52 added since, each frozen from the release that added it. They are
 listed in machine-readable form in `scripts/smoke.sh` (`required_syms` /
 `required_flags`), checked against the bundle in both directions, and against
 ADR 0003's tables.
 
 | Module | Lines | Concern |
 |---|---:|---|
-| `src/termios.cyr` | 1,023 | the bundle's front matter: naming, the five return buckets, the module map. Termios modes — `tty_raw`, `tty_raw_nonblock`, `tty_echo_off` — sharing one save slot, plus `tty_cooked` / `tty_forget`; `tty_flush_input`; `tty_winsize` / `_or`; `tty_isatty`; the signalfd trio; `TIO_*` / `TTY_SIGMASK_*` |
-| `src/ansi.cyr` | 708 | alt screen, clear, cursor visibility and save/restore, SGR (16 / 256 / truecolor; `TTY_FG_*` / `TTY_BG_*` / `TTY_SGR_*`; `tty_sgr_list`), mouse and paste modes, OSC title and clipboard |
+| `src/termios.cyr` | 1,030 | the bundle's front matter: naming, the five return buckets, the module map. Termios modes — `tty_raw`, `tty_raw_nonblock`, `tty_echo_off` — sharing one save slot, plus `tty_cooked` / `tty_forget`; `tty_flush_input`; `tty_winsize` / `_or`; `tty_isatty`; the signalfd trio; `TIO_*` / `TTY_SIGMASK_*` |
+| `src/ansi.cyr` | 811 | alt screen, clear, cursor visibility and save/restore, SGR (16 / 256 / truecolor; `TTY_FG_*` / `TTY_BG_*` / `TTY_SGR_*`; `tty_sgr_list`), mouse and paste modes, OSC title and clipboard; reading SGR in text, `tty_sgr_len` / `tty_sgr_strip_buf` (ADR 0006). The scanner is pure |
 | `src/cursor.cyr` | 182 | `tty_dec_buf`, `tty_move` / `_buf`, `tty_cursor_up` / `_down`, scroll region |
 | `src/sanitize.cyr` | 179 | `tty_sanitize_buf`, `tty_has_ctl` (ADR 0004). Pure |
 | `src/main.cyr` | 28 | in-tree entry that includes all four; not in the bundle |
-| `dist/darshana.cyr` | 2,112 | the bundle: 2,092 module lines plus 20 that `distlib` adds (header, `# Requires`, separators) |
+| `dist/darshana.cyr` | 2,222 | the bundle: 2,202 module lines plus 20 that `distlib` adds (header, `# Requires`, separators) |
 | `dist/darshana.deps` | 4 | sidecar: 2 stdlib leaves, `syscalls` and `io`, derived by `distlib`'s compile-verify |
 
 **Platforms.** Linux on x86_64 and aarch64, and AGNOS. Every syscall-touching
@@ -65,22 +66,24 @@ and `src/`'s syscall allowlist is empty. What AGNOS cannot do today:
 
 | Suite | Assertions | Covers | Run |
 |---|---:|---|---|
-| `tests/darshana.tcyr` | 382 | the pure surface, constant values, exact bytes, rejections, live-fd signalfd and winsize | `cyrius test` |
+| `tests/darshana.tcyr` | 441 | the pure surface, constant values, exact bytes, rejections, the SGR scanner's contract edges, live-fd signalfd and winsize | `cyrius test` |
 | `tests/pty.tcyr` | 127 | a real pseudo-terminal: every mode, restore byte-for-byte, mode switches, flush, hangup and `tty_forget`, fd aliasing, fd-1 escape capture | `cyrius test` |
-| `tests/identity.tcyr` | 28 | every `_buf` composer over its whole domain inside guard regions, and **19 frozen digests** over everything darshana emits | `cyrius test` |
+| `tests/identity.tcyr` | 33 | every `_buf` composer over its whole domain inside guard regions; the SGR scanner against independent references, chunked against whole; **20 frozen digests** | `cyrius test` |
 | `tests/agnos.tcyr` | 27 | the AGNOS arm's constants, decode and syscall-free peers | `cyrius build --agnos` then run it on the Linux host |
 
-**564 on x86_64; 537 on aarch64** (the AGNOS suite is x86_64-hosted). All green
-at 1.3.1 on x86_64, under `CYRIUS_DCE=1`, under qemu-aarch64 and on the Pi. The
+**628 on x86_64; 601 on aarch64** (the AGNOS suite is x86_64-hosted). All green
+at 1.4.0 on x86_64, under `CYRIUS_DCE=1`, under qemu-aarch64 and on the Pi. The
 totals are pinned in `scripts/ci.sh`. Run with a sized terminal on stdin, the unit
-suite adds two live-TTY winsize assertions (384); CI has no TTY and pins 382.
+suite adds two live-TTY winsize assertions (443); CI has no TTY and pins 441.
 
 A digest that moves means a frozen byte moved. The digests freeze:
 - since v1.0.0: the RGB, 256, SGR, reset and dec composers; the fixed, SGR, RGB
   and move emitters; the relative moves;
 - since 1.2.0: `tty_bg_256_buf`, `tty_sanitize_buf`;
 - since 1.3.0: `tty_clear_to_eol_buf`, `tty_move_buf`, `tty_sgr_list_buf`,
-  `tty_title_buf`, `tty_clipboard_buf`, and the 1.3.0 emitters.
+  `tty_title_buf`, `tty_clipboard_buf`, and the 1.3.0 emitters;
+- since 1.4.0: `tty_sgr_len` / `tty_sgr_strip_buf`, over every answer and every
+  whole strip of the identity suite's inputs.
 
 ## Gates
 
@@ -127,22 +130,24 @@ Every other gap darshana filed is closed upstream; each record is in its owner's
 
 ## Consumers
 
-Nine. Read from each consumer's manifest **and** the bundle it actually compiles.
-Seven moved to darshana **1.3.0** on cyrius **6.7.9** in their own minor releases
-on 2026-10-12, each resolving by git tag alone; kii's and anuenue's `path` deps on
-this tree were dropped. thoth and jalwa have not moved yet.
+Nine. Versions, pins and darshana tags read from each consumer's manifest (and
+thoth's vendored bundle) on 2026-10-28; the "Uses" column was read from their
+code on 2026-10-12. Seven resolve darshana **1.3.0** by git tag alone, on cyrius
+6.7.9 to 6.7.12; none is on 1.3.1 or 1.4.0 yet. anuenue, whose proposal 1.4.0
+shipped, still carries its own stand-in. thoth and jalwa have not moved past
+1.1.2.
 
 | Consumer | Version | darshana | cyrius | Uses |
 |---|---|---|---|---|
 | [chakshu](https://github.com/MacCracken/chakshu) | 0.11.0 | 1.3.0 | 6.7.9 | raw/cooked, alt screen, clear, cursor, `tty_move`, `tty_winsize_or`, `tty_flush_input`; an EXIT\|PIPE and a WINCH signalfd read by `tty_read_signal`; `tty_sanitize_buf` on process names, cmdlines, logs and model output; `tty_sgr*` / `TTY_FG_*` / `TTY_SGR_*` |
-| [anuenue](https://github.com/MacCracken/anuenue) | 1.4.0 | 1.3.0 | 6.7.9 | `tty_fg_rgb_buf` / `tty_fg_256_buf` / `tty_sgr_reset_buf` behind its own escape table (kept: re-measured faster in 256/16-color); an EXIT signalfd via `tty_open_signalfd` / `tty_read_signal` / `tty_close_signalfd`; `tty_isatty`; cursor up / hide / show |
+| [anuenue](https://github.com/MacCracken/anuenue) | 1.5.0 | 1.3.0 | 6.7.9 | `tty_fg_rgb_buf` / `tty_fg_256_buf` / `tty_sgr_reset_buf` behind its own escape table (kept: re-measured faster in 256/16-color); an EXIT signalfd via `tty_open_signalfd` / `tty_read_signal` / `tty_close_signalfd`; `tty_isatty`; cursor up / hide / show |
 | [cyim](https://github.com/MacCracken/cyim) | 1.11.0 | 1.3.0 | 6.7.9 | the donor: raw/cooked, alt screen, clear, `tty_move`, `tty_winsize`; a WINCH and a PIPE signalfd via `tty_read_signal`; `tty_fg_256_buf`, `tty_sgr*`; `tty_sanitize_buf` on paths, messages and picker rows (its buffer view keeps caret notation) |
-| [kii](https://github.com/MacCracken/kii) | 1.6.0 | 1.3.0 | 6.7.9 | `tty_winsize`, `tty_fg_256_buf`, `tty_bg_256_buf`, `tty_sgr_reset_buf`; `tty_has_ctl` as its filename check |
-| [bannermanor](https://github.com/MacCracken/bannermanor) | 1.2.0 | 1.3.0 | 6.7.9 | `tty_sgr` + `TTY_FG_*`; `tty_winsize` for the terminal width (the real AGNOS console grid since 1.2.0) |
-| [darshini](https://github.com/MacCracken/darshini) | 1.4.0 | 1.3.0 | 6.7.9 | `tty_sgr_buf` / `tty_sgr_reset_buf` + `TTY_FG_*`; `tty_winsize` (Linux), `tty_isatty`; `tty_sanitize_buf` on every filename it echoes |
-| [agora](https://github.com/MacCracken/agora) | 1.8.0 | 1.3.0 | 6.7.9 | `tty_sgr_buf` / `tty_sgr_reset_buf` + `TTY_FG_*`; `tty_sanitize_buf` on all user text it sends. Its shutdown signalfd is its own, not darshana's |
-| [thoth](https://github.com/MacCracken/thoth) | — | 1.1.2 (copied) | 6.6.6 | the widest: modes, screen, cursor, winsize, isatty, signals; also the private `_tty_apply_raw_flags`. Needs cyrius ≥ 6.7.2 before taking 1.3.0 |
-| [jalwa](https://github.com/MacCracken/jalwa) | — | 1.1.2 | 6.6.3 | raw/cooked, alt screen, clear, cursor, isatty. Needs cyrius ≥ 6.7.2 before taking 1.3.0 |
+| [kii](https://github.com/MacCracken/kii) | 1.9.0 | 1.3.0 | 6.7.12 | `tty_winsize`, `tty_fg_256_buf`, `tty_bg_256_buf`, `tty_sgr_reset_buf`; `tty_has_ctl` as its filename check |
+| [bannermanor](https://github.com/MacCracken/bannermanor) | 1.8.1 | 1.3.0 | 6.7.11 | `tty_sgr` + `TTY_FG_*`; `tty_winsize` for the terminal width (the real AGNOS console grid since 1.2.0) |
+| [darshini](https://github.com/MacCracken/darshini) | 1.6.0 | 1.3.0 | 6.7.9 | `tty_sgr_buf` / `tty_sgr_reset_buf` + `TTY_FG_*`; `tty_winsize` (Linux), `tty_isatty`; `tty_sanitize_buf` on every filename it echoes |
+| [agora](https://github.com/MacCracken/agora) | 1.12.1 | 1.3.0 | 6.7.9 | `tty_sgr_buf` / `tty_sgr_reset_buf` + `TTY_FG_*`; `tty_sanitize_buf` on all user text it sends. Its shutdown signalfd is its own, not darshana's |
+| [thoth](https://github.com/MacCracken/thoth) | 0.52.8 | 1.1.2 (copied) | 6.6.6 | the widest: modes, screen, cursor, winsize, isatty, signals; also the private `_tty_apply_raw_flags`. Needs cyrius ≥ 6.7.2 before taking 1.3.0 |
+| [jalwa](https://github.com/MacCracken/jalwa) | 1.4.5 | 1.1.2 | 6.6.3 | raw/cooked, alt screen, clear, cursor, isatty. Needs cyrius ≥ 6.7.2 before taking 1.3.0 |
 
 AGNOS sizing is not settled the same way everywhere, because darshana's AGNOS
 `tty_isatty` cannot say what an fd is (agnos 1.57.13's `fd_kind#111` can; roadmap).

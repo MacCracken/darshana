@@ -125,6 +125,8 @@ for the two v1.0 tables.
 | 1.3.0 | `TTY_BG_BRIGHT_MAGENTA` |
 | 1.3.0 | `TTY_BG_BRIGHT_CYAN` |
 | 1.3.0 | `TTY_BG_BRIGHT_WHITE` |
+| 1.4.0 | `tty_sgr_len` |
+| 1.4.0 | `tty_sgr_strip_buf` |
 
 ### What "frozen" covers
 
@@ -200,7 +202,9 @@ for the two v1.0 tables.
 - Additive change stays cheap. New functions, new constants, new platform peers,
   and new `_`-prefixed internals are all minor bumps. The extract-on-2nd-consumer
   rule (`tty_bg_256_buf` is the standing example) is unaffected by the freeze.
-  (1.3.0 is the one recorded exception: [ADR 0005](0005-candidates-ahead-of-second-consumer.md).)
+  (Two recorded exceptions, each an owner decision: 1.3.0's seven
+  candidates, [ADR 0005](0005-candidates-ahead-of-second-consumer.md), and
+  1.4.0's SGR scanner, [ADR 0006](0006-sgr-scanner.md).)
 
 ## Post-1.0 change policy
 

@@ -4,6 +4,85 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-10-28
+
+A minor: **two functions added, and nothing already shipped changed.** They read
+SGR colour codes in text: `tty_sgr_len` says whether the bytes at an ESC are a
+complete SGR, are not one, or cannot be decided yet, and `tty_sgr_strip_buf`
+removes the complete ones in place, chunk by chunk. They are anuenue's
+proposal, shaped on the stand-in anuenue carries
+([ADR 0006](docs/adr/0006-sgr-scanner.md)). The 19 digests frozen through 1.3.0
+are unchanged, and one new digest freezes the additions; all 20 are identical on
+x86_64, under qemu-aarch64 and on a real Raspberry Pi 4. The bundle's floor is
+still cyrius ≥ 6.7.2, measured again.
+
+### Added
+
+- **`tty_sgr_len(buf, s, n, max)`**: the length of the SGR at `buf + s` within
+  `n` bytes and at most `max` long (> 0). It returns 0 when the bytes there are
+  not one, and -1 when the buffer ends before that is decided. An SGR is ESC,
+  `[`, parameter bytes 0x30–0x3B (so colon sub-parameters too), then `m`; a
+  private marker, an intermediate byte or another final byte makes it something
+  else. Out-of-contract arguments (`s < 0`, `s >= n`, `max < 3`) answer 0, since
+  -1 asks the caller to hold bytes and wait.
+- **`tty_sgr_strip_buf(buf, n, final, out_held)`**: removes every complete SGR
+  of up to 128 bytes from `buf[0, n)` in place and returns the kept length.
+  With `final` 0 an SGR still open at the end (at most 127 bytes) is moved
+  after the kept bytes and its length stored through `out_held`, so stripping a
+  stream chunk by chunk, carrying the tail, gives exactly the whole result. A
+  negative `n` or a `final` other than 0 or 1 is -1, and writes nothing.
+  It is not a sanitizer: other escapes pass through.
+- ADR 0003's "Added since 1.0" table gains both; `scripts/smoke.sh` requires
+  them.
+
+### Changed — internal, identical output
+
+- The bundle's front matter names both in its return buckets (the predicates
+  bucket is now "predicates / scanners") and adds the scanner to `ansi.cyr`'s
+  line in the module map.
+
+### Tests
+
+- Unit 382 → **441**, identity 28 → **33**, pinned in `scripts/ci.sh`.
+- `tests/darshana.tcyr`: anuenue's cases, every `max` boundary, every one of
+  the 256 bytes in the parameter position, the 127 / 128 / 129-byte bound,
+  chunk holds, and rejections that write nothing.
+- `tests/identity.tcyr`, a new group run after every earlier one on its own
+  generator, so no frozen digest moved:
+  - both functions against references written apart from `src/ansi.cyr`, over
+    every string of 1–5 bytes drawn from ten bytes that matter, every
+    parameter-run length from 0 to 140, and 3000 random strings of up to 300
+    bytes;
+  - stripping in three chunks, carrying the held tail, equals stripping whole,
+    at every pair of cut points for the short strings;
+  - every strip writes nothing outside `buf[0, n)` (the 1 KiB guard region);
+  - the digest `tty_sgr_len / tty_sgr_strip_buf (v1.4.0)`.
+- **Twenty-two planted defects, one per rule, are each caught** by the unit
+  suite; eighteen are also caught by the identity suite. The other four are the
+  `s < 0` guard and the three rejections, which the identity suite never calls.
+  Two unit cases were sharpened until the missing-ESC-check and
+  accepts-non-`[` defects failed there as well.
+- Measured once, not gated: stripping 64 KiB of `ls --color`-style text 4000
+  times on the x86_64 dev host, with the copy cost subtracted,
+  `tty_sgr_strip_buf` runs at about 2.4 ns/byte and anuenue's stand-in at
+  about 3.1 ns/byte (it also counts each strip in a global).
+
+### Changed — documentation
+
+- **ADR 0006** (new) records the owner's decision: the scanner is in charter on
+  the output side, it is the second exception to the second-consumer rule, and
+  where it differs from anuenue's stand-in. ADR 0003 now names both exceptions.
+- CLAUDE.md: reading SGR in text is in charter; the input ruling is unchanged.
+- The proposal moved to `docs/development/proposals/archive/`, marked resolved.
+- The roadmap places the AGNOS arms in 1.5.0 and notes that mirshi will be
+  updated later. The upgrade guide gains a 1.4.0 note, `state.md` and the README
+  are refreshed, and the bump examples name 1.4.0.
+- `state.md`'s consumer table re-read every manifest: anuenue 1.5.0, kii 1.9.0
+  (cyrius 6.7.12), bannermanor 1.8.1 (6.7.11), darshini 1.6.0, agora 1.12.1,
+  and thoth's and jalwa's versions, which it left blank. Seven still resolve
+  darshana 1.3.0. Its `cyrius.lock` row no longer says a removed leaf goes
+  unpruned: cyrius 6.7.12 names it, and 6.7.13 drops it with the file.
+
 ## [1.3.1] — 2026-10-28
 
 A patch: **the toolchain moved to cyrius 6.7.18 and CI to Ubuntu 26.04 LTS, and

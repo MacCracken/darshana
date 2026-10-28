@@ -14,7 +14,7 @@ Donor: [`cyim/src/tty.cyr`](https://github.com/MacCracken/cyim) (~207 lines, Lin
 
 **Stable. The API has been frozen since v1.0.0.** The current version is in [`VERSION`](VERSION). 29 functions and 37 constants at v1.0, and every symbol added since, enumerated in [ADR 0003](docs/adr/0003-v1-api-freeze.md) and machine-checked on every CI run. Breaking any of them requires a major bump; additive change (new symbols, new platform peers) stays a minor bump. Pin a `1.x` tag and take minor bumps without reading a diff.
 
-Verified on **Linux/x86_64 and Linux/aarch64** on every CI run — smoke plus every suite, cross-built and executed — and on **AGNOS** by cross-build. Since v1.1.4 the emitted bytes are frozen by digest: `tests/identity.tcyr` drives every composer over its whole input domain and every fd-1 emitter, and its digests — nineteen now, each frozen from the release that added it — are identical on x86_64, under qemu-aarch64 and on a real Raspberry Pi 4; the eleven from v1.0.0 have not moved on any release since the freeze. Assertion counts and the release history live in [`docs/development/state.md`](docs/development/state.md) and the [CHANGELOG](CHANGELOG.md).
+Verified on **Linux/x86_64 and Linux/aarch64** on every CI run — smoke plus every suite, cross-built and executed — and on **AGNOS** by cross-build. Since v1.1.4 the emitted bytes are frozen by digest: `tests/identity.tcyr` drives every composer over its whole input domain and every fd-1 emitter, and its digests — twenty now, each frozen from the release that added it — are identical on x86_64, under qemu-aarch64 and on a real Raspberry Pi 4; the eleven from v1.0.0 have not moved on any release since the freeze. Assertion counts and the release history live in [`docs/development/state.md`](docs/development/state.md) and the [CHANGELOG](CHANGELOG.md).
 
 The TTY surface works on Linux and, since v0.9.0, fully on AGNOS — every syscall-touching entry point (`tty_winsize`, `tty_isatty`, `tty_raw`, `tty_cooked`, `tty_open_signalfd`, `tty_close_signalfd`) has an `#ifdef CYRIUS_TARGET_AGNOS` peer over the kernel's own syscalls (requires agnos ≥ 1.45.13), so consumers stay platform-blind on both targets. macOS/BSD is deliberately out of scope.
 
@@ -40,7 +40,7 @@ Bare `cyrius test` is not the way to run the suites: it also picks up
 
 - [cyim](https://github.com/MacCracken/cyim) — vim-like editor (the donor; extracted its `src/tty.cyr` into here)
 - [chakshu](https://github.com/MacCracken/chakshu) — AI-augmented system monitor (drove the M2 TUI extensions)
-- [anuenue](https://github.com/MacCracken/anuenue) — drove the truecolor / relative-cursor / color-mode helpers
+- [anuenue](https://github.com/MacCracken/anuenue) — drove the truecolor / relative-cursor / color-mode helpers, and proposed the SGR scanner
 - [bannermanor](https://github.com/MacCracken/bannermanor) — figlet-equivalent banner generator (drove the SGR color helpers)
 - [kii](https://github.com/MacCracken/kii) — image → ANSI/ASCII converter (`tty_winsize` to size art to the real console, the 256-color composers, `tty_has_ctl` as its filename check)
 - [thoth](https://github.com/MacCracken/thoth) — rich-TUI agent shell (vendors the bundle by copy)
@@ -62,6 +62,7 @@ Per-consumer pins are in [`state.md`](docs/development/state.md) § Consumers.
 | Window-size query (`TIOCGWINSZ` on Linux, `winsize`#60 on AGNOS) | Event/input dispatch system |
 | Signal delivery via `signalfd` — `tty_open_signalfd` / `tty_close_signalfd` / `tty_read_signal` + `TTY_SIGMASK_*` | Tab/window/pane management |
 | Making untrusted text safe for the terminal — `tty_sanitize_buf`, UTF-8 or Latin-1, and the reject-only `tty_has_ctl` ([ADR 0004](docs/adr/0004-output-sanitization.md)) | |
+| Reading SGR colour codes in text a program displays — `tty_sgr_len`, and `tty_sgr_strip_buf` to remove them in place, chunk by chunk ([ADR 0006](docs/adr/0006-sgr-scanner.md)) | |
 | | Signal-*handler* installation (`sigaction`) — routed through `signalfd` instead; see [ADR 0002](docs/adr/0002-state-restore-posture.md) |
 | | Key-input decoding, and an AGNOS raw-keyboard reader — ruled out 2026-10-12; see [roadmap § Out of scope](docs/development/roadmap.md) |
 
