@@ -42,11 +42,11 @@ Bare `cyrius test` is not the way to run the suites: it also picks up
 - [chakshu](https://github.com/MacCracken/chakshu) — AI-augmented system monitor (drove the M2 TUI extensions)
 - [anuenue](https://github.com/MacCracken/anuenue) — drove the truecolor / relative-cursor / color-mode helpers
 - [bannermanor](https://github.com/MacCracken/bannermanor) — figlet-equivalent banner generator (drove the SGR color helpers)
-- [kii](https://github.com/MacCracken/kii) — image → ANSI/ASCII converter (consumes `tty_winsize` to size art to the real console)
+- [kii](https://github.com/MacCracken/kii) — image → ANSI/ASCII converter (`tty_winsize` to size art to the real console, the 256-color composers, `tty_has_ctl` as its filename check)
 - [thoth](https://github.com/MacCracken/thoth) — rich-TUI agent shell (vendors the bundle by copy)
 - [jalwa](https://github.com/MacCracken/jalwa) — raw mode, alt screen, cursor
-- [darshini](https://github.com/MacCracken/darshini) — directory lister (SGR colors)
-- [agora](https://github.com/MacCracken/agora) — `tty_sgr_buf` composition and a signalfd-driven exit
+- [darshini](https://github.com/MacCracken/darshini) — directory lister (SGR colors; `tty_sanitize_buf` on every filename it echoes)
+- [agora](https://github.com/MacCracken/agora) — `tty_sgr_buf` composition and `tty_sanitize_buf` on every line of user text it sends
 
 Per-consumer pins are in [`state.md`](docs/development/state.md) § Consumers.
 

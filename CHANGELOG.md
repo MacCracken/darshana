@@ -4,6 +4,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — documentation
+
+- `state.md`'s consumer table reflects the seven consumer releases of 2026-10-12.
+  chakshu 0.11.0, anuenue 1.4.0, cyim 1.11.0, kii 1.6.0, bannermanor 1.2.0,
+  darshini 1.4.0 and agora 1.8.0 are each on darshana 1.3.0 and cyrius 6.7.9,
+  resolving by tag alone. The table now records what each actually calls; agora's
+  row had said it used darshana's signalfd, but its shutdown signalfd is its own.
+  The upstream-gaps table gains the five cyrius issues those releases found. The
+  README's consumer lines match.
+
 ## [1.3.0] — 2026-10-12
 
 A minor: **20 functions and 17 constants added, the toolchain moved to cyrius

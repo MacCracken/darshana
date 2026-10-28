@@ -115,25 +115,35 @@ Found while working on darshana; each belongs to its owner.
 | cyrius stdlib | `sys_ioctl`'s comment says aarch64 has no 16 → 29 row | cyrius `…/2026-10-12-sys-ioctl-comment-says-aarch64-has-no-16-to-29-row.md` |
 | cyrius CLI | `cyrius deps` keeps a removed leaf vendored and locked | cyrius `…/2026-10-12-deps-keeps-a-removed-stdlib-leaf-vendored-and-locked.md` |
 | cyrius CLI | `cyrius lib sync --dry-run` prints pointers | cyrius `…/2026-10-08-cli-path-and-reporting-leftovers.md` |
+| cyrius CLI | a dep's tag change leaves the old `commit` row in `cyrius.lock`, and `--locked` passes | cyrius `…/2026-10-12-deps-keeps-a-stale-commit-row-after-a-tag-change.md` |
+| cyrius CLI | `distlib` records a named dep's transitive leaf (`boxed`) as the bundle's own | cyrius `…/2026-10-12-distlib-records-a-named-deps-transitive-leaf-as-the-bundles-own.md` |
+| cyrius CLI | `cyrfmt --check` passes a file `cyrfmt` reformats | cyrius `…/2026-10-12-cyrfmt-check-passes-a-file-cyrfmt-would-reformat.md` |
+| cyrius compiler | DCE keeps the callees of a redefined fn's losing body | cyrius `…/2026-10-12-dce-keeps-the-callees-of-a-redefined-fns-losing-body.md` |
+| cyrius stdlib | `epoll_event_new` per arch, but no reader for the data offset | cyrius `…/2026-10-12-stdlib-epoll-event-has-a-writer-but-no-reader.md` |
 
 ## Consumers
 
-Nine. Read from each consumer's manifest **and** the bundle it actually compiles:
-a `path` dep compiles this working tree, whatever its tag says. **Every one pins
-cyrius 6.6.x, so each needs a toolchain bump to ≥ 6.7.2 before it can take
-1.3.0**, which is recorded in each one's roadmap.
+Nine. Read from each consumer's manifest **and** the bundle it actually compiles.
+Seven moved to darshana **1.3.0** on cyrius **6.7.9** in their own minor releases
+on 2026-10-12, each resolving by git tag alone; kii's and anuenue's `path` deps on
+this tree were dropped. thoth and jalwa have not moved yet.
 
-| Consumer | Resolves | Bundle compiled | cyrius | Uses |
+| Consumer | Version | darshana | cyrius | Uses |
 |---|---|---|---|---|
-| [chakshu](https://github.com/MacCracken/chakshu) | git, tag 1.1.1 | 1.1.1 | 6.6.2 | raw/cooked, alt screen, clear, cursor, `tty_move`, `tty_winsize`, an EXIT and a WINCH signalfd |
-| [anuenue](https://github.com/MacCracken/anuenue) | git tag 1.1.1 **+ path** | 1.1.2 | 6.6.2 | `tty_fg_rgb_buf`, `tty_sgr_reset_buf` in a per-line buffer |
-| [cyim](https://github.com/MacCracken/cyim) | git, tag 1.0.0 | 1.0.0 | 6.6.2 | the donor: raw/cooked, alt screen, clear, `tty_move`, `tty_winsize`, a signalfd |
-| [kii](https://github.com/MacCracken/kii) | git tag 1.0.0 **+ path** | 1.1.2 | 6.6.2 | `tty_winsize`, `tty_fg_256_buf`, `tty_sgr_reset_buf` |
-| [bannermanor](https://github.com/MacCracken/bannermanor) | git, tag 1.0.0 | 1.0.0 | 6.6.2 | `tty_sgr` + `TTY_FG_*` |
-| [thoth](https://github.com/MacCracken/thoth) | copied by `scripts/sync-darshana.sh` | 1.1.2 | 6.6.6 | the widest: modes, screen, cursor, winsize, isatty, signals. Also the private `_tty_apply_raw_flags` |
-| [jalwa](https://github.com/MacCracken/jalwa) | git, tag 1.1.2 | 1.1.2 | 6.6.3 | raw/cooked, alt screen, clear, cursor, isatty |
-| [darshini](https://github.com/MacCracken/darshini) | git, tag 1.0.0 | 1.0.0 | 6.6.2 | `tty_sgr` / `tty_sgr_reset`, `TTY_FG_*` |
-| [agora](https://github.com/MacCracken/agora) | git, tag 0.9.0 (pre-freeze) | 0.9.0 | 6.6.2 | `tty_sgr_buf`, `tty_sgr_reset_buf`, an EXIT signalfd |
+| [chakshu](https://github.com/MacCracken/chakshu) | 0.11.0 | 1.3.0 | 6.7.9 | raw/cooked, alt screen, clear, cursor, `tty_move`, `tty_winsize_or`, `tty_flush_input`; an EXIT\|PIPE and a WINCH signalfd read by `tty_read_signal`; `tty_sanitize_buf` on process names, cmdlines, logs and model output; `tty_sgr*` / `TTY_FG_*` / `TTY_SGR_*` |
+| [anuenue](https://github.com/MacCracken/anuenue) | 1.4.0 | 1.3.0 | 6.7.9 | `tty_fg_rgb_buf` / `tty_fg_256_buf` / `tty_sgr_reset_buf` behind its own escape table (kept: re-measured faster in 256/16-color); an EXIT signalfd via `tty_open_signalfd` / `tty_read_signal` / `tty_close_signalfd`; `tty_isatty`; cursor up / hide / show |
+| [cyim](https://github.com/MacCracken/cyim) | 1.11.0 | 1.3.0 | 6.7.9 | the donor: raw/cooked, alt screen, clear, `tty_move`, `tty_winsize`; a WINCH and a PIPE signalfd via `tty_read_signal`; `tty_fg_256_buf`, `tty_sgr*`; `tty_sanitize_buf` on paths, messages and picker rows (its buffer view keeps caret notation) |
+| [kii](https://github.com/MacCracken/kii) | 1.6.0 | 1.3.0 | 6.7.9 | `tty_winsize`, `tty_fg_256_buf`, `tty_bg_256_buf`, `tty_sgr_reset_buf`; `tty_has_ctl` as its filename check |
+| [bannermanor](https://github.com/MacCracken/bannermanor) | 1.2.0 | 1.3.0 | 6.7.9 | `tty_sgr` + `TTY_FG_*`; `tty_winsize` for the terminal width (the real AGNOS console grid since 1.2.0) |
+| [darshini](https://github.com/MacCracken/darshini) | 1.4.0 | 1.3.0 | 6.7.9 | `tty_sgr_buf` / `tty_sgr_reset_buf` + `TTY_FG_*`; `tty_winsize` (Linux), `tty_isatty`; `tty_sanitize_buf` on every filename it echoes |
+| [agora](https://github.com/MacCracken/agora) | 1.8.0 | 1.3.0 | 6.7.9 | `tty_sgr_buf` / `tty_sgr_reset_buf` + `TTY_FG_*`; `tty_sanitize_buf` on all user text it sends. Its shutdown signalfd is its own, not darshana's |
+| [thoth](https://github.com/MacCracken/thoth) | — | 1.1.2 (copied) | 6.6.6 | the widest: modes, screen, cursor, winsize, isatty, signals; also the private `_tty_apply_raw_flags`. Needs cyrius ≥ 6.7.2 before taking 1.3.0 |
+| [jalwa](https://github.com/MacCracken/jalwa) | — | 1.1.2 | 6.6.3 | raw/cooked, alt screen, clear, cursor, isatty. Needs cyrius ≥ 6.7.2 before taking 1.3.0 |
+
+AGNOS sizing is not settled the same way everywhere, because agnos cannot say
+what an fd is. bannermanor sizes banners to the AGNOS console even when stdout is
+redirected (color stays off). darshini keeps width 0 and decoration off on AGNOS,
+having watched icons and escapes land in a redirected file under mirshi.
 
 ## Known limits, true today
 
