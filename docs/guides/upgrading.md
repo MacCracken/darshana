@@ -19,7 +19,7 @@ Move the tag in your manifest and re-resolve:
 ```
 [deps.darshana]
 git     = "https://github.com/MacCracken/darshana.git"
-tag     = "1.4.0"
+tag     = "1.5.0"
 modules = ["dist/darshana.cyr"]
 ```
 
@@ -30,6 +30,43 @@ cyrius deps
 then rebuild and run your own suite. A consumer that resolves darshana by
 `path` reads the working tree, not the tag, so it picks up the bundle as soon as
 the tree changes; one that vendors `dist/darshana.cyr` by copy re-copies it.
+
+## 1.5.0
+
+⚠ **An AGNOS build needs cyrius 6.7.11 or later.** The AGNOS arm now calls the
+stdlib's `sys_console_mode` and `sys_fd_kind`, which arrived in 6.7.11. Under
+6.7.10 an AGNOS build of the bundle fails with `undefined variable
+'FDK_CONSOLE'`. Linux builds compile none of the AGNOS arm, and their floor is
+still 6.7.2.
+
+**On Linux, nothing changed.** On AGNOS, from agnos 1.57.13, three calls do
+what their Linux twins do ([ADR 0007](../adr/0007-agnos-console-mode-and-fd-kind.md)):
+
+| Call | Through 1.4.0 on AGNOS | From 1.5.0 on agnos ≥ 1.57.13 |
+|---|---|---|
+| `tty_isatty(fd)` | 1 whenever the console was up, whatever `fd` was | about `fd`: 1 for the console and for a terminal emulator's channel (puka), 0 for a file, a pipe and everything else |
+| `tty_echo_off(fd)` | -1 always | on the console: echo off and typeahead discarded; `tty_cooked()` restores. Print the newline yourself |
+| `tty_flush_input(fd)` | -1 always | on the console: typeahead discarded |
+
+What you can drop: a workaround for the console-wide `tty_isatty`, such as
+sizing to the AGNOS console even when stdout is redirected, or keeping
+decoration off on AGNOS because a redirected file got escapes.
+
+What stays:
+- On a terminal emulator's channel, `tty_echo_off` and `tty_flush_input` are
+  still -1. The emulator runs its own echo, and agnos gives darshana no call
+  to reach it.
+- `tty_echo_off` takes the same single slot as on Linux: another fd while it
+  is held is refused, even another fd on the console.
+- On a kernel older than 1.57.13, and under mirshi until it learns the two
+  calls, every call gives its 1.4.0 answer. mirshi 1.11.3 prints one
+  `mirshi: ENOSYS agnos#110 -> -1` line per process, when darshana first asks.
+- An `fd` outside [0, 0x7FFFFFFF] is refused before any call, so on an old
+  kernel `tty_isatty` of such an fd is now 0.
+
+From agnos 1.57.13 the kernel also posts SIGWINCH to a `TTY_SIGMASK_WINCH`
+signalfd when the console grid changes (agnos's record; darshana has not run
+it), so polling `tty_winsize` is no longer the only way there.
 
 ## 1.4.0
 

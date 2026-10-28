@@ -51,7 +51,7 @@ pin() {
 EXPECT_UNIT=441
 EXPECT_PTY=127
 EXPECT_IDENTITY=33
-EXPECT_AGNOS=27
+EXPECT_AGNOS=44
 
 # check_total <label> <expected> <file-with-suite-output>
 check_total() {

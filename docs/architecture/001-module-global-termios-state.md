@@ -64,6 +64,18 @@ The cost is the single-slot limit above. No consumer has ever wanted two
 simultaneous raw fds — cyim, chakshu, kii and thoth each hold exactly one
 terminal — so the limit has never bound in practice.
 
+## The same slot on AGNOS (1.5.0)
+
+The AGNOS arm has its own `_tty_in_raw` / `_tty_raw_fd`, under the same rules,
+so a consumer's teardown is the same on both targets. Only `tty_echo_off` can
+take it there (raw mode is always -1), and it must be a console fd. What it
+saves is not a termios buffer but one bit: the console's `CM_NOECHO` from
+before (`_agnos_saved_mode`), which `tty_cooked()` puts back. The mode itself
+belongs to the console, so another fd on the console is still refused while the
+slot is held, as a second fd on the same Linux terminal would be. One thing
+differs and is agnos's, not darshana's: the kernel clears the mode when its
+holder dies, so a stranded slot cannot leave the console dark past the process.
+
 ## The literal `60`, in three places
 
 `TIO_BUF_SIZE = 60` is the public constant, but `_tty_saved[60]` and the

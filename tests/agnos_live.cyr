@@ -1,0 +1,141 @@
+# darshana AGNOS arm on a real agnos kernel — v1.5.0.
+#
+# tests/agnos.tcyr runs on the Linux host, where agnos syscalls reach the
+# Linux kernel under other numbers, so every AGNOS peer that makes a call
+# had compile coverage only. This file runs on agnos itself:
+# scripts/agnos-live.sh builds it with `--agnos`, seeds it as /bin/agnsh on
+# an ext2 root, boots a real agnos kernel (>= 1.57.13) in QEMU, and reads
+# the result from the serial log, where the console's output goes.
+#
+# It is a `.cyr`, not a `.tcyr`, so a bare `cyrius test` never runs it on
+# the host. Do not run it on Linux: `tty_isatty` there would issue agnos
+# winsize#60, which is Linux `exit`.
+#
+# What it cannot reach: the old-kernel answers, which need a kernel older
+# than 1.57.13; the flush itself, which needs typed keys to discard; and the
+# SIGWINCH post, which needs agnos's TTY_SELFTEST geometry knob. agnos's own tty-smoke proves the post goes
+# to a bit-28 signalfd watcher; TTY_SIGMASK_WINCH's value is pinned in
+# tests/agnos.tcyr.
+
+include "src/main.cyr"
+
+# The console's CM_NOECHO bit, read with console_mode#110's query.
+fn _noecho() {
+    return sys_console_mode(0, 0) & CM_NOECHO;
+}
+
+fn main() {
+    alloc_init();
+    println("DARSHANA-LIVE-BEGIN");
+
+    test_group("agnos live — the kernel has the calls");
+    var q = sys_console_mode(0, 0);
+    assert(q >= 0, "console_mode#110 answers a query: agnos >= 1.57.13");
+    assert_eq(q & CM_NOECHO, 0, "echo is on at start");
+    assert_eq(_agnos_has_tty_calls(), 1, "darshana's probe agrees");
+
+    test_group("agnos live — tty_isatty is about the fd");
+    assert_eq(tty_isatty(0), 1, "fd 0, the console, is a terminal");
+    assert_eq(tty_isatty(1), 1, "fd 1, the console, is a terminal");
+    assert_eq(tty_isatty(2), 1, "fd 2, the console, is a terminal");
+    var f = file_open("/bin/agnsh", 0, 0);
+    assert(f >= 0, "opened a file");
+    assert_eq(tty_isatty(f), 0, "a file is not a terminal");
+    var pfd[16];
+    store64(&pfd, 0 - 1);
+    store64(&pfd + 8, 0 - 1);
+    assert_eq(sys_pipe(&pfd), 0, "made a pipe");
+    var prd = load64(&pfd);
+    var pwr = load64(&pfd + 8);
+    assert_eq(tty_isatty(prd), 0, "a pipe's read end is not a terminal");
+    assert_eq(tty_isatty(pwr), 0, "a pipe's write end is not a terminal");
+    assert_eq(tty_isatty(31), 0, "an unused fd is not a terminal");
+
+    test_group("agnos live — tty_echo_off and tty_cooked");
+    assert_eq(tty_echo_off(f), 0 - 1, "a file: refused");
+    assert_eq(tty_echo_off(prd), 0 - 1, "a pipe: refused");
+    assert_eq(_noecho(), 0, "a refusal leaves the console's echo on");
+    assert_eq(_tty_in_raw, 0, "and holds no slot");
+    assert_eq(tty_echo_off(0), 0, "echo off on fd 0");
+    assert_eq(_noecho(), CM_NOECHO, "the console's NOECHO bit is set");
+    assert_eq(_tty_in_raw, 1, "the slot is held");
+    assert_eq(tty_echo_off(0), 0, "again on fd 0: a no-op 0");
+    assert_eq(tty_echo_off(1), 0 - 1, "fd 1 while fd 0 holds the slot: refused, as on Linux");
+    assert_eq(tty_raw(0), 0 - 1, "raw stays -1");
+    assert_eq(tty_flush_input(0), 0, "flush works while echo is off");
+    assert_eq(_noecho(), CM_NOECHO, "and leaves the echo mode alone");
+    assert_eq(tty_cooked(), 0, "tty_cooked restores");
+    assert_eq(_noecho(), 0, "echo is back on");
+    assert_eq(_tty_in_raw, 0, "the slot is free");
+    assert_eq(tty_cooked(), 0, "tty_cooked again: a no-op 0");
+    # Echo already off before: tty_cooked puts back THAT state.
+    sys_console_mode(CM_NOECHO, 0);
+    assert_eq(tty_echo_off(0), 0, "echo off when it was already off");
+    assert_eq(tty_cooked(), 0, "tty_cooked");
+    assert_eq(_noecho(), CM_NOECHO, "the state from before is put back: still off");
+    sys_console_mode(0, CM_NOECHO);
+    # tty_forget frees the slot and makes no call.
+    assert_eq(tty_echo_off(0), 0, "echo off again");
+    assert_eq(tty_forget(), 0, "tty_forget");
+    assert_eq(_tty_in_raw, 0, "the slot is free");
+    assert_eq(_noecho(), CM_NOECHO, "the console is left as it was: echo still off");
+    sys_console_mode(0, CM_NOECHO);
+    assert_eq(_noecho(), 0, "echo on again for what follows");
+
+    test_group("agnos live — tty_flush_input");
+    assert_eq(tty_flush_input(0), 0, "fd 0, the console");
+    assert_eq(_noecho(), 0, "and the echo stays on");
+    assert_eq(tty_flush_input(1), 0, "fd 1, the console");
+    assert_eq(tty_flush_input(f), 0 - 1, "a file: refused");
+    assert_eq(tty_flush_input(pwr), 0 - 1, "a pipe: refused");
+
+    # A #97 channel endpoint is how a terminal emulator (puka) hands its
+    # child stdio: a terminal, whose echo the emulator owns.
+    test_group("agnos live — a #97 channel endpoint");
+    var cfd[16];
+    store64(&cfd, 0 - 1);
+    store64(&cfd + 8, 0 - 1);
+    assert_eq(sys_chan_mint(&cfd), 0, "minted a channel pair");
+    var ch = load64(&cfd);
+    assert_eq(sys_fd_kind(ch), FDK_CHAN, "the kernel calls an endpoint FDK_CHAN");
+    assert_eq(tty_isatty(ch), 1, "a channel endpoint is a terminal");
+    assert_eq(tty_echo_off(ch), 0 - 1, "echo-off on a channel: -1, the emulator owns echo");
+    assert_eq(tty_flush_input(ch), 0 - 1, "flush on a channel: -1");
+    assert_eq(_noecho(), 0, "the console is untouched");
+    sys_chan_close(ch);
+    sys_chan_close(load64(&cfd + 8));
+
+    test_group("agnos live — tty_winsize");
+    var rows = 0;
+    var cols = 0;
+    assert_eq(tty_winsize(1, &rows, &cols), 0, "the framebuffer console answers");
+    assert(rows > 0, "rows > 0");
+    assert(cols > 0, "cols > 0");
+
+    test_group("agnos live — the signalfd peers");
+    var sfd = tty_open_signalfd(TTY_SIGMASK_EXIT);
+    assert(sfd >= 0, "tty_open_signalfd(EXIT) gives an fd");
+    assert_eq(tty_isatty(sfd), 0, "a signalfd is not a terminal");
+    assert_eq(tty_read_signal(sfd), 0, "nothing pending: 0");
+    assert_eq(sys_kill(sys_getpid(), 2), 0, "SIGINT to self");
+    assert_eq(tty_read_signal(sfd), 2, "the signalfd reads SIGINT (2)");
+    assert_eq(tty_read_signal(sfd), 0, "consumed: nothing pending again");
+    assert_eq(tty_close_signalfd(sfd, TTY_SIGMASK_EXIT), 0, "tty_close_signalfd");
+
+    file_close(f);
+    file_close(prd);
+    file_close(pwr);
+    var rc = assert_summary();
+    var endm = "DARSHANA-LIVE-END rc=";
+    sys_write(1, endm, strlen(endm));
+    fmt_int(rc);
+    println("");
+    # Exiting would make init run /bin/agnsh again; wait on the console
+    # instead, until the harness stops QEMU.
+    var b[8];
+    while (1) { sys_read(0, &b, 1); }
+    return rc;
+}
+
+var exit_code = main();
+sys_exit(exit_code);

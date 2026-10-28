@@ -789,19 +789,67 @@ fn _agnos_winsize_unpack(packed, out_rows, out_cols) {
     return 0;
 }
 
-# AGNOS TTY predicate. agnos has no ioctl(TCGETS/TIOCGWINSZ), but the framebuffer
-# console-grid syscall (#60, `winsize`) succeeds iff the console is up — the same
-# "a window-size query succeeds only on a real terminal" mechanism the Linux
-# `tty_isatty` above relies on (TIOCGWINSZ). So the agnos peer treats a
-# successful `winsize` as "is a tty". `fd` is ignored: the console grid is a
-# global framebuffer property, not per-fd.
+# The console's line mode and the fd-kind query (v1.5.0, ADR 0007). agnos
+# 1.57.13 added two calls, which the stdlib wraps from cyrius 6.7.11:
+# `console_mode#110(set, clear)` turns the console's echo off and on
+# (`CM_NOECHO`) and discards typeahead (`CM_FLUSH`), answering the flags from
+# before the call or -1; `fd_kind#111(fd)` says what an fd is. Before 1.57.13
+# neither exists and both answer -1, so every arm below first asks whether
+# this kernel has them, once, and on a kernel that does not keeps the answer
+# it gave through 1.4.0.
 #
-# Returns 1 if the console is up, 0 otherwise — a strict 1/0 predicate, never
-# a leaked errno. ⚠ The verdict is about the CONSOLE, not about `fd`: with the
-# console up, a file or pipe on fd 1 also answers 1, so on AGNOS `prog > file`
-# still receives escapes. The Linux peer's answer is per-fd; this one cannot
-# be until agnos exposes a per-fd terminal property.
+# What counts as a terminal: the console (`FDK_CONSOLE`), and a `#97` channel
+# endpoint (`FDK_CHAN`), which is how a terminal emulator such as puka hands
+# its child stdio. A file, a pipe (agnsh pipelines use pipe#25), a directory,
+# a socket or an event fd is not. Only the console's line mode can be set
+# from here: a terminal emulator runs its own line discipline, and agnos gives
+# darshana no call to reach it.
+
+# Whether this kernel has console_mode#110 and fd_kind#111: 0 not asked yet,
+# 1 yes, -1 no. Asked once, with console_mode's query (0, 0), which changes
+# nothing. Both calls arrived in agnos 1.57.13, and a kernel cannot lose one
+# mid-process. Asking once also keeps a process quiet under an emulator that
+# lacks them: mirshi 1.11.3 prints a line for every unknown call.
+var _agnos_tty_calls = 0;
+
+# 1 if this kernel has the console-mode and fd-kind calls, 0 if not.
+# Private (v1.5.0).
+fn _agnos_has_tty_calls() {
+    if (_agnos_tty_calls == 0) {
+        if (sys_console_mode(0, 0) >= 0) { _agnos_tty_calls = 1; }
+        else { _agnos_tty_calls = 0 - 1; }
+    }
+    if (_agnos_tty_calls == 1) { return 1; }
+    return 0;
+}
+
+# 1 if `fd` is the agnos console on a kernel that can say so, 0 otherwise,
+# including an `fd` outside [0, 0x7FFFFFFF]. Private (v1.5.0).
+fn _agnos_console_fd(fd) {
+    if (fd < 0 || fd > 0x7FFFFFFF) { return 0; }
+    if (_agnos_has_tty_calls() == 0) { return 0; }
+    if (sys_fd_kind(fd) == FDK_CONSOLE) { return 1; }
+    return 0;
+}
+
+# AGNOS peer of `tty_isatty`. Returns 1 if `fd` is a terminal, 0 otherwise — a
+# strict 1/0 predicate. An `fd` outside [0, 0x7FFFFFFF] is 0 without a syscall.
+#
+# From v1.5.0, on agnos 1.57.13 and later, the answer is about `fd`: 1 for
+# the console and for a terminal emulator's channel (see the block above), 0
+# for a file, a pipe, a closed fd and everything else, so `prog > file` and
+# `prog | other` no longer receive escapes.
+#
+# ⚠ On an older kernel, and under an emulator without fd_kind#111, the
+# answer is still about the CONSOLE, as through 1.4.0: 1 when the
+# framebuffer console is up (winsize#60 succeeds), whatever `fd` is.
 fn tty_isatty(fd) {
+    if (fd < 0 || fd > 0x7FFFFFFF) { return 0; }
+    if (_agnos_has_tty_calls() == 1) {
+        var kind = sys_fd_kind(fd);
+        if (kind == FDK_CONSOLE || kind == FDK_CHAN) { return 1; }
+        return 0;
+    }
     if (sys_winsize() < 0) { return 0; }
     return 1;
 }
@@ -817,8 +865,9 @@ fn tty_isatty(fd) {
 # 2026-10-12; roadmap.md § Out of scope). A consumer wanting raw keys on agnos
 # reads kbscan itself. Only a kernel-side raw-mode switch on the agnos console
 # would make this a real peer, as a termios-shaped wrapper rather than a
-# decoder. A silent success here would strand the caller waiting on per-key
-# input that never arrives.
+# decoder. (console_mode#110 is not one: it hides the cooked line, and reads
+# still return whole lines.) A silent success here would strand the caller
+# waiting on per-key input that never arrives.
 fn tty_raw(fd) {
     return 0 - 1;
 }
@@ -830,35 +879,80 @@ fn tty_raw_nonblock(fd) {
     return 0 - 1;
 }
 
-# AGNOS peer of `tty_echo_off`. Returns -1, always. The agnos console echoes every
-# printable key from the kernel's own line reader (ABI O1) and has no
-# switch to stop it, so a password typed here is shown whatever this
-# returns — and a silent 0 would tell the caller the opposite.
-fn tty_echo_off(fd) {
-    return 0 - 1;
-}
+# The single save slot, as on Linux. On this arm only `tty_echo_off` can
+# take it, since raw mode is always -1. `_tty_raw_fd` is the console fd it
+# was taken on; `_agnos_saved_mode` is the console's CM_NOECHO bit from
+# before, which `tty_cooked()` puts back (v1.5.0).
+var _tty_in_raw = 0;
+var _tty_raw_fd = 0;
+var _agnos_saved_mode = 0;
 
-# AGNOS peer of `tty_flush_input`. Returns -1, always: the kernel's
-# keyboard buffer has no flush call, so pending keys cannot be discarded
-# from ring 3.
-fn tty_flush_input(fd) {
-    return 0 - 1;
-}
-
-# AGNOS cooked-mode restore. The no-op counterpart to the agnos `tty_raw`: raw
-# was never entered (no termios state to restore), so this is an idempotent
-# success — matching the Linux `tty_cooked` "no-op when not raw" contract.
+# AGNOS peer of `tty_echo_off`. Returns 0 on success, -1 otherwise.
 #
-# Always returns 0; there is no failure mode on this arm.
-fn tty_cooked() {
+# From v1.5.0, on agnos 1.57.13 and later: when `fd` is the console, the
+# console's echo goes off and its typeahead is discarded in one call
+# (console_mode#110 with CM_NOECHO | CM_FLUSH, agnos's TCSETSF). Reads
+# still return whole edited lines, nothing typed is shown, not even the
+# newline, so print one yourself. `tty_cooked()` restores the echo state
+# from before. The mode is the console's: anything that reads the console
+# meanwhile, a child included, reads hidden. agnos clears it when this
+# process dies, however it dies, so a crash cannot leave the console dark.
+#
+# The same single slot as Linux: a different fd while the slot is held is
+# refused with -1, even another fd on the console, and the fd that holds
+# it gets a no-op 0.
+#
+# -1 when `fd` is not the console, including a terminal emulator's channel
+# (the emulator runs its own echo, and agnos gives darshana no call to
+# reach it), when the call fails, and on a kernel older than 1.57.13,
+# where nothing can turn the echo off. Through 1.4.0 this was -1 always.
+fn tty_echo_off(fd) {
+    if (_agnos_console_fd(fd) == 0) { return 0 - 1; }
+    if (_tty_in_raw == 1) {
+        if (fd != _tty_raw_fd) { return 0 - 1; }
+        return 0;                                # already off: the only mode here
+    }
+    var prev = sys_console_mode(CM_NOECHO | CM_FLUSH, 0);
+    if (prev < 0) { return 0 - 1; }
+    _agnos_saved_mode = prev & CM_NOECHO;
+    _tty_raw_fd = fd;
+    _tty_in_raw = 1;
     return 0;
 }
 
-# AGNOS peer of `tty_forget`. There is no raw slot on this arm (`tty_raw`
-# never succeeds), so there is nothing to free.
+# AGNOS peer of `tty_flush_input`: discard the console's typeahead and any
+# partly read line (console_mode#110, CM_FLUSH). Returns 0 on success, -1
+# when `fd` is not the console, when the call fails, and on a kernel older
+# than 1.57.13 (v1.5.0; through 1.4.0 this was -1 always). The echo mode
+# and the slot are untouched.
+fn tty_flush_input(fd) {
+    if (_agnos_console_fd(fd) == 0) { return 0 - 1; }
+    if (sys_console_mode(CM_FLUSH, 0) < 0) { return 0 - 1; }
+    return 0;
+}
+
+# AGNOS cooked-mode restore. Returns 0, or -1 if the restore call fails.
 #
-# Always returns 0.
+# A no-op 0 when the slot is free: raw mode is never entered on this arm.
+# When `tty_echo_off` holds it (v1.5.0), this puts the console's echo back
+# as it was before (console_mode#110 clearing CM_NOECHO, unless echo was
+# already off then) and frees the slot. On failure the slot stays held, so
+# the caller may retry, as on Linux.
+fn tty_cooked() {
+    if (_tty_in_raw == 0) { return 0; }
+    if (_agnos_saved_mode == 0) {
+        if (sys_console_mode(0, CM_NOECHO) < 0) { return 0 - 1; }
+    }
+    _tty_in_raw = 0;
+    return 0;
+}
+
+# AGNOS peer of `tty_forget`: free the slot WITHOUT restoring the console,
+# and issue no call. On this arm the console clears its echo mode when the
+# process dies, so a stranded slot costs less than on Linux; the contract is
+# kept for parity. Always returns 0. Idempotent.
 fn tty_forget() {
+    _tty_in_raw = 0;
     return 0;
 }
 
@@ -873,10 +967,12 @@ fn tty_forget() {
 #   TTY_SIGMASK_WINCH = SIGWINCH(28)                        → bit  28     → 0x10000000
 #   TTY_SIGMASK_PIPE  = SIGPIPE(13)                         → bit  13     → 0x2000
 #
-# ⚠ Nothing on agnos raises SIGWINCH today — neither the kernel nor mirshi
-# generates it (checked 2026-10-12) — so a WINCH signalfd opens fine and never
-# fires. Detect a console resize by polling `tty_winsize`. The value stays
-# correct for the day agnos starts sending it.
+# SIGWINCH: from agnos 1.57.13 the kernel posts SIGWINCH (28) to a process
+# watching bit 28 through a signalfd when the console grid really changes,
+# which is this mask (agnos's own tty-smoke T7 proves the post; darshana has
+# not run its WINCH signalfd against it). Before 1.57.13 nothing raises it,
+# and mirshi does not, so a WINCH signalfd opens fine and never fires there.
+# Poll `tty_winsize` where that matters.
 #
 # ⚠ agnos has no SIGPIPE: a write with no reader left returns its partial
 # count or -1 instead (the stdlib's agnos `sys_write`). TTY_SIGMASK_PIPE is

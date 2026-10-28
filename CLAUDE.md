@@ -65,6 +65,15 @@ Linux host. CI runs all of them. See [`state.md`](docs/development/state.md)
 §"Release Process" for the aarch64 recipe on a machine whose toolchain install
 lacks `cycc_aarch64`.
 
+`tests/agnos.tcyr` runs on the Linux host, where an agnos syscall reaches the
+Linux kernel under another number, so it may only call AGNOS paths that make no
+syscall. The rest of the AGNOS arm runs on a real agnos kernel in QEMU, as a
+release step rather than a CI gate (it needs sibling agnos and gnoboot builds):
+
+```sh
+bash scripts/agnos-live.sh                           # tests/agnos_live.cyr as /bin/agnsh; exit 2 = VOID, nothing measured
+```
+
 ## Key Principles
 
 - **Correctness over cleverness** — if it's wrong, the bugs own you

@@ -4,6 +4,90 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-10-28
+
+A minor: **three AGNOS peers do what their Linux twins do, on agnos 1.57.13 and
+later, and nothing on Linux changed.** `tty_echo_off` and `tty_flush_input`
+work on the console, and `tty_isatty(fd)` answers about `fd` instead of about
+the console ([ADR 0007](docs/adr/0007-agnos-console-mode-and-fd-kind.md)). The
+AGNOS arm also runs on a real agnos kernel for the first time. All 20 digests
+are unchanged.
+
+⚠ **An AGNOS build of the bundle now needs cyrius ≥ 6.7.11**, for the stdlib's
+`sys_console_mode` and `sys_fd_kind`. Measured: an AGNOS build fails under
+6.7.10 (`undefined variable 'FDK_CONSOLE'`) and builds under 6.7.11 and 6.7.18.
+Linux builds compile none of the AGNOS arm; their floor is still 6.7.2. chakshu
+and darshini pin 6.7.9.
+
+### Changed — the AGNOS arm (agnos ≥ 1.57.13)
+
+- **`tty_isatty(fd)`** is about `fd`: 1 for the console (`FDK_CONSOLE`) and for
+  a terminal emulator's `#97` channel (`FDK_CHAN`, how puka hands its child
+  stdio), 0 for a file, a pipe, a closed fd and everything else. Through 1.4.0
+  it was 1 whenever the console was up, so `prog > file` received escapes.
+- **`tty_echo_off(fd)`** on the console turns echo off and discards typeahead in
+  one call (`console_mode#110`, `CM_NOECHO | CM_FLUSH`, agnos's TCSETSF), taking
+  the single slot with Linux's rules. **`tty_cooked()`** puts the console's echo
+  state back as it was before; **`tty_forget()`** frees the slot with no call.
+  agnos clears the mode itself if the process dies.
+- **`tty_flush_input(fd)`** on the console discards typeahead (`CM_FLUSH`).
+- Both stay -1 on a terminal emulator's channel, whose echo the emulator owns,
+  and on any fd that is not the console.
+- **Older kernels keep the 1.4.0 answers.** The arm asks once per process,
+  with `console_mode#110`'s query `(0, 0)`, and keeps the answer. Without the
+  calls, echo-off and flush are -1 and `tty_isatty` answers about the console.
+  Under mirshi 1.11.3, which has neither call, the cost is one
+  `mirshi: ENOSYS agnos#110 -> -1` line per process.
+- An `fd` outside [0, 0x7FFFFFFF] is refused before any call, as on Linux.
+- The SIGWINCH comment is current: agnos 1.57.13 posts it to a bit-28
+  signalfd watcher, which `TTY_SIGMASK_WINCH` already is.
+
+### Changed — gates
+
+- `scripts/syscall-audit.sh` allows the two new wrappers (10 in all).
+- `scripts/platform-gate.sh`'s agnos tokens gain `sys_console_mode`,
+  `sys_fd_kind`, `FDK_CONSOLE`, `FDK_CHAN`, `CM_NOECHO` and `CM_FLUSH`, which the
+  stdlib defines only for agnos; two new self-test probes plant them outside the
+  gate.
+
+### Tests
+
+- **`tests/agnos_live.cyr` and `scripts/agnos-live.sh`** (new) run the AGNOS
+  arm on a real agnos kernel. The script seeds the suite as `/bin/agnsh` on an
+  ext2 root beside an agnos kernel (≥ 1.57.13) and gnoboot, boots it in QEMU
+  with agnos's own image recipe, and scores 57 assertions from the serial log:
+  `tty_isatty` on the console, a file, both pipe ends and an unused fd;
+  echo-off, its slot, the restore of an echo state that was already off, and
+  `tty_forget`; flush; a #97 channel endpoint the suite mints (a terminal, on
+  which echo-off and flush are -1); winsize; and a signalfd reading a SIGINT
+  the suite sends itself, the first run of the AGNOS signalfd peers on a real
+  kernel. It retries
+  a boot that stops in the OVMF menu and calls it VOID (exit 2) rather than a
+  pass when nothing ran. It needs agnos and gnoboot builds, so it is a release
+  step, like the Pi run; 57 / 57 on agnos 1.57.14, three runs in a row.
+- `tests/agnos.tcyr` 27 → **44**, pinned in `scripts/ci.sh`. It no longer calls
+  `tty_echo_off(0)` or `tty_flush_input(0)`, which now issue agnos 110 and 111,
+  Linux `getppid` and `getpgrp` on the host. It pins the stdlib values the arm
+  relies on, and runs every path that makes no call: out-of-range fds (refused
+  before the probe), the old-kernel answers, and the slot.
+- **Sixteen planted defects in the AGNOS arm, one per rule; fourteen are
+  caught**, eleven by the live suite and three by the host suite. The two that
+  survive are the ones no suite here can reach: the old-kernel fallback (it
+  needs a kernel older than 1.57.13) and the flush half of echo-off (it needs
+  typed keys to discard). The first run also let through a flush that set
+  `CM_NOECHO` and a `tty_isatty` that dropped `FDK_CHAN`; the live suite now
+  checks the echo after a flush with echo on, and mints a #97 channel.
+
+### Changed — documentation
+
+- **ADR 0007** (new) records the shapes: which fds are terminals, which take a
+  mode, the single slot, the old-kernel answers, the stdlib floor, and the live
+  suite.
+- The upgrade guide gains a 1.5.0 note; the roadmap's AGNOS arms are gone, and
+  the signalfd rollback item says the live harness now offers a path that does
+  not wait on mirshi. `state.md`, the README and CLAUDE.md (the live run) are
+  refreshed, and the bump examples name 1.5.0.
+
 ## [1.4.0] — 2026-10-28
 
 A minor: **two functions added, and nothing already shipped changed.** They read

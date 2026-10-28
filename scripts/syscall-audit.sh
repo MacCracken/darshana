@@ -81,8 +81,11 @@ ALLOWED_SYSCALLS=""
 #   sys_read_nb       the same on AGNOS (a blocking agnos sys_read waits on
 #                     pipes and the keyboard)
 #   sys_winsize       agnos #60, the framebuffer console grid (AGNOS arm)
+#   sys_console_mode  agnos #110, the console's echo and typeahead (AGNOS arm,
+#                     v1.5.0: tty_echo_off, tty_flush_input, tty_cooked)
+#   sys_fd_kind       agnos #111, what an fd is (AGNOS arm, v1.5.0)
 # Do NOT reintroduce a local syscall-number definition (see v0.9.2).
-ALLOWED_WRAPPERS="sys_write sys_ioctl sys_sigprocmask sys_signalfd file_close sys_read sys_read_nb sys_winsize"
+ALLOWED_WRAPPERS="sys_write sys_ioctl sys_sigprocmask sys_signalfd file_close sys_read sys_read_nb sys_winsize sys_console_mode sys_fd_kind"
 
 # Language builtins and control keywords, which are not calls to audit.
 BUILTINS="syscall load8 load16 load32 load64 store8 store16 store32 store64 if while else return for fn var"

@@ -28,15 +28,18 @@
 # so the stdlib assert harness runs unmodified.
 #
 # ⛔ WHAT MUST NOT BE CALLED HERE, AND WHY.
-# Only the constants plus `tty_raw` and `tty_cooked` are safe to EXECUTE
-# on a Linux host, because they issue no syscall. The other four AGNOS
-# peers issue winsize#60 (the stdlib's `sys_winsize`) or the agnos
-# signalfd pair — and on x86_64 Linux syscall 60 is `exit`. Calling
-# `tty_isatty` or `tty_winsize` from this harness would terminate the
-# process with status 0 mid-run: a green result that proved nothing,
-# which is worse than no test. They get COMPILE coverage from the
-# `--agnos` build of programs/smoke.cyr instead. Do not "improve" this
-# file by calling them.
+# Only calls that issue no syscall are safe to EXECUTE on a Linux host. The
+# AGNOS peers issue winsize#60 (the stdlib's `sys_winsize`), the agnos
+# signalfd pair, or (v1.5.0) console_mode#110 and fd_kind#111 — and on
+# x86_64 Linux syscall 60 is `exit`, 110 `getppid` and 111 `getpgrp`.
+# Calling `tty_isatty` or `tty_winsize` from this harness would terminate
+# the process with status 0 mid-run: a green result that proved nothing,
+# which is worse than no test. A console-mode call would "succeed" with a
+# pid. So this file calls a peer only on a path that stops before any
+# syscall: an out-of-range fd, the cached "this kernel lacks the calls"
+# answer, or a slot path that makes no call. The rest runs on a real agnos
+# kernel, in tests/agnos_live.cyr (scripts/agnos-live.sh). Do not "improve"
+# this file by calling them.
 
 include "src/main.cyr"
 
@@ -76,6 +79,14 @@ fn main() {
     assert_eq(SFD_CLOEXEC, 0x80000, "SFD_CLOEXEC is 0x80000, as on Linux");
     assert_eq(SIG_BLOCK, 0, "sigprocmask how: SIG_BLOCK is 0");
     assert_eq(SIG_UNBLOCK, 1, "sigprocmask how: SIG_UNBLOCK is 1");
+    # v1.5.0 — the console-mode and fd-kind calls (agnos 1.57.13) and the
+    # values the arm reads back from them.
+    assert_eq(SYS_CONSOLE_MODE, 110, "console_mode is #110");
+    assert_eq(SYS_FD_KIND, 111, "fd_kind is #111");
+    assert_eq(CM_NOECHO, 1, "CM_NOECHO is bit 0");
+    assert_eq(CM_FLUSH, 2, "CM_FLUSH is bit 1");
+    assert_eq(FDK_CONSOLE, 1, "fd_kind: the console is 1");
+    assert_eq(FDK_CHAN, 5, "fd_kind: a #97 channel endpoint is 5");
 
     # ---- the no-termios contract -----------------------------------
     # agnos has no TCGETS/TCSETS, so there is no raw/cooked toggle. The
@@ -100,12 +111,40 @@ fn main() {
     assert_eq(tty_raw(1), 0 - 1, "tty_raw is fd-independent on AGNOS");
     assert_eq(tty_cooked(), 0, "tty_cooked is an idempotent no-op success");
     assert_eq(tty_cooked(), 0, "tty_cooked stays 0 when called again");
-    # v1.3.0 — the console has no echo switch and no input flush, so both
-    # are -1 rather than a 0 that claims they happened; there is no slot to
-    # forget. None issues a syscall.
-    assert_eq(tty_echo_off(0), 0 - 1, "tty_echo_off always -1 on AGNOS (the kernel always echoes)");
-    assert_eq(tty_flush_input(0), 0 - 1, "tty_flush_input always -1 on AGNOS (no flush call)");
-    assert_eq(tty_forget(), 0, "tty_forget is a 0 no-op on AGNOS");
+    assert_eq(tty_forget(), 0, "tty_forget with nothing held is 0");
+
+    # v1.5.0 — an fd outside [0, 0x7FFFFFFF] is refused before anything
+    # else, the probe included: `_agnos_tty_calls` staying 0 shows that no
+    # console_mode#110 was issued.
+    test_group("AGNOS arm — an out-of-range fd is refused before any call");
+    _agnos_tty_calls = 0;
+    assert_eq(tty_echo_off(0 - 1), 0 - 1, "tty_echo_off(-1) is -1");
+    assert_eq(tty_flush_input(1 << 32), 0 - 1, "tty_flush_input(2^32) is -1");
+    assert_eq(tty_isatty(0 - 1), 0, "tty_isatty(-1) is 0");
+    assert_eq(tty_isatty(1 << 32), 0, "tty_isatty(2^32) is 0");
+    assert_eq(_agnos_tty_calls, 0, "and none of them asked the kernel");
+
+    # v1.5.0 — a kernel older than agnos 1.57.13 has neither call. With the
+    # cached answer set to "no", the arms give their 1.4.0 answers and issue
+    # no syscall.
+    test_group("AGNOS arm — before agnos 1.57.13: the 1.4.0 answers");
+    _agnos_tty_calls = 0 - 1;
+    assert_eq(tty_echo_off(0), 0 - 1, "tty_echo_off is -1: nothing can turn the echo off");
+    assert_eq(tty_flush_input(0), 0 - 1, "tty_flush_input is -1: nothing can flush");
+    assert_eq(_tty_in_raw, 0, "a refused echo-off holds no slot");
+    assert_eq(_agnos_has_tty_calls(), 0, "the cached answer is used, not asked again");
+
+    # v1.5.0 — the slot paths that make no call.
+    test_group("AGNOS arm — the slot");
+    _tty_in_raw = 1;
+    _tty_raw_fd = 0;
+    _agnos_saved_mode = CM_NOECHO;
+    assert_eq(tty_cooked(), 0, "echo was already off before: tty_cooked leaves it, with no call");
+    assert_eq(_tty_in_raw, 0, "and frees the slot");
+    _tty_in_raw = 1;
+    assert_eq(tty_forget(), 0, "tty_forget frees a held slot");
+    assert_eq(_tty_in_raw, 0, "the slot is free");
+    _agnos_saved_mode = 0;
 
     # ---- Linux constants must NOT leak into this arm ---------------
     # A copy-paste of the Linux block would define TCGETS/TCSETS here.

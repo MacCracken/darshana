@@ -14,6 +14,10 @@ through the Cyrius stdlib's thin `sys_*` wrapper for it:
   whose field offsets are hardcoded from `asm-generic/termbits.h`
 - window size is `sys_ioctl(fd, TIOCGWINSZ, &ws)` against an 8-byte struct, or
   agnos `sys_winsize()` (#60) on the AGNOS arm
+- on the AGNOS arm since 1.5.0, the console's echo and typeahead are
+  `sys_console_mode(set, clear)` (#110) and what an fd is `sys_fd_kind(fd)`
+  (#111). The stdlib's `sys_fd_kind` answers its own tagged socket fds without
+  a kernel call, since the kernel cannot see them
 - every escape sequence is `sys_write(1, <bytes>, <len>)` — one `write(2)` to
   fd 1
 

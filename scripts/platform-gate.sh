@@ -53,6 +53,11 @@
 # `tty_open_signalfd` escaping. The Linux tokens are now the ones that mean
 # nothing on agnos (ioctl and its requests), the agnos tokens the agnos-only
 # wrappers (`sys_winsize`, `sys_read_nb`).
+#
+# v1.5.0: the AGNOS arm calls `sys_console_mode` and `sys_fd_kind` and reads
+# `FDK_CONSOLE`, `FDK_CHAN`, `CM_NOECHO` and `CM_FLUSH`. The stdlib defines
+# all six only for agnos, so one used outside the gate breaks every Linux
+# build; they join the agnos tokens.
 
 set -eu
 
@@ -110,7 +115,7 @@ run() {
         check_peers "$f"
         r=$(check_gate "$f" '(SYS_IOCTL|sys_ioctl|TCGETS|TCSETS|TIOCGWINSZ)' CYRIUS_TARGET_LINUX "Linux ioctl")
         [ -n "$r" ] && lin_report="$lin_report $r"
-        r=$(check_gate "$f" 'sys_winsize|sys_read_nb' CYRIUS_TARGET_AGNOS "agnos syscall")
+        r=$(check_gate "$f" 'sys_winsize|sys_read_nb|sys_console_mode|sys_fd_kind|FDK_CONSOLE|FDK_CHAN|CM_NOECHO|CM_FLUSH' CYRIUS_TARGET_AGNOS "agnos syscall")
         [ -n "$r" ] && agn_report="$agn_report $r"
     done
     # The gates must exist SOMEWHERE — a corpus-driven check that finds no
@@ -151,6 +156,12 @@ if [ "${1:-}" = "--self-test" ]; then
     # An agnos-only wrapper after the AGNOS #endif (v1.2.1).
     probe "agnos sys_winsize outside the AGNOS gate" "outside the CYRIUS_TARGET_AGNOS gate" \
         termios.cyr 'fn _probe_ws() { return sys_winsize(); }'
+    # The console-mode call and an agnos-only constant after the AGNOS
+    # #endif (v1.5.0).
+    probe "agnos sys_console_mode outside the AGNOS gate" "outside the CYRIUS_TARGET_AGNOS gate" \
+        termios.cyr 'fn _probe_cm() { return sys_console_mode(0, 0); }'
+    probe "agnos FDK_CONSOLE outside the AGNOS gate" "outside the CYRIUS_TARGET_AGNOS gate" \
+        termios.cyr 'var _probe_fk = FDK_CONSOLE;'
     # The PEER rule (v1.2.1): a third definition of a peer, ungated — the
     # shape of a Linux signalfd body moved below the AGNOS #endif.
     probe "a platform peer defined outside both gates" "is not one-per-gate" \
