@@ -42,7 +42,7 @@ Bare `cyrius test` is not the way to run the suites: it also picks up
 - [chakshu](https://github.com/MacCracken/chakshu) — AI-augmented system monitor (drove the M2 TUI extensions)
 - [anuenue](https://github.com/MacCracken/anuenue) — drove the truecolor / relative-cursor / color-mode helpers, and proposed the SGR scanner
 - [bannermanor](https://github.com/MacCracken/bannermanor) — figlet-equivalent banner generator (drove the SGR color helpers)
-- [kii](https://github.com/MacCracken/kii) — image → ANSI/ASCII converter (`tty_winsize` to size art to the real console, the 256-color composers, `tty_has_ctl` as its filename check)
+- [kii](https://github.com/MacCracken/kii) — image → ANSI/ASCII converter (`tty_winsize` to size art to the terminal, every escape it writes from the SGR, 256-color and truecolor composers, `tty_has_ctl` as its filename check; asked for `tty_winsize_px` for its Sixel lane)
 - [thoth](https://github.com/MacCracken/thoth) — rich-TUI agent shell (vendors the bundle by copy)
 - [jalwa](https://github.com/MacCracken/jalwa) — raw mode, alt screen, cursor
 - [darshini](https://github.com/MacCracken/darshini) — directory lister (SGR colors; `tty_sanitize_buf` on every filename it echoes)
@@ -59,7 +59,7 @@ Per-consumer pins are in [`state.md`](docs/development/state.md) § Consumers.
 | Cursor positioning, visibility, save/restore; scroll region | Render loop + frame scheduling |
 | Mouse-reporting and bracketed-paste enable/disable | Decoding the reports they produce (input) |
 | Window title (OSC 0, sanitized) and clipboard (OSC 52) | Color management: palettes, quantizers, `NO_COLOR`/`TERM` negotiation |
-| Window-size query (`TIOCGWINSZ` on Linux, `winsize`#60 on AGNOS) | Event/input dispatch system |
+| Window-size query (`TIOCGWINSZ` on Linux, `winsize`#60 on AGNOS), and the window's pixel size where the terminal reports it (`tty_winsize_px`) | Event/input dispatch system |
 | Signal delivery via `signalfd` — `tty_open_signalfd` / `tty_close_signalfd` / `tty_read_signal` + `TTY_SIGMASK_*` | Tab/window/pane management |
 | Making untrusted text safe for the terminal — `tty_sanitize_buf`, UTF-8 or Latin-1, and the reject-only `tty_has_ctl` ([ADR 0004](docs/adr/0004-output-sanitization.md)) | |
 | Reading SGR colour codes in text a program displays — `tty_sgr_len`, and `tty_sgr_strip_buf` to remove them in place, chunk by chunk ([ADR 0006](docs/adr/0006-sgr-scanner.md)) | |

@@ -80,7 +80,7 @@ pass "dist/darshana.cyr and dist/darshana.deps match src/ — no drift"
 # ============================================================
 echo "[smoke] public surface"
 
-required_syms="tty_raw tty_cooked tty_alt_enter tty_alt_leave tty_clear tty_cursor_hide tty_cursor_show tty_cursor_home tty_cursor_up tty_cursor_down tty_move tty_dec_buf tio_load32 tio_store32 tty_winsize tty_open_signalfd tty_close_signalfd tty_clear_to_eol tty_clear_to_eos tty_sgr tty_sgr_reset tty_fg_rgb tty_bg_rgb tty_fg_rgb_buf tty_bg_rgb_buf tty_sgr_reset_buf tty_isatty tty_sgr_buf tty_fg_256_buf tty_bg_256_buf tty_read_signal tty_winsize_or tty_raw_nonblock tty_sanitize_buf tty_forget tty_flush_input tty_echo_off tty_has_ctl tty_sgr_list_buf tty_sgr_list tty_cursor_save tty_cursor_restore tty_scroll_region tty_scroll_region_reset tty_title tty_title_buf tty_clipboard_set tty_clipboard_buf tty_move_buf tty_clear_to_eol_buf tty_mouse_enable tty_mouse_disable tty_paste_enable tty_paste_disable tty_sgr_len tty_sgr_strip_buf tty_isatty_is_per_fd"
+required_syms="tty_raw tty_cooked tty_alt_enter tty_alt_leave tty_clear tty_cursor_hide tty_cursor_show tty_cursor_home tty_cursor_up tty_cursor_down tty_move tty_dec_buf tio_load32 tio_store32 tty_winsize tty_open_signalfd tty_close_signalfd tty_clear_to_eol tty_clear_to_eos tty_sgr tty_sgr_reset tty_fg_rgb tty_bg_rgb tty_fg_rgb_buf tty_bg_rgb_buf tty_sgr_reset_buf tty_isatty tty_sgr_buf tty_fg_256_buf tty_bg_256_buf tty_read_signal tty_winsize_or tty_raw_nonblock tty_sanitize_buf tty_forget tty_flush_input tty_echo_off tty_has_ctl tty_sgr_list_buf tty_sgr_list tty_cursor_save tty_cursor_restore tty_scroll_region tty_scroll_region_reset tty_title tty_title_buf tty_clipboard_set tty_clipboard_buf tty_move_buf tty_clear_to_eol_buf tty_mouse_enable tty_mouse_disable tty_paste_enable tty_paste_disable tty_sgr_len tty_sgr_strip_buf tty_isatty_is_per_fd tty_winsize_px"
 for sym in $required_syms; do
     grep -qE "^fn ${sym}\b" dist/darshana.cyr \
         || fail "dist/darshana.cyr missing 'fn ${sym}' (cyim API contract)"
@@ -182,6 +182,7 @@ pass "every ADR 0003 frozen name is still in dist (29 fns, 37 constants, $(echo 
 #   tty_title           buf    261   ESC ] 0 ; + 256 title bytes + BEL
 #   tty_clipboard_set   chunk   64   base64 of one 48-byte piece
 #   tty_winsize         ws       8   struct winsize
+#   tty_winsize_px      ws       8   struct winsize
 #   tty_isatty          ws       8   struct winsize
 #   tty_open_signalfd   mask     8   one u64 sigset (both peers)
 #   tty_open_signalfd   prev     8
@@ -191,7 +192,7 @@ pass "every ADR 0003 frozen name is still in dist (29 fns, 37 constants, $(echo 
 #   tty_read_signal     rec      8   agnos record: 4 B kernel, 8 B mirshi
 # ============================================================
 echo "[smoke] stack-buffer budgets"
-stack_budgets="_ansi_rgb_write:buf:19 tty_sgr:buf:6 tty_move:buf:14 tty_scroll_region:buf:14 _cursor_rel:buf:22 _tty_set_mode:work:60 tty_sgr_list:buf:66 tty_title:buf:261 tty_clipboard_set:chunk:64 tty_winsize:ws:8 tty_isatty:ws:8 tty_open_signalfd:mask:8 tty_open_signalfd:prev:8 tty_open_signalfd:added:8 tty_close_signalfd:mask:8 tty_read_signal:info:128 tty_read_signal:rec:8"
+stack_budgets="_ansi_rgb_write:buf:19 tty_sgr:buf:6 tty_move:buf:14 tty_scroll_region:buf:14 _cursor_rel:buf:22 _tty_set_mode:work:60 tty_sgr_list:buf:66 tty_title:buf:261 tty_clipboard_set:chunk:64 tty_winsize:ws:8 tty_winsize_px:ws:8 tty_isatty:ws:8 tty_open_signalfd:mask:8 tty_open_signalfd:prev:8 tty_open_signalfd:added:8 tty_close_signalfd:mask:8 tty_read_signal:info:128 tty_read_signal:rec:8"
 actual_bufs=$(awk '/^fn /{ f = $2; sub(/\(.*/, "", f) }
     /^[[:space:]]+var [A-Za-z_][A-Za-z0-9_]*\[[0-9]+\];/ {
         b = $2; n = b; sub(/\[.*/, "", b); sub(/.*\[/, "", n); sub(/\].*/, "", n)
@@ -241,11 +242,11 @@ echo "[smoke] docstring audit"
 #   5. EVERY definition is audited, not just the first with a given name
 #      (v1.0.2). Through v1.0.1 the fn check was guarded by `!seen[name]++`
 #      and the constant check by `!cseen[cname]++`. dist/darshana.cyr
-#      defines six public fns twice (tty_raw, tty_cooked, tty_winsize,
+#      defined six public fns twice (tty_raw, tty_cooked, tty_winsize,
 #      tty_isatty, tty_open_signalfd, tty_close_signalfd — Linux peer then
-#      AGNOS peer) and two public constants twice (TTY_SIGMASK_EXIT /
-#      _WINCH), so the de-dup exempted the ENTIRE AGNOS half of the frozen
-#      surface from the docstring rule. That is the worst possible place
+#      AGNOS peer; thirteen by v1.7.0) and two public constants twice
+#      (TTY_SIGMASK_EXIT / _WINCH), so the de-dup exempted the ENTIRE
+#      AGNOS half of the frozen surface from the docstring rule. That is the worst possible place
 #      for the exemption: the AGNOS docstrings are the only text explaining
 #      why TTY_SIGMASK_EXIT is 0x8006 there and 0x4003 on Linux (agnos
 #      `1<<sig` vs Linux `1<<(sig-1)`), which ADR 0003 freezes and a

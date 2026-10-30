@@ -19,7 +19,7 @@ Move the tag in your manifest and re-resolve:
 ```
 [deps.darshana]
 git     = "https://github.com/MacCracken/darshana.git"
-tag     = "1.6.0"
+tag     = "1.7.0"
 modules = ["dist/darshana.cyr"]
 ```
 
@@ -30,6 +30,39 @@ cyrius deps
 then rebuild and run your own suite. A consumer that resolves darshana by
 `path` reads the working tree, not the tag, so it picks up the bundle as soon as
 the tree changes; one that vendors `dist/darshana.cyr` by copy re-copies it.
+
+## 1.7.0
+
+**No code change**: the release only adds one function, and every answer and
+byte darshana already gave is unchanged. The floor is unchanged too: cyrius
+6.7.2 on Linux, 6.7.11 for an AGNOS build.
+
+`tty_winsize_px(fd, &rows, &cols, &xpix, &ypix)` is `tty_winsize` with the
+window's pixel size, from the same TIOCGWINSZ read
+([ADR 0009](../adr/0009-winsize-pixels.md)). It returns 0 or -1 as
+`tty_winsize` does, and writes nothing on -1.
+
+| Platform | pixels |
+|---|---|
+| Linux | what the terminal side stored with TIOCSWINSZ: the window's size on terminals that report it, 0 on many others and on a pty sized by rows and columns alone |
+| AGNOS | 0 × 0 always: winsize#60 gives the grid alone |
+
+A 0 in either pixel field means none was reported. Check all four before
+dividing:
+
+```cyrius
+var cell_w = 10;                  # your own default
+var cell_h = 20;
+var r = 0; var c = 0; var xp = 0; var yp = 0;
+if (tty_winsize_px(1, &r, &c, &xp, &yp) == 0) {
+    if (r > 0 && c > 0 && xp > 0 && yp > 0) {
+        cell_w = xp / c;
+        cell_h = yp / r;
+    }
+}
+```
+
+What you can drop: an ioctl of your own made to read the pixel fields.
 
 ## 1.6.0
 

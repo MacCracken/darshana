@@ -114,6 +114,14 @@ fn main() {
     assert_eq(tty_winsize(1, &rows, &cols), 0, "the framebuffer console answers");
     assert(rows > 0, "rows > 0");
     assert(cols > 0, "cols > 0");
+    # v1.7.0 — the grid again, and no pixel size: agnos reports none.
+    var prows = 0;
+    var pcols = 0;
+    var pxw = 7;
+    var pxh = 7;
+    assert_eq(tty_winsize_px(1, &prows, &pcols, &pxw, &pxh), 0, "tty_winsize_px answers");
+    assert_eq(prows * 100000 + pcols, rows * 100000 + cols, "...with tty_winsize's grid");
+    assert_eq(pxw + pxh, 0, "...and 0 x 0 pixels, written");
 
     test_group("agnos live — the signalfd peers");
     var sfd = tty_open_signalfd(TTY_SIGMASK_EXIT);

@@ -562,6 +562,13 @@ fn main() {
     if (ws_rc == 0) {
         assert(ws_rows > 0, "live TTY: rows > 0");
         assert(ws_cols > 0, "live TTY: cols > 0");
+        # v1.7.0 — the pixel read sees the same grid.
+        var ws_pr = 0;
+        var ws_pc = 0;
+        var ws_px = 0;
+        var ws_py = 0;
+        assert_eq(tty_winsize_px(0, &ws_pr, &ws_pc, &ws_px, &ws_py), 0, "live TTY: tty_winsize_px answers");
+        assert_eq(ws_pr * 100000 + ws_pc, ws_rows * 100000 + ws_cols, "live TTY: ...with tty_winsize's rows and cols");
     }
     # else: stdin is not a TTY in this run — covered by the kernel-ABI
     # const assertion above (TIOCGWINSZ = 0x5413) plus consumer-side
@@ -1126,6 +1133,23 @@ fn main() {
     # in tests/agnos.tcyr and tests/agnos_live.cyr.
     test_group("v1.6.0 — tty_isatty_is_per_fd");
     assert_eq(tty_isatty_is_per_fd(), 1, "Linux: tty_isatty answers about the fd");
+
+    # v1.7.0 — tty_winsize_px refuses what tty_winsize refuses and writes
+    # nothing when it does. The read itself, pixels included, is
+    # tests/pty.tcyr's, on a pty whose size it sets.
+    test_group("v1.7.0 — tty_winsize_px");
+    var px_r = 11;
+    var px_c = 22;
+    var px_x = 33;
+    var px_y = 44;
+    assert_eq(tty_winsize_px(0 - 1, &px_r, &px_c, &px_x, &px_y), 0 - 1, "fd -1 is -1");
+    assert_eq(tty_winsize_px(1 << 32, &px_r, &px_c, &px_x, &px_y), 0 - 1, "fd 2^32 is -1 (out of range)");
+    var px_dn = sys_open("/dev/null", 2, 0);
+    if (px_dn >= 0) {
+        assert_eq(tty_winsize_px(px_dn, &px_r, &px_c, &px_x, &px_y), 0 - 1, "a non-TTY (/dev/null) is -1");
+        file_close(px_dn);
+    }
+    assert_eq(px_r * 1000000 + px_c * 10000 + px_x * 100 + px_y, 11223344, "and none of them wrote an out-pointer");
 
     return assert_summary();
 }

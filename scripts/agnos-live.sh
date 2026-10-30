@@ -33,7 +33,7 @@ TIMEOUT="${LIVE_TIMEOUT:-120}"
 MIN_AGNOS="1.57.13"
 # The suite's assertion total, pinned like scripts/ci.sh's: a count that
 # moves by itself is a check that stopped running.
-EXPECT_LIVE=59
+EXPECT_LIVE=62
 
 void() { echo "agnos-live: VOID — $1 (nothing was measured)" >&2; exit 2; }
 fail() { echo "agnos-live: FAIL — $1" >&2; exit 1; }

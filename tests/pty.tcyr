@@ -327,6 +327,43 @@ fn main() {
                     syscall(SYS_IOCTL, slave, PTY_TIOCSWINSZ, &wsset);
                 }
 
+                # ----- tty_winsize_px (v1.7.0) -----------------------
+                # The pixel fields read back. As above, every field's
+                # high and low bytes are non-zero and differ, and the
+                # fields differ from each other, so a dropped shift, a
+                # wrong offset or a swapped pair cannot land on the
+                # expected answer:
+                #   xpix = 0x0789 = 1929   ypix = 0x0ABC = 2748
+                test_group("pty.tcyr — tty_winsize_px (v1.7.0)");
+                var wspx[8];
+                store8(&wspx + 0, 0x23); store8(&wspx + 1, 0x01);   # row  0x0123
+                store8(&wspx + 2, 0x56); store8(&wspx + 3, 0x04);   # col  0x0456
+                store8(&wspx + 4, 0x89); store8(&wspx + 5, 0x07);   # xpix 0x0789
+                store8(&wspx + 6, 0xBC); store8(&wspx + 7, 0x0A);   # ypix 0x0ABC
+                if (syscall(SYS_IOCTL, slave, PTY_TIOCSWINSZ, &wspx) >= 0) {
+                    var pr = 0;
+                    var pc = 0;
+                    var pxw = 0;
+                    var pxh = 0;
+                    assert_eq(tty_winsize_px(slave, &pr, &pc, &pxw, &pxh), 0,
+                        "tty_winsize_px succeeds on live slave");
+                    assert_eq(pr * 10000 + pc, 2911110, "rows and cols decoded as tty_winsize does (291, 1110)");
+                    assert_eq(pxw, 1929, "pixel width is the u16 at offset 4 (0x0789)");
+                    assert_eq(pxh, 2748, "pixel height is the u16 at offset 6 (0x0ABC)");
+                    var tr = 0;
+                    var tc = 0;
+                    tty_winsize(slave, &tr, &tc);
+                    assert_eq(tr * 10000 + tc, pr * 10000 + pc, "tty_winsize reads the same rows and cols");
+                    # 24 x 80 with the pixel fields 0 (wsset): none reported.
+                    syscall(SYS_IOCTL, slave, PTY_TIOCSWINSZ, &wsset);
+                    pxw = 7;
+                    pxh = 7;
+                    assert_eq(tty_winsize_px(slave, &pr, &pc, &pxw, &pxh), 0,
+                        "a window with no pixel size still answers");
+                    assert_eq(pr * 1000 + pc, 24080, "...24 x 80");
+                    assert_eq(pxw + pxh, 0, "...and 0 x 0 pixels, written, not left as they were");
+                }
+
                 # ----- tty_winsize / tty_isatty failure path ---------
                 # v1.0.2. Both are documented to fail on a non-TTY fd,
                 # and neither had a test for it: tty_winsize's -1 return
@@ -344,6 +381,12 @@ fn main() {
                         "tty_winsize returns -1 on a live non-TTY fd");
                     assert_eq(nrows, 12345, "tty_winsize leaves out_rows untouched on failure");
                     assert_eq(ncols, 54321, "tty_winsize leaves out_cols untouched on failure");
+                    var nxp = 777;
+                    var nyp = 888;
+                    assert_eq(tty_winsize_px(dn2, &nrows, &ncols, &nxp, &nyp), 0 - 1,
+                        "tty_winsize_px returns -1 on a live non-TTY fd (v1.7.0)");
+                    assert_eq(nrows * 100000 + ncols, 1234554321, "tty_winsize_px leaves rows and cols untouched on failure");
+                    assert_eq(nxp * 1000 + nyp, 777888, "...and both pixel out-pointers");
                     file_close(dn2);
                 }
 
@@ -668,6 +711,9 @@ fn main() {
                 var ar = 0;
                 var ac = 0;
                 assert_eq(tty_winsize(slave + hi32, &ar, &ac), 0 - 1, "winsize(slave + 2^32) = -1");
+                var axp = 0;
+                var ayp = 0;
+                assert_eq(tty_winsize_px(slave + hi32, &ar, &ac, &axp, &ayp), 0 - 1, "winsize_px(slave + 2^32) = -1 (v1.7.0)");
                 assert_eq(tty_raw(slave + hi32), 0 - 1, "tty_raw(slave + 2^32) = -1, slave not taken raw");
                 assert_eq(tty_raw(slave), 0, "tty_raw(slave) still succeeds after the rejected alias");
                 assert_eq(tty_cooked(), 0, "tty_cooked() after the alias test");

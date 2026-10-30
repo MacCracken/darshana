@@ -4,6 +4,85 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-10-30
+
+A minor: **one function added, and nothing already shipped changed.**
+`tty_winsize_px` reads the window's rows, columns and size in pixels from one
+TIOCGWINSZ read. The pixels are 0 where the terminal reports none, and on
+AGNOS, where winsize#60 gives the grid alone
+([ADR 0009](docs/adr/0009-winsize-pixels.md)). kii asked for it. Its Sixel
+lane (kii 2.6.0) is drawn in device pixels and so needs the cell's pixel size,
+which it now takes from `--cell-size` with a 10x20 default. All 20 digests are
+unchanged. The floor is unchanged, measured again with a consumer that calls
+the new function: Linux builds fail under cyrius 6.7.1 and build under 6.7.2,
+6.7.10, 6.7.11 and 6.7.18; AGNOS builds fail under 6.7.10 and build under
+6.7.11 and 6.7.18.
+
+### Added
+
+- **`tty_winsize_px(fd, out_rows, out_cols, out_xpix, out_ypix)`**:
+  `tty_winsize` plus the pixel width and height, each an i64 through an
+  out-pointer. It returns 0, or -1 on an `fd` outside [0, 0x7FFFFFFF] or a
+  failed query, and writes nothing on -1. One read fills all four, so they
+  describe the same window. A 0 pixel field means none was reported. The
+  caller checks all four before computing a cell size; darshana does not
+  divide.
+  - **Linux**: the four u16s of `struct winsize`.
+  - **AGNOS**: `tty_winsize`'s grid and 0 × 0 pixels; -1 when the
+    framebuffer console is not up.
+- ADR 0003's "Added since 1.0" table gains it; `scripts/smoke.sh` requires it
+  and budgets its 8-byte `struct winsize` buffer. It is a platform peer, one
+  definition per target gate, checked by `scripts/platform-gate.sh`'s peer
+  rule. It uses only the syscalls `tty_winsize` uses, so the allowlist is
+  unchanged.
+- **ADR 0009** records the shape and why it ships with one consumer: the
+  fourth recorded exception to the second-consumer rule, after ADRs 0005, 0006
+  and 0008, by owner decision. ADR 0003's Neutral section names all four.
+
+### Tests
+
+- `tests/pty.tcyr` 127 → **139**: pixel values whose high and low bytes
+  differ, read back with the rows and columns `tty_winsize` reads; a window
+  with no pixel size answers 0 × 0, written; -1 on `/dev/null` with all four
+  out-pointers untouched; -1 on `slave + 2^32`, which would alias the pty
+  without the fd check.
+- `tests/darshana.tcyr` 442 → **446**: fd -1, fd 2^32 and `/dev/null` are each
+  -1, and none writes an out-pointer. Its live-TTY block gains two, so with a
+  sized terminal on stdin the suite runs 450.
+- `tests/agnos_live.cyr` 59 → **62**: on a real kernel, `tty_winsize`'s grid
+  and 0 × 0 pixels. 62 / 62 on agnos 1.57.14.
+- Totals pinned in `scripts/ci.sh` (`EXPECT_UNIT`, `EXPECT_PTY`) and
+  `scripts/agnos-live.sh` (`EXPECT_LIVE`).
+- All 15 gates pass (`scripts/ci.sh all`), the suites on x86_64, under
+  qemu-aarch64 and under `CYRIUS_DCE=1`. Not run on the Raspberry Pi this
+  release.
+- **Seven planted defects, each caught by the pty suite**: x and y swapped, a
+  high byte dropped, a wrong offset, the pixels never written, rows and cols
+  swapped, a write on failure, and no fd check. The last one survived the
+  first draft of the tests: without the check, fd 2^32 still fails on a host
+  whose fd 0 is not a terminal. The alias test on `slave + 2^32` was added
+  for it.
+- kii 2.6.0 builds against the bundle on x86_64, aarch64 and agnos with no
+  warning, and its 1,223 assertions pass. Its `CYRIUS_DCE=1` x86_64 binary is
+  byte-identical to the one built on 1.6.0. kii calls none of the new code.
+
+### Changed — documentation
+
+- `tty_winsize`'s docstring no longer calls the pixel fields "rarely
+  populated; ignored". It points at `tty_winsize_px`.
+- Its out-pointer paragraph claimed tty_winsize was "the only" darshana call
+  that writes a fixed width through an out-parameter, which `tty_winsize_or`
+  had made false at 1.2.0, and it named six `_buf` composers where there are
+  thirteen. It now names all four out-parameter writers and points at the
+  front matter's composer list.
+- The front matter puts `tty_winsize_px` in the validating-ops bucket.
+- The upgrade guide gains a 1.7.0 note with a cell-size example (compiled and
+  run against a pty). The bump examples name 1.7.0. The roadmap names 1.7.0
+  among the minors that shipped and lists the console's pixel size as an AGNOS
+  arm waiting on agnos. The README's kii line and scope table, and
+  `state.md`'s kii, anuenue and darshini rows, are brought up to date: all
+  three now pin 1.6.0 on cyrius 6.7.18.
+
 ## [1.6.0] — 2026-10-28
 
 A minor: **one function added, and nothing already shipped changed.**

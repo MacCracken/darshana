@@ -30,16 +30,19 @@
 found ([ADR 0005](../adr/0005-candidates-ahead-of-second-consumer.md)), 1.4.0
 the SGR scanner anuenue proposed ([ADR 0006](../adr/0006-sgr-scanner.md)),
 1.5.0 the AGNOS arms agnos 1.57.13 unblocked
-([ADR 0007](../adr/0007-agnos-console-mode-and-fd-kind.md)), and 1.6.0 the
+([ADR 0007](../adr/0007-agnos-console-mode-and-fd-kind.md)), 1.6.0 the
 `tty_isatty` scope probe darshini asked for
-([ADR 0008](../adr/0008-isatty-scope-probe.md)). From here the CLAUDE.md rule
+([ADR 0008](../adr/0008-isatty-scope-probe.md)), and 1.7.0 the window's pixel
+size for kii's Sixel lane ([ADR 0009](../adr/0009-winsize-pixels.md)). From here the CLAUDE.md rule
 applies again: a primitive is extracted when a **second** consumer needs it.
 
 *Always eligible:*
 - a new platform peer;
 - an AGNOS arm that becomes real when agnos grows the mechanism. What is left:
   echo-off and flush inside a terminal emulator, which needs a call into the
-  emulator's line discipline (none exists);
+  emulator's line discipline (none exists); and the console's pixel size for
+  `tty_winsize_px`, which needs a call that reports it (winsize#60 gives the
+  grid alone);
 - anything a consumer asks for.
 
 ## 2.0.0 — major
